@@ -95,11 +95,12 @@ export class D1Store implements Store {
     }
 
     async upsertProvider(row: ProviderRow) {
-        const sql = `INSERT INTO providers (name, api_url, api, key_secret, context_window, max_tokens, price_input, price_output)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        const sql = `INSERT INTO providers (name, api_url, api, key_secret, context_window, max_tokens,
+            price_input, price_output, price_cache_read, price_cache_write) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(name) DO UPDATE SET api_url = excluded.api_url, api = excluded.api, key_secret = excluded.key_secret,
             context_window = excluded.context_window, max_tokens = excluded.max_tokens,
-            price_input = excluded.price_input, price_output = excluded.price_output`;
+            price_input = excluded.price_input, price_output = excluded.price_output,
+            price_cache_read = excluded.price_cache_read, price_cache_write = excluded.price_cache_write`;
         await this.db
             .prepare(sql)
             .bind(
@@ -111,6 +112,8 @@ export class D1Store implements Store {
                 row.maxTokens,
                 row.priceInput,
                 row.priceOutput,
+                row.priceCacheRead,
+                row.priceCacheWrite,
             )
             .run();
     }
@@ -235,5 +238,11 @@ export class R2Blobs implements BlobStore {
     async get(key: string) {
         const object = await this.bucket.get(key);
         return object ? object.text() : null;
+    }
+
+    async delete(keys: string[]) {
+        if (keys.length) {
+            await this.bucket.delete(keys);
+        }
     }
 }

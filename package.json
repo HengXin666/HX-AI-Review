@@ -7,16 +7,18 @@
         "node": ">=22.19.0"
     },
     "scripts": {
-        "typecheck": "pnpm -r typecheck",
-        "test": "pnpm -r test",
+        "typecheck": "pnpm -r typecheck && tsc -p scripts/quality",
+        "test": "pnpm -r test && node --test scripts/quality/doc-links/index.test.ts",
         "build": "pnpm -r build",
         "format": "prettier --write .",
         "format:check": "prettier --check .",
         "l0": "node context-cr/src/cli.ts l0 --root .",
         "quality:code": "node .agents/skills/hx-agent-code/scripts/ci.ts code",
-        "quality:docs": "node .agents/skills/hx-agent-code/scripts/ci.ts docs"
+        "quality:docs": "node .agents/skills/hx-agent-code/scripts/ci.ts docs",
+        "doc-links": "node scripts/quality/doc-links/index.ts"
     },
     "devDependencies": {
+        "@types/node": "22.18.0",
         "prettier": "3.9.10",
         "typescript": "5.9.3"
     }

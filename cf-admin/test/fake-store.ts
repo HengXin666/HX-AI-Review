@@ -130,4 +130,9 @@ export class FakeBlobs implements BlobStore {
     async get(key: string) {
         return this.data.get(key) ?? null;
     }
+    async delete(keys: string[]) {
+        for (const key of keys) {
+            this.data.delete(key);
+        }
+    }
 }

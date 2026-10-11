@@ -14,10 +14,13 @@ Run after the change is complete, not while editing:
 
 ```sh
 pnpm format        # prettier, 4 spaces, width 120
-pnpm typecheck     # tsc strict for context-cr, cf-admin worker and pages
-pnpm test          # node --test in both packages
+pnpm typecheck     # tsc strict for both packages and scripts/quality
+pnpm test          # node --test in both packages and the quality checker
 pnpm l0            # hx-context-review L0 on this repository's own context files
+pnpm doc-links     # HX-DOCLINK: watched paths changed => linked doc changed
 ```
+
+What each check verifies, how CI selects tests, and which docs must change with which files: [docs/reference/quality/pipeline.md](docs/reference/quality/pipeline.md).
 
 `pnpm quality:code` and `pnpm quality:docs` run the hx-agent-code CI groups. They need `GITHUB_EVENT_NAME` and `GITHUB_EVENT_PATH`, so they are for GitHub Actions; the commands above cover the same checks locally.
 

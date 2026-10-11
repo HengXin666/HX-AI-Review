@@ -70,7 +70,7 @@ GitHub (计算)                                       Cloudflare (配置 / 存�
 | HX_CTX_TOKEN | 只传给 init 与 publish 步骤 | /init, /runs |
 | 管理权限 | Cloudflare Access | /api/* 校验 Access JWT (RS256, aud, exp), 未配置即 403 |
 
-来自 fork 的 PR 在 job 条件里直接跳过: 它拿不到 secrets, head 提交也不在本仓库, 不能往本仓库推补丁分支. 模型生成的补丁只有在只改动被报告的那个上下文文件时才会推送.
+来自 fork 的 PR (pull_request 与 pull_request_target 都算) 在 job 条件里直接跳过: 它拿不到 secrets, head 提交也不在本仓库, 不能往本仓库推补丁分支. 模型生成的补丁只有在只改动被报告的那个上下文文件时才会推送.
 
 ## 已知限制
 

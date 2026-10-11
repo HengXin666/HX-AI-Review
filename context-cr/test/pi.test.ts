@@ -67,7 +67,7 @@ test("pi runner reaches api_url directly and executes report_finding", async () 
         api: "openai-completions",
         models: { finder: "finder-model", verifier: "verifier-model" },
         limits: { contextWindow: 32000, maxTokens: 1024, maxCandidates: 3 },
-        pricing: { input: 3, output: 15 },
+        pricing: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
         suppressions: [],
     };
     try {

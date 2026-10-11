@@ -10,7 +10,9 @@ CREATE TABLE providers (
     max_tokens INTEGER NOT NULL DEFAULT 8192,
     -- USD per million tokens; the Worker charges budgets from reported token counts with these prices.
     price_input REAL NOT NULL DEFAULT 0,
-    price_output REAL NOT NULL DEFAULT 0
+    price_output REAL NOT NULL DEFAULT 0,
+    price_cache_read REAL NOT NULL DEFAULT 0,
+    price_cache_write REAL NOT NULL DEFAULT 0
 );
 
 CREATE TABLE repos (

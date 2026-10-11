@@ -33,6 +33,8 @@ export type ProviderRow = {
     /** USD per million input / output tokens. */
     priceInput: number;
     priceOutput: number;
+    priceCacheRead: number;
+    priceCacheWrite: number;
 };
 
 export type RunRow = {
@@ -98,4 +100,5 @@ export interface Store {
 export interface BlobStore {
     put(key: string, body: string, contentType: string): Promise<void>;
     get(key: string): Promise<string | null>;
+    delete(keys: string[]): Promise<void>;
 }

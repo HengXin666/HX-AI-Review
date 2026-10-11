@@ -15,7 +15,7 @@ export type InitConfig = {
     models: { finder: string; verifier: string };
     limits: { contextWindow: number; maxTokens: number; maxCandidates: number };
     /** USD per million tokens, so pi reports real cost and the monthly budget can trip. */
-    pricing: { input: number; output: number };
+    pricing: { input: number; output: number; cacheRead: number; cacheWrite: number };
     lastSha?: string;
     suppressions: Suppression[];
     refIndex?: RefIndex;
@@ -55,7 +55,12 @@ export function parseInit(raw: unknown): InitResponse {
             maxTokens: Number(limits.maxTokens ?? 8192),
             maxCandidates: Number(limits.maxCandidates ?? 12),
         },
-        pricing: { input: price(pricing.input), output: price(pricing.output) },
+        pricing: {
+            input: price(pricing.input),
+            output: price(pricing.output),
+            cacheRead: price(pricing.cacheRead),
+            cacheWrite: price(pricing.cacheWrite),
+        },
         lastSha: typeof data.lastSha === "string" ? data.lastSha : undefined,
         suppressions: Array.isArray(data.suppressions) ? (data.suppressions as InitResponse["suppressions"]) : [],
         refIndex: (data.refIndex as RefIndex | undefined) ?? undefined,

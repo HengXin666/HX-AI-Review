@@ -1,6 +1,6 @@
 import type { Finding, Patch, Usage } from "../contract/finding.ts";
 
-export type RunStatus = "passed" | "warned" | "failed" | "skipped";
+export type RunStatus = "passed" | "warned" | "failed" | "skipped" | "incomplete";
 
 /** Body of POST /runs. Large text goes to R2, rows go to D1; the Worker also advances last_sha. */
 export type RunPayload = {
@@ -26,9 +26,13 @@ export type RunPayload = {
 
 export type IngestResult = { runId: string; overviewUrl?: string };
 
-export function statusOf(counts: RunPayload["counts"], skipped: boolean): RunStatus {
+/** A run whose AI stage did not finish is never "passed": it reports incomplete unless L0 already failed it. */
+export function statusOf(counts: RunPayload["counts"], skipped: boolean, complete = true): RunStatus {
     if (counts.blocking > 0) {
         return "failed";
+    }
+    if (!complete) {
+        return "incomplete";
     }
     if (counts.error + counts.warning > 0) {
         return "warned";

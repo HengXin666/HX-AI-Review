@@ -47,6 +47,8 @@ export type Provider = {
     maxTokens: number;
     priceInput: number;
     priceOutput: number;
+    priceCacheRead: number;
+    priceCacheWrite: number;
 };
 
 export type Deployment = { sha?: string; deployedAt?: string; runUrl?: string; accessConfigured: boolean };
@@ -81,7 +83,7 @@ export const api = {
     updateRepo: (name: string, patch: Partial<Repo>) => call<{ repo: Repo }>("PATCH", "repos/" + name, patch),
     createRepo: (input: RepoInput) => call<{ repo: Repo; token: string }>("POST", "repos", input),
     rotateToken: (name: string) => call<{ token: string }>("POST", `repos/${name}/rotate-token`),
-    saveProvider: (name: string, input: ProviderInput) =>
+    saveProvider: (name: string, input: Partial<ProviderInput>) =>
         call<{ ok: boolean }>("PUT", "providers/" + encodeURIComponent(name), input),
     feedback: (id: string, verdict: "accepted" | "rejected", reason: string) =>
         call<{ updated: number }>("POST", `findings/${id}/feedback`, { verdict, reason }),

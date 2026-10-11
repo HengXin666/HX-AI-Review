@@ -26,7 +26,9 @@ runner 侧 CLI. 入口 [context-cr/src/cli.ts](../../context-cr/src/cli.ts), 步
 4. `origin/<default_branch>` 与 head 的 merge-base.
 5. 空树 (首个提交).
 
-被 concurrency 取消的运行不执行 publish, 不会入库. review 失败或没跑完时 publish 仍把 L0 结果入库, 但发送 `complete: false`, Worker 不推进 last_sha; 下一次运行会覆盖这段区间. PR 运行从不推进 last_sha.
+[review.yml](../../.github/workflows/review.yml) 的 publish 步骤只要 init 成功且运行未被取消就执行. 被 concurrency 取消的运行不执行 publish, 不会入库. scope 或 review 失败, 没跑完时 publish 仍把 L0 结果入库, 但发送 `complete: false`, 运行状态记为 `incomplete` (L0 有阻断 Error 时为 failed), Worker 不推进 last_sha; 下一次运行会覆盖这段区间. 只有 event 为 push 的完整运行推进 last_sha.
+
+来自 fork 的 PR 对 pull_request 与 pull_request_target 都在 job 条件里跳过, 不在带 HX_CTX_TOKEN 与写权限的流程里检出不受信任的代码.
 
 ## L0 规则
 

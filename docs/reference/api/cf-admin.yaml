@@ -59,9 +59,12 @@ components:
                         maxCandidates: { type: integer }
                 pricing:
                     type: object
+                    description: USD per million tokens
                     properties:
                         input: { type: number }
                         output: { type: number }
+                        cacheRead: { type: number }
+                        cacheWrite: { type: number }
                 lastSha: { type: string }
                 suppressions:
                     type: array
@@ -81,7 +84,7 @@ components:
                 prNumber: { type: integer }
                 status:
                     type: string
-                    enum: [passed, warned, failed, skipped]
+                    enum: [passed, warned, failed, skipped, incomplete]
                     description: Derived from findings when omitted
                 complete:
                     type: boolean
@@ -139,15 +142,22 @@ components:
                       name: { type: string, pattern: '^[\w.-]+/[\w.-]+$' }
         Provider:
             type: object
-            required: [apiUrl, keySecret]
+            description: Create requires apiUrl, keySecret, priceInput and priceOutput; update keeps omitted fields
             properties:
                 apiUrl: { type: string }
                 api: { type: string, enum: [openai-completions, anthropic-messages] }
-                keySecret: { type: string, description: Name of the Worker secret holding the key }
+                keySecret:
+                    {
+                        type: string,
+                        pattern: "^[A-Z][A-Z0-9_]{0,63}$",
+                        description: Name of the Worker secret holding the key,
+                    }
                 contextWindow: { type: integer, minimum: 0 }
                 maxTokens: { type: integer, minimum: 0 }
                 priceInput: { type: number, minimum: 0, description: USD per million input tokens }
                 priceOutput: { type: number, minimum: 0, description: USD per million output tokens }
+                priceCacheRead: { type: number, minimum: 0, description: USD per million cache-read tokens }
+                priceCacheWrite: { type: number, minimum: 0, description: USD per million cache-write tokens }
         Deployment:
             type: object
             properties:
@@ -305,7 +315,7 @@ paths:
             operationId: upsertProvider
             security: [{ access: [] }]
             parameters:
-                - { name: name, in: path, required: true, schema: { type: string } }
+                - { name: name, in: path, required: true, schema: { type: string, pattern: "^[A-Za-z0-9_.-]{1,64}$" } }
             requestBody:
                 required: true
                 content: { application/json: { schema: { $ref: "#/components/schemas/Provider" } } }
@@ -313,6 +323,7 @@ paths:
                 "200":
                     description: Saved
                     content: { application/json: { schema: { type: object, properties: { ok: { type: boolean } } } } }
+                "400": { description: Invalid name, secret name or number, or a missing price on create }
     /api/findings/{id}/patch:
         get:
             operationId: getPatch

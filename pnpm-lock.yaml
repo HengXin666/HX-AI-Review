@@ -166,6 +166,9 @@ importers:
 
   .:
     devDependencies:
+      '@types/node':
+        specifier: 22.18.0
+        version: 22.18.0
       prettier:
         specifier: 3.9.10
         version: 3.9.10

@@ -32,17 +32,25 @@ type Props = {
 
 export function Repos({ repos, onChange, onCreate, onRotate }: Props) {
     const [token, setToken] = useState<{ repo: string; value: string } | null>(null);
+    const [error, setError] = useState<string | null>(null);
     const create = async (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
         const data = new FormData(event.currentTarget);
         const text = (key: string) => String(data.get(key) ?? "").trim();
-        const budget = Number(text("budgetUsd"));
+        // Only an explicitly empty budget means "no cap"; anything invalid is rejected, never turned into 0.
+        const rawBudget = text("budgetUsd");
+        const budget = rawBudget === "" ? 0 : Number(rawBudget);
+        if (!Number.isFinite(budget) || budget < 0) {
+            setError("monthly budget must be a non-negative number, or empty for no cap");
+            return;
+        }
+        setError(null);
         const input: RepoInput = {
             name: text("name"),
             provider: text("provider") || "default",
             finderModel: text("finderModel"),
             verifierModel: text("verifierModel"),
-            budgetUsd: Number.isFinite(budget) && budget >= 0 ? budget : 0,
+            budgetUsd: budget,
         };
         const value = await onCreate(input);
         setToken(value ? { repo: input.name, value } : null);
@@ -117,9 +125,10 @@ export function Repos({ repos, onChange, onCreate, onRotate }: Props) {
                 <input name="provider" placeholder="provider (default)" />
                 <input name="finderModel" placeholder="finder model" required />
                 <input name="verifierModel" placeholder="verifier model" required />
-                <input name="budgetUsd" placeholder="monthly budget USD" size={10} />
+                <input name="budgetUsd" placeholder="budget USD (empty = no cap)" size={18} />
                 <button type="submit">register repo</button>
             </form>
+            {error ? <p style={{ color: "crimson" }}>{error}</p> : null}
             {token ? (
                 <p>
                     HX_CTX_TOKEN for {token.repo}, shown once; save it as the repository secret now:{" "}

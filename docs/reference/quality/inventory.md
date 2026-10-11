@@ -2,7 +2,7 @@
 
 本仓库按 hx-agent-code 初始化. 技能固定版本 vendor 在 `.agents/skills/hx-agent-code/` (来源 HengXin666/HXLoLis 提交 0a3f736), 运行期依赖 hx-agent-notes 同样 vendor 在 `.agents/skills/hx-agent-notes/`.
 
-逐规则裁决见 `scripts/quality/coverage.json`. 本次是首轮安装, 只有部分规则已实现, 其余标 blocked 并写明原因, 不冒充已完成.
+流水线与每项检查的说明见 [pipeline.md](pipeline.md). 逐规则裁决见 `scripts/quality/coverage.json`. 本次是首轮安装, 只有部分规则已实现, 其余标 blocked 并写明原因, 不冒充已完成.
 
 ## 事实
 

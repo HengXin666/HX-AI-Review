@@ -43,16 +43,23 @@ export function settings(): Settings {
         }
     }
     const pagesProject = env("HX_PAGES_PROJECT", "hx-context-review");
+    const providerKeyName = env("HX_PROVIDER_KEY_NAME");
+    if (providerKeyName && !env("HX_PROVIDER_KEY_VALUE")) {
+        throw new Error("provider-key-name is set but the HX_PROVIDER_API_KEY secret is empty");
+    }
+    if (providerKeyName && target !== "all" && target !== "worker") {
+        throw new Error("provider-key-name only applies when target is all or worker");
+    }
     return {
         target,
         worker: env("HX_WORKER_NAME", "hx-context-review"),
         database: env("HX_D1_NAME", "hx-context-review"),
         bucket: env("HX_R2_BUCKET", "hx-context-review"),
         pagesProject,
-        overviewUrl: env("HX_OVERVIEW_URL", `https://${pagesProject}.pages.dev`),
+        overviewUrl: env("HX_OVERVIEW_URL"),
         accessAud: env("HX_ACCESS_AUD"),
         accessTeamDomain: env("HX_ACCESS_TEAM_DOMAIN"),
-        providerKeyName: env("HX_PROVIDER_KEY_NAME"),
+        providerKeyName,
         providerKeyValue: env("HX_PROVIDER_KEY_VALUE"),
         deploySha: env("DEPLOY_SHA", env("GITHUB_SHA")),
         deployRunUrl: env("DEPLOY_RUN_URL"),
@@ -103,6 +110,23 @@ function ensureDatabase(name: string): string {
         throw new Error(`D1 database ${name} was not found after creation`);
     }
     return created;
+}
+
+type PagesProject = { subdomain?: string; domains?: string[] };
+
+/** Real Pages hostname from the API: a taken project name gets a random suffix, so never derive it. */
+async function pagesHost(project: string): Promise<string | undefined> {
+    const account = env("CLOUDFLARE_ACCOUNT_ID");
+    const url = `https://api.cloudflare.com/client/v4/accounts/${account}/pages/projects/${project}`;
+    const response = await fetch(url, { headers: { authorization: `Bearer ${env("CLOUDFLARE_API_TOKEN")}` } });
+    if (response.status === 404) {
+        return undefined;
+    }
+    if (!response.ok) {
+        throw new Error(`Pages project lookup failed: ${response.status}`);
+    }
+    const body = (await response.json()) as { result?: PagesProject };
+    return body.result?.subdomain;
 }
 
 function toml(value: string): string {
@@ -169,35 +193,49 @@ function summary(lines: string[]): void {
     }
 }
 
-function main(): void {
+async function main(): Promise<void> {
     const s = settings();
     const all = s.target === "all";
+    const pages = all || s.target === "pages";
+    const worker = all || s.target === "worker";
     const report = ["## hx-context-review deploy", "", `- target: ${s.target}`, `- commit: ${s.deploySha || "local"}`];
 
-    const databaseId = ensureDatabase(s.database);
-    const config = writeWorkerConfig(s, databaseId);
-    report.push(`- D1: ${s.database} (${databaseId})`);
-
-    if (all || s.target === "migrations") {
-        wrangler(["d1", "migrations", "apply", s.database, "--remote", "--config", config]);
-        report.push("- migrations: applied");
-    }
-    if (all || s.target === "worker") {
-        tryWrangler(["r2", "bucket", "create", s.bucket]);
-        const out = wrangler(["deploy", "--config", config]);
-        const url = /https:\/\/[\w.-]+\.workers\.dev/.exec(out)?.[0] ?? "(see wrangler output)";
-        report.push(`- Worker: ${s.worker} at ${url} (use as HX_CTX_ENDPOINT)`);
-        if (s.providerKeyName && s.providerKeyValue) {
-            wrangler(["secret", "put", s.providerKeyName, "--config", config], { input: s.providerKeyValue });
-            report.push(`- secret ${s.providerKeyName}: updated`);
-        }
-    }
-    if (all || s.target === "pages") {
-        execFileSync("pnpm", ["exec", "vite", "build"], { cwd: PAGES_DIR, stdio: "inherit" });
+    // Pages first exists as a project so its real hostname can be written into the Worker's OVERVIEW_URL.
+    if (pages) {
         writePagesConfig(s);
         tryWrangler(["pages", "project", "create", s.pagesProject, "--production-branch", "main"], { cwd: PAGES_DIR });
+    }
+    if (!s.overviewUrl && (pages || worker)) {
+        const host = await pagesHost(s.pagesProject);
+        s.overviewUrl = host ? `https://${host}` : "";
+    }
+
+    if (all || worker || s.target === "migrations") {
+        const databaseId = ensureDatabase(s.database);
+        const config = writeWorkerConfig(s, databaseId);
+        report.push(`- D1: ${s.database} (${databaseId})`);
+        if (all || s.target === "migrations") {
+            wrangler(["d1", "migrations", "apply", s.database, "--remote", "--config", config]);
+            report.push("- migrations: applied");
+        }
+        if (worker) {
+            tryWrangler(["r2", "bucket", "create", s.bucket]);
+            const out = wrangler(["deploy", "--config", config]);
+            const url = /https:\/\/[\w.-]+\.workers\.dev/.exec(out)?.[0] ?? "(see wrangler output)";
+            report.push(`- Worker: ${s.worker} at ${url} (use as HX_CTX_ENDPOINT)`);
+            if (s.providerKeyName) {
+                wrangler(["secret", "put", s.providerKeyName, "--config", config], { input: s.providerKeyValue });
+                report.push(`- secret ${s.providerKeyName}: updated`);
+            }
+        }
+    }
+    if (pages) {
+        execFileSync("pnpm", ["exec", "vite", "build"], { cwd: PAGES_DIR, stdio: "inherit" });
         wrangler(["pages", "deploy", "--project-name", s.pagesProject, "--branch", "main"], { cwd: PAGES_DIR });
-        report.push(`- Pages: ${s.overviewUrl}`);
+        report.push(`- Pages: ${s.overviewUrl || s.pagesProject}`);
+    }
+    if (worker && !s.overviewUrl) {
+        report.push("", "OVERVIEW_URL is empty: deploy pages (or set HX_OVERVIEW_URL), then redeploy the worker.");
     }
     if (!s.accessAud || !s.accessTeamDomain) {
         report.push(
@@ -209,5 +247,8 @@ function main(): void {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-    main();
+    main().catch((error: unknown) => {
+        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        process.exit(1);
+    });
 }

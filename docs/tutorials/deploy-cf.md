@@ -26,16 +26,16 @@ Settings -> Secrets and variables -> Actions.
 | `HX_ACCESS_AUD` | variable | 部署后 | Access 应用的 AUD tag |
 | `HX_ACCESS_TEAM_DOMAIN` | variable | 部署后 | 例如 `myteam.cloudflareaccess.com` |
 | `HX_WORKER_NAME`, `HX_D1_NAME`, `HX_R2_BUCKET`, `HX_PAGES_PROJECT` | variable | 否 | 资源名, 默认都是 `hx-context-review` |
-| `HX_OVERVIEW_URL` | variable | 否 | 总览页地址, 默认 `https://<HX_PAGES_PROJECT>.pages.dev` |
+| `HX_OVERVIEW_URL` | variable | 否 | 总览页地址 (自定义域名时填). 不填时从 Cloudflare API 读取 Pages 项目的实际域名 (项目名被占用时会带随机后缀) |
 
 ## 3. 运行部署
 
 Actions -> deploy-cf -> Run workflow:
 
-- `target`: `all` (默认), 或只部署 `migrations`, `worker`, `pages`.
-- `provider-key-name`: 填 Worker secret 名 (例如 `PROVIDER_DEFAULT_KEY`) 时, 用 `HX_PROVIDER_API_KEY` 设置该 secret; 留空则不动 secret.
+- `target`: `all` (默认), 或只部署 `migrations`, `worker`, `pages`. 只有 `all`, `migrations`, `worker` 会检查并在缺失时创建 D1; `pages` 只创建/部署 Pages 项目.
+- `provider-key-name`: 填 Worker secret 名 (例如 `PROVIDER_DEFAULT_KEY`) 时, 用 `HX_PROVIDER_API_KEY` 设置该 secret; 只在 `target` 为 `all` 或 `worker` 时有效. 填了名字但 `HX_PROVIDER_API_KEY` 为空, 或 target 不部署 Worker, 部署直接失败, 不会静默跳过. 留空则不动 secret.
 
-部署顺序: 先跑 typecheck 与测试; 再创建或复用 D1, 生成带真实 database_id 与部署信息 (commit, 时间, 运行链接) 的 wrangler 配置; 应用 D1 迁移; 创建或复用 R2 bucket, 部署 Worker; 构建并部署 Pages. 运行摘要 (Summary) 会列出 Worker 地址 (即业务仓库的 `HX_CTX_ENDPOINT`) 与总览页地址.
+部署顺序: 先跑 typecheck 与测试; 创建或复用 Pages 项目并读取其实际域名 (写入 Worker 的 OVERVIEW_URL); 再创建或复用 D1, 生成带真实 database_id 与部署信息 (commit, 时间, 运行链接) 的 wrangler 配置; 应用 D1 迁移; 创建或复用 R2 bucket, 部署 Worker; 构建并部署 Pages. 运行摘要 (Summary) 会列出 Worker 地址 (即业务仓库的 `HX_CTX_ENDPOINT`) 与总览页地址.
 
 ## 4. 配置 Access (首次部署后做一次)
 
@@ -50,7 +50,7 @@ Worker 本身 (`*.workers.dev`) 不需要套 Access: `/init`, `/runs`, `/feedbac
 打开总览页:
 
 - Deployment 区块显示当前运行的 commit, 部署时间, 部署运行日志链接, Access 是否已配置, 以及重新部署的入口.
-- Model providers 区块登记 provider: api_url, API 类型, key 所在的 Worker secret 名, 每百万 token 的输入/输出价格 (用于按月预算扣费). key 只显示 "已设置/缺失".
+- Model providers 区块登记 provider: 名称 (字母, 数字, `.`, `_`, `-`), api_url, API 类型, key 所在的 Worker secret 名, 每百万 token 的输入/输出 (必填, 免费填 0) 与缓存读/写价格, 上下文窗口与最大输出. 非法数字会被拒绝, 不会存成 0. key 只显示 "已设置/缺失".
 - Repositories 区块登记业务仓库, 页面只显示一次 HX_CTX_TOKEN, 立刻存到业务仓库的 secret.
 
 之后按 [onboard-repo.md](onboard-repo.md) 接入业务仓库.

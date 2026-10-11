@@ -3,9 +3,11 @@ import { HttpError, field, json, month, readJson } from "../http.ts";
 import type { Deps } from "../http.ts";
 import type { RepoPatch } from "../store/port.ts";
 import { verdictOf } from "./feedback.ts";
+import { handleProviderPut } from "./providers.ts";
 
 const LIST_LIMIT = 50;
 const REPO_NAME = /^[\w.-]+\/[\w.-]+$/;
+const CONFLICT = "repository already registered (names are case-insensitive)";
 
 function repoPatch(body: Record<string, unknown>): RepoPatch {
     const patch: RepoPatch = {};
@@ -30,8 +32,19 @@ function repoPatch(body: Record<string, unknown>): RepoPatch {
     return patch;
 }
 
-function positive(value: unknown, fallback: number): number {
-    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
+/** The UNIQUE COLLATE NOCASE constraint is the source of truth, so concurrent creates also get a 409. */
+async function createRepoOrConflict(deps: Deps, name: string, tokenHash: string, patch: RepoPatch) {
+    if (await deps.store.repoByName(name)) {
+        throw new HttpError(409, CONFLICT);
+    }
+    try {
+        return await deps.store.createRepo(name, tokenHash, patch);
+    } catch (error) {
+        if (/UNIQUE/i.test(String(error))) {
+            throw new HttpError(409, CONFLICT);
+        }
+        throw error;
+    }
 }
 
 /** GET /api/overview: every repo on one screen with recent runs and pending findings. */
@@ -69,11 +82,8 @@ export async function handleAdmin(request: Request, deps: Deps, parts: string[])
             if (!REPO_NAME.test(name)) {
                 throw new HttpError(400, "name must be owner/repo");
             }
-            if (await deps.store.repoByName(name)) {
-                throw new HttpError(409, "repository already registered (names are case-insensitive)");
-            }
             const token = newToken();
-            const repo = await deps.store.createRepo(name, await sha256Hex(token), repoPatch(body));
+            const repo = await createRepoOrConflict(deps, name, await sha256Hex(token), repoPatch(body));
             // The token is shown once; store it as the caller repo secret HX_CTX_TOKEN.
             return json({ repo, token }, 201);
         }
@@ -89,18 +99,7 @@ export async function handleAdmin(request: Request, deps: Deps, parts: string[])
         }
     }
     if (resource === "providers" && method === "PUT" && rest.length === 1) {
-        const body = await readJson(request);
-        await deps.store.upsertProvider({
-            name: rest[0],
-            apiUrl: field(body, "apiUrl"),
-            api: body.api === "anthropic-messages" ? "anthropic-messages" : "openai-completions",
-            keySecret: field(body, "keySecret"),
-            contextWindow: positive(body.contextWindow, 128000),
-            maxTokens: positive(body.maxTokens, 8192),
-            priceInput: positive(body.priceInput, 0),
-            priceOutput: positive(body.priceOutput, 0),
-        });
-        return json({ ok: true });
+        return handleProviderPut(request, deps, rest[0]);
     }
     if (resource === "findings" && rest.length === 2) {
         const finding = await deps.store.finding(rest[0]);

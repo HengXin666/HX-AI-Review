@@ -29,6 +29,8 @@ export function provider(row: Row): ProviderRow {
         maxTokens: Number(row.max_tokens),
         priceInput: Number(row.price_input),
         priceOutput: Number(row.price_output),
+        priceCacheRead: Number(row.price_cache_read),
+        priceCacheWrite: Number(row.price_cache_write),
     };
 }
 

@@ -45,9 +45,11 @@ R2 键: `runs/<owner>/<repo>/<runId>/report.md`, `report.json`, `sessions.jsonl`
 
 ## last_sha 与预算
 
-`POST /runs` 先完整校验请求 (findings 必须是对象数组, 等级合法), 再写 R2 与 D1, 不会留下孤儿对象. status 与 counts 缺省时由 findings 推导. baseline 认可的 historical 发现只留在 R2 报告里, 不进入待处理列表.
+`POST /runs` 先完整校验请求 (findings 必须是对象数组, 等级合法), 校验失败不写任何对象; 校验通过后写 R2 再写 D1, 中途失败会删除本次已写的 R2 对象再返回错误 (补偿清理是尽力而为). status 与 counts 缺省时由 findings 推导; `complete: false` 且没有阻断 Error 时 status 为 `incomplete`, 不会显示为 passed. baseline 认可的 historical 发现只留在 R2 报告里, 不进入待处理列表.
 
-每次运行 (包括 PR) 都计入本月花费: 费用取 runner 上报值与 `token 数 x provider 单价` 的较大值; 预算月份不同则先归零. last_sha 只在 push 运行且 `complete` 不为 false 时推进, 因为该游标代表已完整审核过的被 push 历史.
+每次运行 (包括 PR) 都计入本月花费: 费用取 runner 上报值与 `输入/输出/缓存读/缓存写 token 数 x provider 对应单价` 的较大值; 预算月份不同则先归零. last_sha 只在 `event` 为 push, 没有 PR 编号且 `complete` 不为 false 时推进, 因为该游标代表已完整审核过的被 push 历史.
+
+provider 名只允许字母, 数字, `.`, `_`, `-`; 新建 provider 必须显式给出输入/输出单价 (免费填 0), 更新时省略的字段保留原值. 同名仓库 (大小写不敏感) 重复登记返回 409, 并发创建撞唯一约束同样映射为 409.
 
 ## 分层
 

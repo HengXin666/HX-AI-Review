@@ -47,19 +47,17 @@ export function assertSafeSecret(value: string): void {
  */
 export function storeKey(root: string, apiKey: string): void {
     assertSafeSecret(apiKey);
-    process.stdout.write(`::add-mask::${apiKey}\n`);
+    // Workflow commands decode %25, %0D, %0A; escape % so the registered mask equals the real key.
+    process.stdout.write(`::add-mask::${apiKey.replaceAll("%", "%25")}\n`);
     writeFileSync(stateFile(root, KEY_FILE), apiKey, { encoding: UTF8, mode: 0o600 });
 }
 
+/** HX_CTX_API_KEY (local runs) wins over the key file; the file is removed either way. */
 export function takeKey(root: string): string | undefined {
     const file = join(stateDir(root), KEY_FILE);
-    const fromEnv = process.env[ENV.apiKey];
-    if (!existsSync(file)) {
-        return fromEnv;
-    }
-    const key = readFileSync(file, UTF8);
+    const fromFile = existsSync(file) ? readFileSync(file, UTF8) : undefined;
     rmSync(file, { force: true });
-    return key;
+    return process.env[ENV.apiKey] || fromFile;
 }
 
 export function dropKey(root: string): void {

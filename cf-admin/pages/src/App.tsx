@@ -40,7 +40,7 @@ export function App() {
             return null;
         }
     };
-    const saveProvider = (name: string, input: ProviderInput) => {
+    const saveProvider = (name: string, input: Partial<ProviderInput>) => {
         api.saveProvider(name, input).then(reload, fail);
     };
     const verdict = (id: string, value: "accepted" | "rejected") => {

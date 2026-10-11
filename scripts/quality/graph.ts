@@ -1,4 +1,4 @@
-// Impact graph for hx-agent-code test selection. The two packages share no imports, so the graph is static.
+// Impact graph for hx-agent-code test selection. The packages share no imports, so the graph is static.
 const graph = {
     complete: true,
     inputs: {},
@@ -10,6 +10,7 @@ const graph = {
             dependsOn: [],
             contracts: ["docs/reference/api/cf-admin.yaml"],
         },
+        quality: { paths: ["scripts/quality"], tests: ["quality:unit"], dependsOn: [], contracts: [] },
         "cf-admin": {
             paths: ["cf-admin"],
             tests: ["cf-admin:unit"],

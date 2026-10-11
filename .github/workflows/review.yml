@@ -19,10 +19,11 @@ on:
 
 jobs:
     review:
-        # Fork pull requests get no secrets and their head lives in another repository: skip them explicitly.
+        # Fork pull requests are skipped for every PR event, pull_request_target included: their head is
+        # untrusted code from another repository and must never run with HX_CTX_TOKEN or a write token.
         if: >-
             github.event.deleted != true &&
-            (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+            (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository)
         runs-on: ubuntu-latest
         timeout-minutes: 30
         permissions:
@@ -76,9 +77,9 @@ jobs:
               id: review
               if: steps.scope.outputs.empty != 'true' && steps.init.outputs.l0_only != 'true'
               run: node "$TOOL/context-cr/src/cli.ts" review
-            # Not on cancel; on a review failure it still publishes L0, marked incomplete so last_sha stays put.
+            # Not on cancel. After a scope or review failure it still publishes L0, marked incomplete so last_sha stays.
             - name: 6 ingest + write-back (POST /runs, patch branch, comment)
-              if: ${{ !cancelled() && steps.init.outcome == 'success' && steps.scope.outcome == 'success' }}
+              if: ${{ !cancelled() && steps.init.outcome == 'success' }}
               env:
                   HX_CTX_TOKEN: ${{ secrets.HX_CTX_TOKEN }}
                   GITHUB_TOKEN: ${{ github.token }}

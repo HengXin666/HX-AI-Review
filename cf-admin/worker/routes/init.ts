@@ -48,7 +48,12 @@ export async function handleInit(request: Request, deps: Deps): Promise<Response
             maxTokens: provider?.maxTokens ?? 0,
             maxCandidates: MAX_CANDIDATES,
         },
-        pricing: { input: provider?.priceInput ?? 0, output: provider?.priceOutput ?? 0 },
+        pricing: {
+            input: provider?.priceInput ?? 0,
+            output: provider?.priceOutput ?? 0,
+            cacheRead: provider?.priceCacheRead ?? 0,
+            cacheWrite: provider?.priceCacheWrite ?? 0,
+        },
         lastSha: repo.lastSha ?? undefined,
         suppressions: await deps.store.suppressions(repo.id),
     };

@@ -18,6 +18,7 @@ AI 上下文 review: 在业务仓库每次 push / PR 时, 检查 AGENTS.md, READ
 | [docs/reference/api/cf-admin.yaml](docs/reference/api/cf-admin.yaml) | Worker HTTP 契约 (OpenAPI) |
 | [docs/tutorials/onboard-repo.md](docs/tutorials/onboard-repo.md) | 业务仓库接入 (10 行调用方 workflow) |
 | [.github/workflows/deploy-cf.yml](.github/workflows/deploy-cf.yml) | 手动触发的 Cloudflare 一键部署 |
+| [docs/reference/quality/pipeline.md](docs/reference/quality/pipeline.md) | 代码质量流水线: 触发, 每项检查验证什么, 变更时同步规则 |
 | [docs/tutorials/deploy-cf.md](docs/tutorials/deploy-cf.md) | 一键部署 Worker, D1, R2, Pages 与 Access 配置 |
 | [docs/decisions/2026-10-11-pi-runner-direct-model.md](docs/decisions/2026-10-11-pi-runner-direct-model.md) | 为什么 pi 在 runner 直连模型, CF 只管配置与存储 |
 | [docs/reference/quality/inventory.md](docs/reference/quality/inventory.md) | hx-agent-code 门禁安装清单与未完成项 |

@@ -72,11 +72,23 @@ export function showFile(root: string, rev: string, path: string): string | unde
  */
 export function patchFiles(root: string, patch: string): string[] | undefined {
     try {
-        const out = git(root, ["apply", "--check", "--numstat", "-"], patch);
-        return out
-            .split("\n")
-            .filter(Boolean)
-            .map((line) => line.split("\t").slice(2).join("\t"));
+        // -z keeps non-ASCII paths raw instead of C-quoting them.
+        const tokens = git(root, ["apply", "--check", "--numstat", "-z", "-"], patch).split("\0");
+        const files: string[] = [];
+        for (let index = 0; index < tokens.length; index++) {
+            const fields = tokens[index].split("\t");
+            if (fields.length < 3) {
+                continue;
+            }
+            if (fields[2]) {
+                files.push(fields[2]);
+            } else {
+                // Rename or copy: "added\tdeleted\t" then old and new paths as separate tokens.
+                files.push(tokens[index + 1], tokens[index + 2]);
+                index += 2;
+            }
+        }
+        return files;
     } catch {
         return undefined;
     }

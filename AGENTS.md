@@ -17,10 +17,15 @@
 - 新文档放 `docs/` 下, 文件名小写 kebab; 当前事实写 reference, 原因写 decisions, 不建 v2 副本.
 - 每个含 README.md 或 AGENTS.md 的目录两者成对; AGENTS.md 少于 150 行.
 
+## 代码质量
+
+- 质量流水线, 每项检查验证什么, 以及改动时要同步什么, 都在 [docs/reference/quality/pipeline.md](docs/reference/quality/pipeline.md). 改 `scripts/quality/`, quality 工作流, L0 规则或格式/类型配置前先读它, 并在同一次改动里更新它; 漏改由 HX-DOCLINK 检查拦下.
+- 新增"改了 X 就要改文档 Y"的约束时, 登记到 `scripts/quality/doc-links/links.json`.
+
 ## 完成前
 
 ```sh
-pnpm typecheck && pnpm test && pnpm l0
+pnpm typecheck && pnpm test && pnpm l0 && pnpm format:check && pnpm doc-links
 ```
 
 门禁报告写在 `scripts/.hx_code_quality/reports/`, 超过 10 条只看数量与类型统计.

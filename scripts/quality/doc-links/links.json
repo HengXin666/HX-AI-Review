@@ -1,0 +1,34 @@
+{
+    "$comment": "HX-DOCLINK: when a watched path changes, the linked doc must change in the same range. Checker: scripts/quality/doc-links/index.ts",
+    "links": [
+        {
+            "doc": "docs/reference/quality/pipeline.md",
+            "watch": [
+                "scripts/quality/",
+                ".github/workflows/quality-",
+                ".agents/skills/hx-agent-code/",
+                "context-cr/src/l0/",
+                ".hx-context-review.json",
+                ".prettierrc.json",
+                ".prettierignore",
+                "tsconfig.base.json"
+            ],
+            "reason": "quality pipeline, checks and rule coverage"
+        },
+        {
+            "doc": "docs/tutorials/deploy-cf.md",
+            "watch": [".github/workflows/deploy-cf.yml", "cf-admin/scripts/deploy.ts"],
+            "reason": "one-click Cloudflare deploy"
+        },
+        {
+            "doc": "docs/reference/report-contract.md",
+            "watch": ["context-cr/src/contract/"],
+            "reason": "finding and report contract"
+        },
+        {
+            "doc": "docs/architecture/context-cr.md",
+            "watch": [".github/workflows/review.yml"],
+            "reason": "reusable review workflow steps"
+        }
+    ]
+}

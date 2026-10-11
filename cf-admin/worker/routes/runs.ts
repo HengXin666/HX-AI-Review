@@ -9,7 +9,7 @@ const NDJSON = "application/x-ndjson";
 const DIFF = "text/x-diff";
 const MAX_FINDINGS = 500;
 const MILLION = 1_000_000;
-const STATUSES = new Set(["passed", "warned", "failed", "skipped"]);
+const STATUSES = new Set(["passed", "warned", "failed", "skipped", "incomplete"]);
 
 type InFinding = Omit<FindingRow, "id" | "runId" | "repoId" | "patchKey" | "status"> & { origin: string };
 type InPatch = { fingerprint: string; diff: string };
@@ -66,7 +66,8 @@ function derive(body: Record<string, unknown>, list: InFinding[]) {
     const errors = list.filter((item) => item.severity === "error");
     const blocking = errors.filter((item) => item.origin === "new").length;
     const counts = { error: errors.length, warning: list.length - errors.length };
-    const fallback = blocking ? "failed" : list.length ? "warned" : "passed";
+    const incomplete = body.complete === false;
+    const fallback = blocking ? "failed" : incomplete ? "incomplete" : list.length ? "warned" : "passed";
     const status = typeof body.status === "string" && STATUSES.has(body.status) ? body.status : fallback;
     return { counts, status };
 }
@@ -77,7 +78,12 @@ function costOf(usage: Record<string, unknown>, provider: ProviderRow | null): n
     if (!provider) {
         return reported;
     }
-    const computed = (num(usage.input) * provider.priceInput + num(usage.output) * provider.priceOutput) / MILLION;
+    const tokens =
+        num(usage.input) * provider.priceInput +
+        num(usage.output) * provider.priceOutput +
+        num(usage.cacheRead) * provider.priceCacheRead +
+        num(usage.cacheWrite) * provider.priceCacheWrite;
+    const computed = tokens / MILLION;
     return Math.max(reported, computed);
 }
 
@@ -102,16 +108,11 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
     const runId = deps.id();
     const prefix = `runs/${repo.name}/${runId}/`;
     const patchKeys = new Map<string, string>();
-    for (const patch of fixes) {
-        const key = `${prefix}patches/${patch.fingerprint}.diff`;
-        await deps.blobs.put(key, patch.diff, DIFF);
-        patchKeys.set(patch.fingerprint, key);
-    }
-    await deps.blobs.put(prefix + "report.md", String(body.reportMarkdown ?? ""), MD);
-    await deps.blobs.put(prefix + "report.json", String(body.reportJson ?? "{}"), JSON_TYPE);
-    if (typeof body.sessionsJsonl === "string" && body.sessionsJsonl) {
-        await deps.blobs.put(prefix + "sessions.jsonl", body.sessionsJsonl, NDJSON);
-    }
+    const written: string[] = [];
+    const put = async (key: string, text: string, type: string) => {
+        written.push(key);
+        await deps.blobs.put(key, text, type);
+    };
     const now = deps.now();
     const run: RunRow = {
         id: runId,
@@ -132,20 +133,37 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
         createdAt: now.toISOString(),
     };
     // Baseline-approved (historical) findings stay in the R2 report but never re-enter the pending queue.
-    const rows: FindingRow[] = list
-        .filter((item) => item.origin === "new")
-        .map(({ origin: _origin, ...item }, index) => ({
-            ...item,
-            id: `${runId}-${index}`,
-            runId,
-            repoId: repo.id,
-            patchKey: patchKeys.get(item.fingerprint) ?? null,
-            status: "open",
-        }));
-    await deps.store.insertRun(run, rows);
+    const rows = (): FindingRow[] =>
+        list
+            .filter((item) => item.origin === "new")
+            .map(({ origin: _origin, ...item }, index) => ({
+                ...item,
+                id: `${runId}-${index}`,
+                runId,
+                repoId: repo.id,
+                patchKey: patchKeys.get(item.fingerprint) ?? null,
+                status: "open",
+            }));
+    try {
+        for (const patch of fixes) {
+            const key = `${prefix}patches/${patch.fingerprint}.diff`;
+            await put(key, patch.diff, DIFF);
+            patchKeys.set(patch.fingerprint, key);
+        }
+        await put(prefix + "report.md", String(body.reportMarkdown ?? ""), MD);
+        await put(prefix + "report.json", String(body.reportJson ?? "{}"), JSON_TYPE);
+        if (typeof body.sessionsJsonl === "string" && body.sessionsJsonl) {
+            await put(prefix + "sessions.jsonl", body.sessionsJsonl, NDJSON);
+        }
+        await deps.store.insertRun(run, rows());
+    } catch (error) {
+        // Compensate: a failed write must not leave R2 objects that no D1 run points to.
+        await deps.blobs.delete(written).catch(() => undefined);
+        throw error;
+    }
     await deps.store.charge(repo.id, costUsd, month(now));
     // last_sha tracks the pushed history only, and only once the AI stage really finished for this range.
-    if (prNumber === null && body.complete !== false) {
+    if (run.event === "push" && prNumber === null && body.complete !== false) {
         await deps.store.setLastSha(repo.id, sha);
     }
     const overviewUrl = deps.overviewUrl ? `${deps.overviewUrl.replace(/\/$/, "")}/#/runs/${runId}` : undefined;

@@ -33,7 +33,7 @@ const LOCAL_CONFIG: InitConfig = {
     api: "openai-completions",
     models: { finder: "", verifier: "" },
     limits: { contextWindow: 0, maxTokens: 0, maxCandidates: 0 },
-    pricing: { input: 0, output: 0 },
+    pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     suppressions: [],
 };
 
@@ -165,7 +165,7 @@ export async function stepPublish(root: string): Promise<number> {
             baseSha: state.event.base,
             event: state.event.name,
             prNumber: state.event.prNumber,
-            status: statusOf(report.counts, !scope?.contexts.length),
+            status: statusOf(report.counts, !scope?.contexts.length, complete),
             complete,
             l0Only: state.config.l0Only,
             durationMs: report.durationMs,
