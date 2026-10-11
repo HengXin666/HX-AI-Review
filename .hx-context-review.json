@@ -1,0 +1,9 @@
+{
+    "skillRoots": [".agents/skills"],
+    "concurrentSkills": 1,
+    "orphanRoots": ["docs"],
+    "exclude": [".agents/skills/hx-agent-code/", ".agents/skills/hx-agent-notes/"],
+    "scopeIgnore": ["pnpm-lock.yaml"],
+    "baseline": "scripts/quality/context-baseline.json",
+    "virtualPaths": ["scripts/.hx_code_quality/", ".github/workflows/context-review.yml"]
+}
