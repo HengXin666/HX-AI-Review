@@ -1,0 +1,61 @@
+name: deploy-cf
+# Manual one-click deploy of the Cloudflare side (D1 + migrations, R2, Worker, Pages overview).
+# Repository secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, optional HX_PROVIDER_API_KEY.
+# Repository variables (optional): HX_ACCESS_AUD, HX_ACCESS_TEAM_DOMAIN, HX_WORKER_NAME, HX_D1_NAME,
+# HX_R2_BUCKET, HX_PAGES_PROJECT, HX_OVERVIEW_URL.
+on:
+    workflow_dispatch:
+        inputs:
+            target:
+                description: What to deploy
+                type: choice
+                options: [all, migrations, worker, pages]
+                default: all
+            provider-key-name:
+                description: Worker secret name to (re)set from the HX_PROVIDER_API_KEY secret, e.g. PROVIDER_DEFAULT_KEY. Empty skips.
+                type: string
+                required: false
+                default: ""
+
+permissions:
+    contents: read
+
+concurrency:
+    group: deploy-cf
+    cancel-in-progress: false
+
+jobs:
+    deploy:
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  persist-credentials: false
+            - uses: pnpm/action-setup@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "24"
+            - name: Install cf-admin dependencies
+              run: pnpm install --frozen-lockfile --filter cf-admin...
+            - name: Typecheck and test before deploying
+              working-directory: cf-admin
+              run: pnpm typecheck && pnpm test
+            - name: Deploy
+              working-directory: cf-admin
+              env:
+                  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+                  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+                  HX_DEPLOY_TARGET: ${{ inputs.target }}
+                  HX_PROVIDER_KEY_NAME: ${{ inputs.provider-key-name }}
+                  HX_PROVIDER_KEY_VALUE: ${{ inputs.provider-key-name != '' && secrets.HX_PROVIDER_API_KEY || '' }}
+                  HX_ACCESS_AUD: ${{ vars.HX_ACCESS_AUD }}
+                  HX_ACCESS_TEAM_DOMAIN: ${{ vars.HX_ACCESS_TEAM_DOMAIN }}
+                  HX_WORKER_NAME: ${{ vars.HX_WORKER_NAME }}
+                  HX_D1_NAME: ${{ vars.HX_D1_NAME }}
+                  HX_R2_BUCKET: ${{ vars.HX_R2_BUCKET }}
+                  HX_PAGES_PROJECT: ${{ vars.HX_PAGES_PROJECT }}
+                  HX_OVERVIEW_URL: ${{ vars.HX_OVERVIEW_URL }}
+                  DEPLOY_SHA: ${{ github.sha }}
+                  DEPLOY_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+              run: pnpm run deploy

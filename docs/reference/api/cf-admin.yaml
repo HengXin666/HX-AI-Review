@@ -1,0 +1,418 @@
+openapi: 3.1.0
+info:
+    title: hx-context-review cf-admin Worker
+    version: 0.3.0
+    description: >
+        Config delivery, ingest and overview API. Model traffic never passes through this Worker.
+        Runner endpoints use the per-repo HX_CTX_TOKEN; /api endpoints sit behind Cloudflare Access.
+components:
+    securitySchemes:
+        repoToken:
+            type: http
+            scheme: bearer
+            description: HX_CTX_TOKEN, prefix hxctx_, stored in D1 only as SHA-256
+        access:
+            type: apiKey
+            in: header
+            name: Cf-Access-Jwt-Assertion
+    schemas:
+        Finding:
+            type: object
+            required: [ruleId, severity, path, line, message, evidence, fingerprint]
+            properties:
+                ruleId: { type: string }
+                severity: { type: string, enum: [error, warning] }
+                path: { type: string }
+                line: { type: integer, minimum: 1 }
+                message: { type: string }
+                evidence: { type: string }
+                fingerprint: { type: string }
+                origin: { type: string, enum: [new, historical] }
+        Patch:
+            type: object
+            required: [fingerprint, diff, applies]
+            properties:
+                fingerprint: { type: string }
+                diff: { type: string }
+                applies: { type: boolean }
+        Init:
+            type: object
+            required: [repo, enabled, l0Only, api, models, limits, suppressions]
+            properties:
+                repo: { type: string }
+                enabled: { type: boolean }
+                l0Only: { type: boolean }
+                reason: { type: string }
+                l0Cause:
+                    type: string
+                    enum: [disabled, mode, budget, config]
+                    description: Present when l0Only. budget and config mean the range was not reviewed.
+                apiUrl: { type: string, description: Present only when l0Only is false }
+                apiKey: { type: string, description: Present only when l0Only is false; runner masks it }
+                api: { type: string, enum: [openai-completions, anthropic-messages] }
+                models:
+                    type: object
+                    properties:
+                        finder: { type: string }
+                        verifier: { type: string }
+                limits:
+                    type: object
+                    properties:
+                        contextWindow: { type: integer }
+                        maxTokens: { type: integer }
+                        maxCandidates: { type: integer }
+                        maxRunUsd:
+                            type: [number, "null"]
+                            description: Remaining monthly budget in USD; null when the repo has no cap
+                pricing:
+                    type: object
+                    description: USD per million tokens
+                    properties:
+                        input: { type: number }
+                        output: { type: number }
+                        cacheRead: { type: number }
+                        cacheWrite: { type: number }
+                lastSha: { type: string }
+                budgetClaim:
+                    type: string
+                    description: Opaque budget reservation id; echo it on POST /runs so only this run releases it
+                suppressions:
+                    type: array
+                    items:
+                        type: object
+                        properties:
+                            fingerprint: { type: string }
+                            reason: { type: string }
+        RunPayload:
+            type: object
+            required: [repo, sha, findings]
+            properties:
+                repo: { type: string }
+                sha: { type: string }
+                baseSha: { type: string }
+                event: { type: string }
+                prNumber: { type: integer }
+                status:
+                    type: string
+                    enum: [passed, warned, failed, skipped, incomplete]
+                    description: >-
+                        Always derived by the server: failed (blocking new Error), incomplete (complete is false or
+                        the runner sends incomplete), warned or passed by the findings. The runner's skipped is kept
+                        only when there are no findings. An unknown value is a 400.
+                complete:
+                    type: boolean
+                    description: false when the AI stage did not finish (session failure, run budget or deadline, or L0-only because of budget or config); last_sha then stays put. Must be a boolean when present.
+                    default: true
+                l0Only: { type: boolean }
+                durationMs: { type: integer }
+                usage:
+                    type: object
+                    properties:
+                        input: { type: integer }
+                        output: { type: integer }
+                        cacheRead: { type: integer }
+                        cacheWrite: { type: integer }
+                        cost: { type: number }
+                counts:
+                    type: object
+                    properties:
+                        error: { type: integer }
+                        warning: { type: integer }
+                        blocking: { type: integer }
+                findings: { type: array, maxItems: 500, items: { $ref: "#/components/schemas/Finding" } }
+                patches: { type: array, items: { $ref: "#/components/schemas/Patch" } }
+                patchBranch: { type: string }
+                budgetClaim:
+                    type: string
+                    description: >-
+                        The budgetClaim from GET /init. Spend is always recorded; the reservation is released only
+                        when this matches the live claim, so a run that was refused the budget cannot free another's.
+                reportMarkdown: { type: string }
+                reportJson: { type: string }
+                sessionsJsonl: { type: string }
+        Repo:
+            type: object
+            properties:
+                id: { type: integer }
+                name: { type: string, description: "owner/repo, case-insensitive" }
+                enabled: { type: boolean }
+                mode: { type: string, enum: [full, l0] }
+                provider: { type: string, pattern: "^[A-Za-z0-9._-]{1,64}$" }
+                finderModel: { type: string }
+                verifierModel: { type: string }
+                budgetUsd: { type: number, description: Monthly cap in USD; 0 means no cap }
+                spentUsd: { type: number }
+                budgetMonth: { type: string }
+                lastSha: { type: [string, "null"] }
+        RepoPatch:
+            type: object
+            properties:
+                enabled: { type: boolean }
+                mode: { type: string, enum: [full, l0] }
+                provider: { type: string, pattern: "^[A-Za-z0-9._-]{1,64}$" }
+                finderModel: { type: string }
+                verifierModel: { type: string }
+                budgetUsd: { type: number, minimum: 0 }
+        RepoCreate:
+            allOf:
+                - $ref: "#/components/schemas/RepoPatch"
+                - type: object
+                  required: [name]
+                  properties:
+                      name: { type: string, pattern: '^[\w.-]+/[\w.-]+$' }
+        Provider:
+            type: object
+            description: Create requires apiUrl, keySecret, priceInput and priceOutput; update keeps omitted fields
+            properties:
+                apiUrl: { type: string }
+                api:
+                    {
+                        type: string,
+                        enum: [openai-completions, anthropic-messages],
+                        description: Omitted keeps the stored protocol (new providers default to openai-completions),
+                    }
+                keySecret:
+                    {
+                        type: string,
+                        pattern: "^[A-Z][A-Z0-9_]{0,63}$",
+                        description: Name of the Worker secret holding the key,
+                    }
+                contextWindow: { type: integer, minimum: 1 }
+                maxTokens: { type: integer, minimum: 1 }
+                priceInput: { type: number, minimum: 0, description: USD per million input tokens }
+                priceOutput: { type: number, minimum: 0, description: USD per million output tokens }
+                priceCacheRead: { type: number, minimum: 0, description: USD per million cache-read tokens }
+                priceCacheWrite: { type: number, minimum: 0, description: USD per million cache-write tokens }
+        Deployment:
+            type: object
+            properties:
+                sha: { type: string }
+                deployedAt: { type: string }
+                runUrl: { type: string }
+                accessConfigured: { type: boolean }
+        Token:
+            type: object
+            required: [token]
+            properties:
+                token: { type: string, description: "Plaintext HX_CTX_TOKEN, returned only once" }
+        Feedback:
+            type: object
+            required: [verdict]
+            properties:
+                fingerprint: { type: string, description: Required on /feedback }
+                verdict: { type: string, enum: [accepted, rejected] }
+                reason: { type: string, description: Required when verdict is rejected }
+paths:
+    /init:
+        get:
+            operationId: getInit
+            security: [{ repoToken: [] }]
+            parameters:
+                - { name: repo, in: query, required: false, schema: { type: string } }
+                - name: group
+                  in: query
+                  required: false
+                  schema: { type: string }
+                  description: >-
+                      The caller's concurrency group. A live claim from the same group may be taken over,
+                      because GitHub cancelled that run to start this one. Empty never matches.
+            responses:
+                "200":
+                    {
+                        description: Config,
+                        content: { application/json: { schema: { $ref: "#/components/schemas/Init" } } },
+                    }
+                "401": { description: Missing or unknown token }
+                "403": { description: Token belongs to another repository }
+    /spend:
+        post:
+            operationId: postSpend
+            security: [{ repoToken: [] }]
+            description: >-
+                Marks the run's budget claim as having opened a model session. A claim taken over by a newer
+                run is settled (charged its allowance) only when it was marked this way, so a run cancelled
+                before its first session does not burn the month. Repeating it for the claim this run
+                still holds is a no-op.
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            required: [budgetClaim]
+                            properties:
+                                budgetClaim: { type: string }
+            responses:
+                "200": { description: Recorded }
+                "400":
+                    description: >-
+                        Invalid JSON, a body that is not a JSON object, or a budgetClaim that is missing,
+                        empty or not a string
+                "401": { description: Missing or unknown token }
+                "409":
+                    description: >-
+                        The claim is no longer held by this run: it is unknown, a newer run has taken it over,
+                        or this run already released it in its own POST /runs report. This run must not spend,
+                        or the month would be charged twice.
+    /runs:
+        post:
+            operationId: postRun
+            security: [{ repoToken: [] }]
+            requestBody:
+                required: true
+                content: { application/json: { schema: { $ref: "#/components/schemas/RunPayload" } } }
+            responses:
+                "201":
+                    description: Stored
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    runId: { type: string }
+                                    overviewUrl: { type: string }
+                "400":
+                    {
+                        description: "Invalid payload: a missing required field or a present field with a wrong type or range",
+                    }
+    /feedback:
+        post:
+            operationId: postFeedback
+            security: [{ repoToken: [] }]
+            requestBody:
+                required: true
+                content: { application/json: { schema: { $ref: "#/components/schemas/Feedback" } } }
+            responses:
+                "200": { description: Number of open findings updated }
+    /api/overview:
+        get:
+            operationId: getOverview
+            security: [{ access: [] }]
+            responses:
+                "200":
+                    description: Everything the overview page shows
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    month: { type: string }
+                                    deployment: { $ref: "#/components/schemas/Deployment" }
+                                    repos: { type: array, items: { $ref: "#/components/schemas/Repo" } }
+                                    runs: { type: array, items: { type: object } }
+                                    findings: { type: array, items: { type: object } }
+                                    providers:
+                                        type: array
+                                        items:
+                                            allOf:
+                                                - $ref: "#/components/schemas/Provider"
+                                                - type: object
+                                                  properties:
+                                                      name: { type: string }
+                                                      keyPresent: { type: boolean }
+                "403": { description: No valid Access identity }
+    /api/status:
+        get:
+            operationId: getStatus
+            security: [{ access: [] }]
+            responses:
+                "200":
+                    description: Deployed commit and the Access identity
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    deployment: { $ref: "#/components/schemas/Deployment" }
+                                    admin: { type: string }
+    /api/repos:
+        post:
+            operationId: createRepo
+            security: [{ access: [] }]
+            requestBody:
+                required: true
+                content: { application/json: { schema: { $ref: "#/components/schemas/RepoCreate" } } }
+            responses:
+                "201":
+                    description: Repo and its one-time plaintext token
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    repo: { $ref: "#/components/schemas/Repo" }
+                                    token: { type: string }
+                "400": { description: "Invalid name, or a present field with a wrong type or value" }
+                "409": { description: Repository already registered; names compare case-insensitively }
+    /api/repos/{owner}/{repo}:
+        patch:
+            operationId: updateRepo
+            security: [{ access: [] }]
+            parameters:
+                - { name: owner, in: path, required: true, schema: { type: string } }
+                - { name: repo, in: path, required: true, schema: { type: string } }
+            requestBody:
+                required: true
+                content: { application/json: { schema: { $ref: "#/components/schemas/RepoPatch" } } }
+            responses:
+                "200":
+                    description: Updated repo
+                    content:
+                        application/json:
+                            schema: { type: object, properties: { repo: { $ref: "#/components/schemas/Repo" } } }
+                "400": { description: A present field with a wrong type or value }
+                "404": { description: Unknown repo }
+    /api/repos/{owner}/{repo}/rotate-token:
+        post:
+            operationId: rotateToken
+            security: [{ access: [] }]
+            parameters:
+                - { name: owner, in: path, required: true, schema: { type: string } }
+                - { name: repo, in: path, required: true, schema: { type: string } }
+            responses:
+                "200":
+                    {
+                        description: New token,
+                        content: { application/json: { schema: { $ref: "#/components/schemas/Token" } } },
+                    }
+                "404": { description: Unknown repo }
+    /api/providers/{name}:
+        put:
+            operationId: upsertProvider
+            security: [{ access: [] }]
+            parameters:
+                - { name: name, in: path, required: true, schema: { type: string, pattern: "^[A-Za-z0-9_.-]{1,64}$" } }
+            requestBody:
+                required: true
+                content: { application/json: { schema: { $ref: "#/components/schemas/Provider" } } }
+            responses:
+                "200":
+                    description: Saved
+                    content: { application/json: { schema: { type: object, properties: { ok: { type: boolean } } } } }
+                "400":
+                    description: >-
+                        Invalid name or secret name, a negative price, a non-integer or non-positive contextWindow or
+                        maxTokens, an unknown api protocol, or a missing input/output price on create
+    /api/findings/{id}/patch:
+        get:
+            operationId: getPatch
+            security: [{ access: [] }]
+            parameters:
+                - { name: id, in: path, required: true, schema: { type: string } }
+            responses:
+                "200": { description: Unified diff, content: { text/x-diff: { schema: { type: string } } } }
+                "404": { description: Unknown finding or no patch }
+    /api/findings/{id}/feedback:
+        post:
+            operationId: postFindingFeedback
+            security: [{ access: [] }]
+            parameters:
+                - { name: id, in: path, required: true, schema: { type: string } }
+            requestBody:
+                required: true
+                content: { application/json: { schema: { $ref: "#/components/schemas/Feedback" } } }
+            responses:
+                "200":
+                    description: Number of open findings updated
+                    content:
+                        { application/json: { schema: { type: object, properties: { updated: { type: integer } } } } }

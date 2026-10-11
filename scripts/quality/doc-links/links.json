@@ -1,0 +1,51 @@
+{
+    "$comment": "HX-DOCLINK: when a watched path changes, the linked doc must change in the same range. Checker: scripts/quality/doc-links/index.ts",
+    "links": [
+        {
+            "doc": "docs/reference/quality/pipeline.md",
+            "watch": [
+                "scripts/quality/",
+                ".github/workflows/quality-",
+                ".agents/skills/hx-agent-code/",
+                "context-cr/src/l0/",
+                ".hx-context-review.json",
+                ".prettierrc.json",
+                ".prettierignore",
+                "tsconfig.base.json",
+                "context-cr/tsconfig.json",
+                "cf-admin/tsconfig.json",
+                "cf-admin/pages/tsconfig.json",
+                "cf-admin/scripts/tsconfig.json",
+                "cf-admin/pages/functions/tsconfig.json"
+            ],
+            "reason": "quality pipeline, checks and rule coverage"
+        },
+        {
+            "doc": "docs/tutorials/deploy-cf.md",
+            "watch": [".github/workflows/deploy-cf.yml", "cf-admin/scripts/deploy.ts"],
+            "reason": "one-click Cloudflare deploy"
+        },
+        {
+            "doc": "docs/reference/report-contract.md",
+            "watch": ["context-cr/src/contract/"],
+            "reason": "finding and report contract"
+        },
+        {
+            "doc": "docs/architecture/context-cr.md",
+            "watch": [
+                ".github/workflows/review.yml",
+                "context-cr/src/steps.ts",
+                "context-cr/src/state.ts",
+                "context-cr/src/cli.ts",
+                "context-cr/src/publish/",
+                "context-cr/src/init/"
+            ],
+            "reason": "reusable review workflow steps"
+        },
+        {
+            "doc": "docs/architecture/agent-review.md",
+            "watch": ["context-cr/src/review/", "context-cr/src/scope/", "context-cr/src/constants.ts"],
+            "reason": "AI review agent design: roles, inputs, gates, limits"
+        }
+    ]
+}

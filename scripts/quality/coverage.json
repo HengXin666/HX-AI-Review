@@ -1,0 +1,208 @@
+[
+    {
+        "id": "HC-STACK",
+        "status": "blocked",
+        "reason": "Stack recorded in docs/reference/quality/inventory.md (TS for Worker and pi SDK, React+TS+pnpm for Pages); no mechanical checker yet"
+    },
+    {
+        "id": "HC-EXT",
+        "status": "blocked",
+        "reason": "No checker yet; repository currently has no hand-written js/mjs/cjs"
+    },
+    {
+        "id": "HC-REUSE",
+        "status": "blocked",
+        "reason": "Recommendation recorded in docs/decisions; no review automation"
+    },
+    {
+        "id": "HC-DEPS",
+        "status": "blocked",
+        "reason": "Dependencies listed in inventory.md awaiting explicit approval record"
+    },
+    {
+        "id": "HC-BOUNDARY",
+        "status": "blocked",
+        "reason": "Module boundaries documented in AGENTS.md; AST import checker not implemented"
+    },
+    {
+        "id": "HC-DATA",
+        "status": "blocked",
+        "reason": "Ports exist (cf-admin Store/BlobStore, context-cr AgentRunner); no AST checker"
+    },
+    {
+        "id": "HC-CYCLE",
+        "status": "blocked",
+        "reason": "No AST dependency graph checker"
+    },
+    {
+        "id": "HC-DIR",
+        "status": "blocked",
+        "reason": "No directory size checker"
+    },
+    {
+        "id": "HC-DIR-MIX",
+        "status": "blocked",
+        "reason": "No module responsibility manifest"
+    },
+    {
+        "id": "HC-PAIR",
+        "status": "blocked",
+        "reason": "pages/src/api.ts vs worker routes not reconciled mechanically"
+    },
+    {
+        "id": "HC-FORMAT",
+        "status": "blocked",
+        "reason": "prettier --check wired into ci.json code group; positive/negative probes not yet added"
+    },
+    {
+        "id": "HC-COMMENT-SPACE",
+        "status": "blocked",
+        "reason": "No comment lexer checker"
+    },
+    {
+        "id": "HC-SIZE",
+        "status": "blocked",
+        "reason": "No line-count checker (all files currently under 300 lines)"
+    },
+    {
+        "id": "HC-LINT",
+        "status": "blocked",
+        "reason": "No lint tool approved yet (eslint proposed)"
+    },
+    {
+        "id": "HC-TYPE",
+        "status": "blocked",
+        "reason": "tsc strict wired into ci.json code group; probes not yet added"
+    },
+    {
+        "id": "HC-PY-IMPORT",
+        "status": "blocked",
+        "reason": "Only vendored .agents/skills/hx-agent-notes ships Python; no vendor exclusion or Python AST checker is configured yet"
+    },
+    {
+        "id": "HC-PY-CONST",
+        "status": "blocked",
+        "reason": "Only vendored .agents/skills/hx-agent-notes ships Python; no vendor exclusion or Python AST checker is configured yet"
+    },
+    {
+        "id": "HC-DOCSIG",
+        "status": "blocked",
+        "reason": "No doc signature checker"
+    },
+    {
+        "id": "HC-DOCSYNC",
+        "status": "blocked",
+        "reason": "No checker"
+    },
+    {
+        "id": "HC-COMMENT",
+        "status": "blocked",
+        "reason": "No header comment checker"
+    },
+    {
+        "id": "HC-WHY",
+        "status": "blocked",
+        "reason": "Review only"
+    },
+    {
+        "id": "HC-TEXT",
+        "status": "blocked",
+        "reason": "No unicode punctuation checker yet; docs written with ASCII punctuation"
+    },
+    {
+        "id": "HC-DOCS",
+        "status": "blocked",
+        "reason": "No mechanical docs layout checker beyond HC-DOCNAME"
+    },
+    {
+        "id": "HC-DOC-REVIEW",
+        "status": "blocked",
+        "reason": "Review only"
+    },
+    {
+        "id": "HC-DOCSIZE",
+        "status": "blocked",
+        "reason": "No doc line-count checker"
+    },
+    {
+        "id": "HC-DOCNAME",
+        "status": "implemented",
+        "severity": "error",
+        "checker": ["node", "context-cr/src/cli.ts", "l0", "--root", ".", "--format", "findings"],
+        "checkpoints": ["ci-docs", "task-complete"],
+        "probes": {
+            "positive": "context-cr/test/l0.test.ts#docs/tutorials/local-setup.md",
+            "negative": "context-cr/test/l0.test.ts#docs/reference/api-v2.md"
+        },
+        "evidence": "pnpm --filter context-cr test (docs naming rule)"
+    },
+    {
+        "id": "HC-CONTEXT",
+        "status": "implemented",
+        "severity": "error",
+        "checker": ["node", "context-cr/src/cli.ts", "l0", "--root", ".", "--format", "findings"],
+        "checkpoints": ["ci-docs", "task-complete"],
+        "probes": {
+            "positive": "context-cr/test/l0.test.ts#clean repository passes every L0 rule",
+            "negative": "context-cr/test/l0.test.ts#HC-CONTEXT: missing pair and oversized AGENTS are errors"
+        },
+        "evidence": "pnpm --filter context-cr test (Same-directory README/AGENTS pairing and AGENTS size limits)"
+    },
+    {
+        "id": "HC-BUDGET",
+        "status": "implemented",
+        "severity": "error",
+        "checker": ["node", "context-cr/src/cli.ts", "l0", "--root", ".", "--format", "findings"],
+        "checkpoints": ["ci-docs", "task-complete"],
+        "probes": {
+            "positive": "context-cr/test/l0.test.ts#HC-BUDGET ... equal passes",
+            "negative": "context-cr/test/l0.test.ts#HC-BUDGET ... over 65536 bytes is an error"
+        },
+        "evidence": "pnpm --filter context-cr test (Ancestor AGENTS chain plus skill injection upper bound)"
+    },
+    {
+        "id": "HC-NOTES",
+        "status": "blocked",
+        "reason": "hx-agent-notes vendored but its uv/Python gate is not wired"
+    },
+    {
+        "id": "HC-TEST",
+        "status": "blocked",
+        "reason": "node --test per package with impact graph; layered test structure not defined"
+    },
+    {
+        "id": "HC-PERF",
+        "status": "blocked",
+        "reason": "No perf budgets in scripts/quality/perf.json yet"
+    },
+    {
+        "id": "HC-CONTRACT",
+        "status": "blocked",
+        "reason": "docs/reference/api/cf-admin.yaml written; contract test not implemented"
+    },
+    {
+        "id": "HC-CI",
+        "status": "blocked",
+        "reason": "Four quality workflows installed; not yet verified by a remote run"
+    },
+    {
+        "id": "HC-COLLAB",
+        "status": "blocked",
+        "reason": "Templates and CODEOWNERS installed; awaiting remote verification"
+    },
+    {
+        "id": "HC-LITERAL",
+        "status": "blocked",
+        "reason": "Constants modules exist; lexer adapter not implemented"
+    },
+    {
+        "id": "HC-ABSPATH",
+        "status": "blocked",
+        "reason": "Lexer adapter not implemented"
+    },
+    {
+        "id": "HC-META",
+        "status": "blocked",
+        "reason": "No probe-based meta gate yet"
+    }
+]

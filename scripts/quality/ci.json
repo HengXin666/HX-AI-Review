@@ -1,0 +1,75 @@
+{
+    "timeoutMs": 600000,
+    "setup": [
+        {
+            "id": "install",
+            "command": ["pnpm", "install", "--frozen-lockfile"],
+            "format": "exit"
+        }
+    ],
+    "groups": {
+        "code": {
+            "tasks": [
+                {
+                    "id": "typecheck",
+                    "command": ["pnpm", "typecheck"],
+                    "format": "exit"
+                },
+                {
+                    "id": "format",
+                    "command": ["pnpm", "format:check"],
+                    "format": "exit"
+                }
+            ]
+        },
+        "docs": {
+            "tasks": [
+                {
+                    "id": "context-l0",
+                    "command": ["node", "context-cr/src/cli.ts", "l0", "--root", ".", "--format", "findings"],
+                    "format": "findings"
+                },
+                {
+                    "id": "doc-links",
+                    "command": ["node", "scripts/quality/doc-links/index.ts", "--format", "findings"],
+                    "format": "findings"
+                }
+            ]
+        },
+        "build": {
+            "tasks": [
+                {
+                    "id": "pages-build",
+                    "command": ["pnpm", "--filter", "cf-admin", "build"],
+                    "format": "exit"
+                }
+            ]
+        },
+        "compatibility": {
+            "tasks": [],
+            "notApplicable": "No released Worker or D1 schema exists yet; migrations start at 0001 and the reusable workflow is pinned by tag"
+        }
+    },
+    "impact": {
+        "id": "impact",
+        "command": ["node", "scripts/quality/graph.ts"],
+        "format": "exit"
+    },
+    "tests": [
+        {
+            "id": "context-cr:unit",
+            "command": ["pnpm", "--filter", "context-cr", "test"],
+            "format": "exit"
+        },
+        {
+            "id": "cf-admin:unit",
+            "command": ["pnpm", "--filter", "cf-admin", "test"],
+            "format": "exit"
+        },
+        {
+            "id": "quality:unit",
+            "command": ["node", "--test", "scripts/quality/doc-links/index.test.ts"],
+            "format": "exit"
+        }
+    ]
+}

@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.wrangler/
+scripts/.hx_code_quality/
+*.tsbuildinfo
+.dev.vars
+cf-admin/.deploy/
+cf-admin/pages/wrangler.toml

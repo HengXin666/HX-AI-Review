@@ -1,0 +1,30 @@
+{
+    "name": "cf-admin",
+    "version": "0.3.0",
+    "private": true,
+    "type": "module",
+    "description": "hx-context-review Cloudflare side: config Worker (/init), ingest API (/runs, /feedback), D1/R2 storage, overview Pages",
+    "scripts": {
+        "typecheck": "tsc -p tsconfig.json && tsc -p pages/tsconfig.json && tsc -p pages/functions/tsconfig.json && tsc -p scripts/tsconfig.json",
+        "test": "node --test test/*.test.ts",
+        "build": "vite build pages",
+        "dev:worker": "wrangler dev",
+        "dev:pages": "vite pages",
+        "db:migrate": "wrangler d1 migrations apply hx-context-review --remote",
+        "deploy": "node scripts/deploy.ts"
+    },
+    "dependencies": {
+        "react": "19.3.0",
+        "react-dom": "19.3.0"
+    },
+    "devDependencies": {
+        "@cloudflare/workers-types": "5.20261011.1",
+        "@types/node": "22.18.0",
+        "@types/react": "19.3.0",
+        "@types/react-dom": "19.3.0",
+        "@vitejs/plugin-react": "6.1.2",
+        "typescript": "5.9.3",
+        "vite": "8.3.4",
+        "wrangler": "4.149.0"
+    }
+}
