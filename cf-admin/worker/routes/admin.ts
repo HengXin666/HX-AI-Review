@@ -30,6 +30,10 @@ function repoPatch(body: Record<string, unknown>): RepoPatch {
     return patch;
 }
 
+function positive(value: unknown, fallback: number): number {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
 /** GET /api/overview: every repo on one screen with recent runs and pending findings. */
 async function overview(deps: Deps): Promise<Response> {
     const current = month(deps.now());
@@ -37,11 +41,14 @@ async function overview(deps: Deps): Promise<Response> {
         ...repo,
         spentUsd: repo.budgetMonth === current ? repo.spentUsd : 0,
     }));
-    const [runs, findings] = await Promise.all([
+    const [runs, findings, providers] = await Promise.all([
         deps.store.recentRuns(LIST_LIMIT),
         deps.store.openFindings(LIST_LIMIT),
+        deps.store.listProviders(),
     ]);
-    return json({ month: current, repos, runs, findings });
+    // Never the key itself: only whether the named Worker secret exists.
+    const providerView = providers.map((item) => ({ ...item, keyPresent: Boolean(deps.secret(item.keySecret)) }));
+    return json({ month: current, deployment: deps.deployment, repos, runs, findings, providers: providerView });
 }
 
 /** Admin API behind Cloudflare Access. Path segments after /api/. */
@@ -52,12 +59,18 @@ export async function handleAdmin(request: Request, deps: Deps, parts: string[])
     if (method === "GET" && resource === "overview") {
         return overview(deps);
     }
+    if (method === "GET" && resource === "status") {
+        return json({ deployment: deps.deployment, admin: who });
+    }
     if (resource === "repos") {
         if (method === "POST" && rest.length === 0) {
             const body = await readJson(request);
             const name = field(body, "name");
             if (!REPO_NAME.test(name)) {
                 throw new HttpError(400, "name must be owner/repo");
+            }
+            if (await deps.store.repoByName(name)) {
+                throw new HttpError(409, "repository already registered (names are case-insensitive)");
             }
             const token = newToken();
             const repo = await deps.store.createRepo(name, await sha256Hex(token), repoPatch(body));
@@ -82,8 +95,10 @@ export async function handleAdmin(request: Request, deps: Deps, parts: string[])
             apiUrl: field(body, "apiUrl"),
             api: body.api === "anthropic-messages" ? "anthropic-messages" : "openai-completions",
             keySecret: field(body, "keySecret"),
-            contextWindow: Number(body.contextWindow ?? 128000),
-            maxTokens: Number(body.maxTokens ?? 8192),
+            contextWindow: positive(body.contextWindow, 128000),
+            maxTokens: positive(body.maxTokens, 8192),
+            priceInput: positive(body.priceInput, 0),
+            priceOutput: positive(body.priceOutput, 0),
         });
         return json({ ok: true });
     }

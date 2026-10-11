@@ -39,17 +39,16 @@ export function checkDocNames(snapshot: Snapshot, config: RepoConfig): Finding[]
             continue;
         }
         const name = baseName(file);
-        if (ALLOWED.has(name)) {
-            continue;
-        }
+        const allowed = ALLOWED.has(name);
         const ext = posix.extname(name);
         const stem = name.slice(0, name.length - ext.length);
         const dirs = posix.dirname(file).split("/").slice(1);
         const problems: string[] = [];
-        if (!DOC_EXT.includes(ext)) {
+        if (!allowed && !DOC_EXT.includes(ext)) {
             problems.push(`extension "${ext || "none"}" is not md, mdx or yaml`);
         }
-        for (const [index, segment] of [...dirs, stem].entries()) {
+        // Allowed names (README.md, AGENTS.md, ...) exempt only the file name; directories are still checked.
+        for (const [index, segment] of (allowed ? dirs : [...dirs, stem]).entries()) {
             const problem = segmentProblem(segment, dirs.slice(0, index + 1).join("/"));
             if (problem) {
                 problems.push(problem);
@@ -69,7 +68,7 @@ export function checkSkills(snapshot: Snapshot, config: RepoConfig): Finding[] {
         if (baseName(file) !== SKILL_FILE || isExcluded(config, file)) {
             continue;
         }
-        const text = snapshot.read(file) ?? "";
+        const text = (snapshot.read(file) ?? "").replace(/\r\n/g, "\n");
         const head = /^---\n([\s\S]*?)\n---/.exec(text);
         const dir = baseName(posix.dirname(file));
         const problems: string[] = [];

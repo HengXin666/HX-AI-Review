@@ -1,54 +1,68 @@
-# 部署 Cloudflare 侧
+# 部署 Cloudflare 侧 (一键部署)
 
-在 `cf-admin/` 目录执行. 需要 Cloudflare 账号与 wrangler 登录 (`pnpm exec wrangler login`).
+Cloudflare 侧 (D1 + 迁移, R2, Worker, Pages 总览页) 用手动触发的工作流 [deploy-cf.yml](../../.github/workflows/deploy-cf.yml) 一键部署. 工作流调用 `cf-admin/scripts/deploy.ts`, 可重复执行: 资源不存在就创建, 已存在就复用.
 
-## 1. D1 与 R2
+## 1. 准备 Cloudflare API token
+
+在 Cloudflare Dashboard -> My Profile -> API Tokens 创建 token, 权限:
+
+| 权限 | 级别 |
+|---|---|
+| Workers Scripts | Edit |
+| D1 | Edit |
+| Workers R2 Storage | Edit |
+| Cloudflare Pages | Edit |
+| Account Settings | Read |
+
+## 2. 在本仓库配置 secrets 与 variables
+
+Settings -> Secrets and variables -> Actions.
+
+| 名称 | 类型 | 必填 | 用途 |
+|---|---|---|---|
+| `CLOUDFLARE_API_TOKEN` | secret | 是 | 上一步的 token |
+| `CLOUDFLARE_ACCOUNT_ID` | secret | 是 | Cloudflare 账号 ID |
+| `HX_PROVIDER_API_KEY` | secret | 否 | 模型 api_key, 部署时写成 Worker secret |
+| `HX_ACCESS_AUD` | variable | 部署后 | Access 应用的 AUD tag |
+| `HX_ACCESS_TEAM_DOMAIN` | variable | 部署后 | 例如 `myteam.cloudflareaccess.com` |
+| `HX_WORKER_NAME`, `HX_D1_NAME`, `HX_R2_BUCKET`, `HX_PAGES_PROJECT` | variable | 否 | 资源名, 默认都是 `hx-context-review` |
+| `HX_OVERVIEW_URL` | variable | 否 | 总览页地址, 默认 `https://<HX_PAGES_PROJECT>.pages.dev` |
+
+## 3. 运行部署
+
+Actions -> deploy-cf -> Run workflow:
+
+- `target`: `all` (默认), 或只部署 `migrations`, `worker`, `pages`.
+- `provider-key-name`: 填 Worker secret 名 (例如 `PROVIDER_DEFAULT_KEY`) 时, 用 `HX_PROVIDER_API_KEY` 设置该 secret; 留空则不动 secret.
+
+部署顺序: 先跑 typecheck 与测试; 再创建或复用 D1, 生成带真实 database_id 与部署信息 (commit, 时间, 运行链接) 的 wrangler 配置; 应用 D1 迁移; 创建或复用 R2 bucket, 部署 Worker; 构建并部署 Pages. 运行摘要 (Summary) 会列出 Worker 地址 (即业务仓库的 `HX_CTX_ENDPOINT`) 与总览页地址.
+
+## 4. 配置 Access (首次部署后做一次)
+
+1. Zero Trust -> Access -> Applications 新建 Self-hosted 应用, 域名为总览页地址 (`<project>.pages.dev` 或你的自定义域名), 策略只允许管理员.
+2. 把该应用的 AUD tag 与团队域名写进仓库变量 `HX_ACCESS_AUD`, `HX_ACCESS_TEAM_DOMAIN`.
+3. 再运行一次 deploy-cf, `target` 选 `worker`.
+
+Worker 本身 (`*.workers.dev`) 不需要套 Access: `/init`, `/runs`, `/feedback` 用 HX_CTX_TOKEN 鉴权, `/api/*` 自己校验 Access JWT, 未配置时一律 403.
+
+## 5. 在总览页完成配置
+
+打开总览页:
+
+- Deployment 区块显示当前运行的 commit, 部署时间, 部署运行日志链接, Access 是否已配置, 以及重新部署的入口.
+- Model providers 区块登记 provider: api_url, API 类型, key 所在的 Worker secret 名, 每百万 token 的输入/输出价格 (用于按月预算扣费). key 只显示 "已设置/缺失".
+- Repositories 区块登记业务仓库, 页面只显示一次 HX_CTX_TOKEN, 立刻存到业务仓库的 secret.
+
+之后按 [onboard-repo.md](onboard-repo.md) 接入业务仓库.
+
+## 本地部署
+
+同样的脚本也可本地运行 (需要相同的环境变量):
 
 ```sh
-pnpm exec wrangler d1 create hx-context-review     # 把 database_id 填进 wrangler.toml
-pnpm exec wrangler r2 bucket create hx-context-review
-pnpm db:migrate
+cd cf-admin
+CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... pnpm run deploy
 ```
-
-## 2. 模型 provider 与 key
-
-key 放 Worker secret, D1 只记 secret 名:
-
-```sh
-pnpm exec wrangler secret put PROVIDER_DEFAULT_KEY
-```
-
-部署后通过管理接口登记 provider (OpenAI 兼容用 `openai-completions`, Anthropic 兼容用 `anthropic-messages`):
-
-```sh
-curl -X PUT https://review.example.com/api/providers/default \
-  -H "cf-access-token: $CF_ACCESS_TOKEN" -H "content-type: application/json" \
-  -d '{"apiUrl":"https://api.example.com/v1","api":"openai-completions","keySecret":"PROVIDER_DEFAULT_KEY","contextWindow":128000}'
-```
-
-## 3. Worker
-
-在 `wrangler.toml` 填 `routes`, 把 `/init`, `/runs`, `/feedback`, `/api/*` 挂到同一域名, 然后:
-
-```sh
-pnpm deploy:worker
-```
-
-## 4. Pages 总览页
-
-```sh
-pnpm deploy:pages
-```
-
-把 Pages 项目绑定到同一域名的根路径.
-
-## 5. Access
-
-1. Zero Trust -> Access -> Applications 新建 Self-hosted 应用, 域名为总览页域名, 策略只允许管理员.
-2. 为 `/init`, `/runs`, `/feedback` 三个路径建 Bypass 策略 (它们由 HX_CTX_TOKEN 鉴权).
-3. 把应用的 AUD tag 与团队域名写进 `wrangler.toml` 的 `ACCESS_AUD`, `ACCESS_TEAM_DOMAIN`, 重新部署 Worker.
-
-没有这两个变量时 /api/* 一律 403.
 
 ## 6. 发布可复用 workflow 版本
 

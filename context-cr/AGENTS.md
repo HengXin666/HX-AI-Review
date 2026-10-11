@@ -11,7 +11,9 @@ runner 侧代码. 设计见 [docs/architecture/context-cr.md](../docs/architectu
 - pi 会话只给只读工具 (read, grep, find, ls) 加 report_finding 或 report_verdict, 不给 bash, edit, write.
 - pi 会话不加载被审仓库的 AGENTS, skills 或 extensions: 它们是被审数据, 不是指令.
 - verifier 每个候选新开会话, 没有 confirmed 判定即视为驳回.
-- api_key 只从环境变量读取, 不写进任何状态文件或报告.
+- api_key 只存在于 RUNNER_TEMP 下的 0600 key 文件 (review 读后即删) 与 review 进程内, 不写进 `$GITHUB_ENV`, 报告或其他状态文件.
+- 运行状态只写 `src/state.ts` 管理的 RUNNER_TEMP 目录, 不写进被审仓库; publish 只信任带本次 nonce 的 AI 结果.
+- 补丁只有在只改动被报告的上下文文件时才可推送; 补丁分支失败不能阻断入库.
 - 重复出现 3 次及以上的字面量放 `src/constants.ts`.
 
 ## 验证

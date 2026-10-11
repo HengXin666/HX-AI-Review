@@ -13,8 +13,13 @@ export type ContextScope = { base: string; head: string; changed: string[]; cont
 /** Reverse reference index: referenced path (file or directory) -> context files pointing at it. */
 export type RefIndex = Record<string, string[]>;
 
+/** Prototype-free so path names like `constructor` or `__proto__` never hit inherited members. */
+function emptyIndex(): RefIndex {
+    return Object.create(null) as RefIndex;
+}
+
 export function buildRefIndex(snapshot: Snapshot, config: RepoConfig): RefIndex {
-    const index: RefIndex = {};
+    const index = emptyIndex();
     for (const ref of contextRefs(snapshot, config)) {
         for (const target of candidates(ref, config.skillRoots)) {
             (index[target] ??= []).push(ref.from);
@@ -40,10 +45,13 @@ export function computeScope(
     changes: Change[],
     base: string,
     head: string,
-    hint: RefIndex = {},
+    hint: RefIndex = emptyIndex(),
 ): ContextScope {
     const index = buildRefIndex(snapshot, config);
     for (const [target, froms] of Object.entries(hint)) {
+        if (!Array.isArray(froms)) {
+            continue;
+        }
         index[target] = [...new Set([...(index[target] ?? []), ...froms.filter((file) => snapshot.exists(file))])];
     }
     const entries = new Map<string, Set<string>>();

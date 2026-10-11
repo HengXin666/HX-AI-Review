@@ -37,7 +37,31 @@ export type Finding = {
     patchKey: string | null;
 };
 
-export type Overview = { month: string; repos: Repo[]; runs: Run[]; findings: Finding[] };
+export type Provider = {
+    name: string;
+    apiUrl: string;
+    api: "openai-completions" | "anthropic-messages";
+    keySecret: string;
+    keyPresent: boolean;
+    contextWindow: number;
+    maxTokens: number;
+    priceInput: number;
+    priceOutput: number;
+};
+
+export type Deployment = { sha?: string; deployedAt?: string; runUrl?: string; accessConfigured: boolean };
+
+export type Overview = {
+    month: string;
+    deployment: Deployment;
+    repos: Repo[];
+    runs: Run[];
+    findings: Finding[];
+    providers: Provider[];
+};
+
+export type ProviderInput = Omit<Provider, "name" | "keyPresent">;
+export type RepoInput = Pick<Repo, "name" | "finderModel" | "verifierModel" | "budgetUsd"> & { provider: string };
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
     const response = await fetch("/api/" + path, {
@@ -55,6 +79,10 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 export const api = {
     overview: () => call<Overview>("GET", "overview"),
     updateRepo: (name: string, patch: Partial<Repo>) => call<{ repo: Repo }>("PATCH", "repos/" + name, patch),
+    createRepo: (input: RepoInput) => call<{ repo: Repo; token: string }>("POST", "repos", input),
+    rotateToken: (name: string) => call<{ token: string }>("POST", `repos/${name}/rotate-token`),
+    saveProvider: (name: string, input: ProviderInput) =>
+        call<{ ok: boolean }>("PUT", "providers/" + encodeURIComponent(name), input),
     feedback: (id: string, verdict: "accepted" | "rejected", reason: string) =>
         call<{ updated: number }>("POST", `findings/${id}/feedback`, { verdict, reason }),
 };
@@ -62,4 +90,15 @@ export const api = {
 /** One-click merge: open a PR from the runner's patch branch into the default branch. */
 export function patchBranchUrl(repo: string, branch: string): string {
     return `https://github.com/${repo}/compare/${encodeURIComponent(branch)}?expand=1`;
+}
+
+/** The deploy workflow page, derived from the run that deployed this Worker. */
+export function deployWorkflowUrl(runUrl?: string): string | undefined {
+    const match = runUrl ? /^(https:\/\/[^/]+\/[^/]+\/[^/]+)\/actions\/runs\/\d+/.exec(runUrl) : null;
+    return match ? match[1] + "/actions/workflows/deploy-cf.yml" : undefined;
+}
+
+export function commitUrl(runUrl: string | undefined, sha: string): string | undefined {
+    const match = runUrl ? /^(https:\/\/[^/]+\/[^/]+\/[^/]+)\//.exec(runUrl) : null;
+    return match ? `${match[1]}/commit/${sha}` : undefined;
 }

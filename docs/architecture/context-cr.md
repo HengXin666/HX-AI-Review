@@ -6,14 +6,15 @@ runner 侧 CLI. 入口 [context-cr/src/cli.ts](../../context-cr/src/cli.ts), 步
 
 | 模块 | 输入 | 输出 |
 |---|---|---|
-| `context-cr/src/init/client.ts` | HX_CTX_ENDPOINT, HX_CTX_TOKEN, GITHUB_REPOSITORY | `InitConfig` (无 key) + api_key (仅环境变量) |
+| `context-cr/src/init/client.ts` | HX_CTX_ENDPOINT, HX_CTX_TOKEN, GITHUB_REPOSITORY | `InitConfig` (无 key, 含模型单价) + api_key |
+| `context-cr/src/state.ts` | RUNNER_TEMP | 运行状态目录, key 文件 (0600, 读后即删), 运行 nonce |
 | `context-cr/src/l0/` | 仓库快照 (git 跟踪文件), `.hx-context-review.json`, 可信 baseline | `Finding[]` |
 | `context-cr/src/scope/base.ts` | GitHub 事件, last_sha | 审核区间基点与原因 |
 | `context-cr/src/scope/index.ts` | 快照, 变更列表, 可选引用索引提示 | `ContextScope` |
 | `context-cr/src/review/` | `InitConfig`, `ContextScope`, diff, `AgentRunner` | 确认后的 Warning, 补丁, 用量, 会话记录 |
 | `context-cr/src/publish/` | 汇总报告 | POST /runs, 补丁分支, 评论 |
 
-快照只看 git 跟踪的文件, 所以 runner 在工作区里 checkout 的工具目录与状态目录不会被当成被审内容.
+快照只看 git 跟踪的文件, 所以 runner 在工作区里 checkout 的工具目录不会被当成被审内容. 运行状态 (init, l0, scope, ai, 会话) 放在 `RUNNER_TEMP` 下而不是被审仓库里, init 每次清空并生成 nonce; publish 只采用带同一 nonce 的 AI 结果, PR 无法通过提交文件伪造发现或补丁.
 
 ## 审核区间
 
@@ -25,7 +26,7 @@ runner 侧 CLI. 入口 [context-cr/src/cli.ts](../../context-cr/src/cli.ts), 步
 4. `origin/<default_branch>` 与 head 的 merge-base.
 5. 空树 (首个提交).
 
-被 concurrency 取消的运行不会入库, 也就不会推进 last_sha, 下一次运行会覆盖被取消的区间.
+被 concurrency 取消的运行不执行 publish, 不会入库. review 失败或没跑完时 publish 仍把 L0 结果入库, 但发送 `complete: false`, Worker 不推进 last_sha; 下一次运行会覆盖这段区间. PR 运行从不推进 last_sha.
 
 ## L0 规则
 
@@ -60,13 +61,14 @@ skill 注入上界 = 所有 skill 的 front matter (常驻 L1) + 最大的 `conc
 - 工具: 只读内置工具 `read`, `grep`, `find`, `ls`, 加上 `report_finding` (finder) 或 `report_verdict` (verifier).
 - finder 提示词包含区间, 变更路径, 范围内上下文文件及原因, 抑制表 (含驳回原因), 截断后的 diff.
 - 候选若不在范围内, 或指纹在抑制表里, 直接丢弃, 不调用 verifier.
+- 模型单价 (每百万 token 美元) 由 /init 下发并注册到 pi 模型上, 会话统计的 cost 才是真实值; Worker 入库时还会按 token 数与单价复算, 取两者较大值计入月预算.
 - verifier 每个候选一个新会话, 以反驳为目标; 没有调用 report_verdict 视为驳回.
 - 保留的发现一律 Warning, ruleId `CX-AI`, 指纹为 `CX-AI + path + title`, 以便反馈跨运行生效.
-- 补丁用 `git apply --check` 校验, 不能应用的补丁保留在报告里但不推送.
+- 补丁用 `git apply --check --numstat` 校验, 只改动被报告的那一个上下文文件且能应用才标记为可用; 其他补丁保留在报告里但不推送.
 - 用量取 `session.getSessionStats()` 的 tokens 与 cost, 会话消息以 JSONL 入 R2.
 
 ## 回写
 
 - 报告: `scripts/.hx_code_quality/reports/context-review.{md,json}`, 超过 10 条只列数量与类型.
-- 补丁分支: `hx-ctx/patch-<head 前 12 位>`, 以 head 为基, 提交者 hx-context-review, `--force` 推送, 不碰被审分支.
+- 补丁分支: `hx-ctx/patch-<head 前 12 位>`, 以 head 为基, 提交者 hx-context-review, `--force` 推送, 不碰被审分支. 互相冲突的补丁逐个跳过; 推送失败只记录日志, 不影响入库与评论.
 - 评论: push 发 commit comment; PR 找到带 `<!-- hx-context-review -->` 标记的评论就更新, 否则新建.

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { EMPTY_USAGE } from "../src/contract/finding.ts";
 import { buildReport, summarize } from "../src/contract/report.ts";
+import { truncate } from "../src/review/prompts.ts";
 import type { InitConfig } from "../src/init/client.ts";
 import type { AgentRequest, AgentRunner } from "../src/review/agent.ts";
 import { runReview } from "../src/review/index.ts";
@@ -15,6 +16,7 @@ const config: InitConfig = {
     api: "openai-completions",
     models: { finder: "small", verifier: "large" },
     limits: { contextWindow: 1000, maxTokens: 100, maxCandidates: 5 },
+    pricing: { input: 0, output: 0 },
     suppressions: [],
 };
 
@@ -45,7 +47,7 @@ function fake(calls: AgentRequest[]): AgentRunner {
 
 test("finder -> verifier keeps only confirmed, in-scope candidates as warnings", async () => {
     const calls: AgentRequest[] = [];
-    const result = await runReview(config, scope, { run: fake(calls), diff: "d", patchApplies: () => true });
+    const result = await runReview(config, scope, { run: fake(calls), diff: "d", patchFiles: () => ["api/AGENTS.md"] });
     assert.equal(result.findings.length, 1);
     assert.equal(result.findings[0].severity, "warning");
     assert.equal(result.findings[0].ruleId, "CX-AI");
@@ -58,14 +60,24 @@ test("finder -> verifier keeps only confirmed, in-scope candidates as warnings",
     assert.equal(result.usage.input, 30);
 });
 
+test("patches touching files other than the reported context file are never applicable", async () => {
+    const result = await runReview(config, scope, {
+        run: fake([]),
+        diff: "d",
+        patchFiles: () => ["api/AGENTS.md", ".github/workflows/ci.yml"],
+    });
+    assert.equal(result.patches.length, 1);
+    assert.equal(result.patches[0].applies, false);
+});
+
 test("suppressed fingerprints never reach the verifier", async () => {
-    const first = await runReview(config, scope, { run: fake([]), diff: "d", patchApplies: () => true });
+    const first = await runReview(config, scope, { run: fake([]), diff: "d", patchFiles: () => ["api/AGENTS.md"] });
     const calls: AgentRequest[] = [];
     const suppressions = [{ fingerprint: first.findings[0].fingerprint, reason: "intended wording" }];
     const again = await runReview({ ...config, suppressions }, scope, {
         run: fake(calls),
         diff: "d",
-        patchApplies: () => true,
+        patchFiles: () => ["api/AGENTS.md"],
     });
     assert.equal(again.findings.length, 0);
     assert.ok(calls[0].prompt.includes("intended wording"));
@@ -95,4 +107,11 @@ test("display rule: more than 10 findings lists counts only", () => {
         stages: {},
     });
     assert.equal(report.counts.blocking, 0);
+});
+
+test("diff truncation respects the UTF-8 byte budget", () => {
+    const text = "中".repeat(100);
+    const out = truncate(text, 31);
+    assert.ok(Buffer.byteLength(out.split("\n")[0], "utf8") <= 31);
+    assert.ok(!out.includes("\uFFFD"));
 });

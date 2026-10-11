@@ -59,7 +59,9 @@ function frontMatter(text: string): string {
  */
 export function skillInjection(snapshot: Snapshot, config: RepoConfig): number {
     const skills = snapshot.files.filter(
-        (file) => baseName(file) === SKILL_FILE && config.skillRoots.some((root) => file.startsWith(root + "/")),
+        (file) =>
+            baseName(file) === SKILL_FILE &&
+            config.skillRoots.some((root) => file.startsWith(root.replace(/\/+$/, "") + "/")),
     );
     const resident = skills.reduce((sum, file) => sum + bytes(frontMatter(snapshot.read(file) ?? "")), 0);
     const bodies = skills

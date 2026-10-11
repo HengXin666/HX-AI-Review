@@ -29,6 +29,10 @@ export const DEFAULT_CONFIG: RepoConfig = {
     virtualPaths: ["scripts/.hx_code_quality/"],
 };
 
+export function trimSlash(path: string): string {
+    return path.replace(/\/+$/, "");
+}
+
 function stringList(value: unknown, fallback: string[]): string[] {
     return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : fallback;
 }
@@ -39,10 +43,13 @@ export function loadConfig(root: string): RepoConfig {
         return DEFAULT_CONFIG;
     }
     const raw = JSON.parse(readFileSync(file, UTF8)) as Record<string, unknown>;
-    const concurrent = Number(raw.concurrentSkills ?? DEFAULT_CONFIG.concurrentSkills);
+    const concurrent = raw.concurrentSkills;
     return {
-        skillRoots: stringList(raw.skillRoots, DEFAULT_CONFIG.skillRoots),
-        concurrentSkills: Number.isInteger(concurrent) && concurrent >= 0 ? concurrent : 1,
+        skillRoots: stringList(raw.skillRoots, DEFAULT_CONFIG.skillRoots).map(trimSlash),
+        concurrentSkills:
+            typeof concurrent === "number" && Number.isInteger(concurrent) && concurrent >= 0
+                ? concurrent
+                : DEFAULT_CONFIG.concurrentSkills,
         orphanRoots: stringList(raw.orphanRoots, DEFAULT_CONFIG.orphanRoots),
         exclude: stringList(raw.exclude, DEFAULT_CONFIG.exclude),
         scopeIgnore: stringList(raw.scopeIgnore, DEFAULT_CONFIG.scopeIgnore),

@@ -57,6 +57,11 @@ components:
                         contextWindow: { type: integer }
                         maxTokens: { type: integer }
                         maxCandidates: { type: integer }
+                pricing:
+                    type: object
+                    properties:
+                        input: { type: number }
+                        output: { type: number }
                 lastSha: { type: string }
                 suppressions:
                     type: array
@@ -74,7 +79,14 @@ components:
                 baseSha: { type: string }
                 event: { type: string }
                 prNumber: { type: integer }
-                status: { type: string, enum: [passed, warned, failed, skipped] }
+                status:
+                    type: string
+                    enum: [passed, warned, failed, skipped]
+                    description: Derived from findings when omitted
+                complete:
+                    type: boolean
+                    description: false when the AI stage did not finish; last_sha then stays put
+                    default: true
                 l0Only: { type: boolean }
                 durationMs: { type: integer }
                 usage:
@@ -95,6 +107,59 @@ components:
                 reportMarkdown: { type: string }
                 reportJson: { type: string }
                 sessionsJsonl: { type: string }
+        Repo:
+            type: object
+            properties:
+                id: { type: integer }
+                name: { type: string, description: owner/repo, case-insensitive }
+                enabled: { type: boolean }
+                mode: { type: string, enum: [full, l0] }
+                provider: { type: string }
+                finderModel: { type: string }
+                verifierModel: { type: string }
+                budgetUsd: { type: number, description: Monthly cap in USD; 0 means no cap }
+                spentUsd: { type: number }
+                budgetMonth: { type: string }
+                lastSha: { type: [string, "null"] }
+        RepoPatch:
+            type: object
+            properties:
+                enabled: { type: boolean }
+                mode: { type: string, enum: [full, l0] }
+                provider: { type: string }
+                finderModel: { type: string }
+                verifierModel: { type: string }
+                budgetUsd: { type: number, minimum: 0 }
+        RepoCreate:
+            allOf:
+                - $ref: "#/components/schemas/RepoPatch"
+                - type: object
+                  required: [name]
+                  properties:
+                      name: { type: string, pattern: '^[\w.-]+/[\w.-]+$' }
+        Provider:
+            type: object
+            required: [apiUrl, keySecret]
+            properties:
+                apiUrl: { type: string }
+                api: { type: string, enum: [openai-completions, anthropic-messages] }
+                keySecret: { type: string, description: Name of the Worker secret holding the key }
+                contextWindow: { type: integer, minimum: 0 }
+                maxTokens: { type: integer, minimum: 0 }
+                priceInput: { type: number, minimum: 0, description: USD per million input tokens }
+                priceOutput: { type: number, minimum: 0, description: USD per million output tokens }
+        Deployment:
+            type: object
+            properties:
+                sha: { type: string }
+                deployedAt: { type: string }
+                runUrl: { type: string }
+                accessConfigured: { type: boolean }
+        Token:
+            type: object
+            required: [token]
+            properties:
+                token: { type: string, description: Plaintext HX_CTX_TOKEN, returned only once }
         Feedback:
             type: object
             required: [verdict]
@@ -149,14 +214,61 @@ paths:
             operationId: getOverview
             security: [{ access: [] }]
             responses:
-                "200": { description: Repos, recent runs and open findings }
+                "200":
+                    description: Everything the overview page shows
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    month: { type: string }
+                                    deployment: { $ref: "#/components/schemas/Deployment" }
+                                    repos: { type: array, items: { $ref: "#/components/schemas/Repo" } }
+                                    runs: { type: array, items: { type: object } }
+                                    findings: { type: array, items: { type: object } }
+                                    providers:
+                                        type: array
+                                        items:
+                                            allOf:
+                                                - $ref: "#/components/schemas/Provider"
+                                                - type: object
+                                                  properties:
+                                                      name: { type: string }
+                                                      keyPresent: { type: boolean }
                 "403": { description: No valid Access identity }
+    /api/status:
+        get:
+            operationId: getStatus
+            security: [{ access: [] }]
+            responses:
+                "200":
+                    description: Deployed commit and the Access identity
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    deployment: { $ref: "#/components/schemas/Deployment" }
+                                    admin: { type: string }
     /api/repos:
         post:
             operationId: createRepo
             security: [{ access: [] }]
+            requestBody:
+                required: true
+                content: { application/json: { schema: { $ref: "#/components/schemas/RepoCreate" } } }
             responses:
-                "201": { description: Repo and its one-time plaintext token }
+                "201":
+                    description: Repo and its one-time plaintext token
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    repo: { $ref: "#/components/schemas/Repo" }
+                                    token: { type: string }
+                "400": { description: Invalid name }
+                "409": { description: Repository already registered; names compare case-insensitively }
     /api/repos/{owner}/{repo}:
         patch:
             operationId: updateRepo
@@ -164,8 +276,16 @@ paths:
             parameters:
                 - { name: owner, in: path, required: true, schema: { type: string } }
                 - { name: repo, in: path, required: true, schema: { type: string } }
+            requestBody:
+                required: true
+                content: { application/json: { schema: { $ref: "#/components/schemas/RepoPatch" } } }
             responses:
-                "200": { description: Updated repo }
+                "200":
+                    description: Updated repo
+                    content:
+                        application/json:
+                            schema: { type: object, properties: { repo: { $ref: "#/components/schemas/Repo" } } }
+                "404": { description: Unknown repo }
     /api/repos/{owner}/{repo}/rotate-token:
         post:
             operationId: rotateToken
@@ -174,15 +294,25 @@ paths:
                 - { name: owner, in: path, required: true, schema: { type: string } }
                 - { name: repo, in: path, required: true, schema: { type: string } }
             responses:
-                "200": { description: New one-time plaintext token }
+                "200":
+                    {
+                        description: New token,
+                        content: { application/json: { schema: { $ref: "#/components/schemas/Token" } } },
+                    }
+                "404": { description: Unknown repo }
     /api/providers/{name}:
         put:
             operationId: upsertProvider
             security: [{ access: [] }]
             parameters:
                 - { name: name, in: path, required: true, schema: { type: string } }
+            requestBody:
+                required: true
+                content: { application/json: { schema: { $ref: "#/components/schemas/Provider" } } }
             responses:
-                "200": { description: Saved }
+                "200":
+                    description: Saved
+                    content: { application/json: { schema: { type: object, properties: { ok: { type: boolean } } } } }
     /api/findings/{id}/patch:
         get:
             operationId: getPatch
@@ -190,7 +320,8 @@ paths:
             parameters:
                 - { name: id, in: path, required: true, schema: { type: string } }
             responses:
-                "200": { description: Unified diff, content: { text/x-diff: {} } }
+                "200": { description: Unified diff, content: { text/x-diff: { schema: { type: string } } } }
+                "404": { description: Unknown finding or no patch }
     /api/findings/{id}/feedback:
         post:
             operationId: postFindingFeedback
@@ -201,4 +332,7 @@ paths:
                 required: true
                 content: { application/json: { schema: { $ref: "#/components/schemas/Feedback" } } }
             responses:
-                "200": { description: Number of open findings updated }
+                "200":
+                    description: Number of open findings updated
+                    content:
+                        { application/json: { schema: { type: object, properties: { updated: { type: integer } } } } }

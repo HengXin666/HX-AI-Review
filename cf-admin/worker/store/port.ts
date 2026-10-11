@@ -30,6 +30,9 @@ export type ProviderRow = {
     keySecret: string;
     contextWindow: number;
     maxTokens: number;
+    /** USD per million input / output tokens. */
+    priceInput: number;
+    priceOutput: number;
 };
 
 export type RunRow = {
@@ -80,8 +83,11 @@ export interface Store {
     upsertProvider(row: ProviderRow): Promise<void>;
     suppressions(repoId: number): Promise<Suppression[]>;
     insertRun(run: RunRow, findings: FindingRow[]): Promise<void>;
-    /** Advance last_sha and the month's spend in one statement so serialized runs never skip a range. */
-    advance(repoId: number, sha: string, costUsd: number, month: string): Promise<void>;
+    listProviders(): Promise<ProviderRow[]>;
+    /** Add to the month's spend; every run is charged, pull requests included. */
+    charge(repoId: number, costUsd: number, month: string): Promise<void>;
+    /** Move the push cursor; only complete push runs call this, so cancelled ranges are re-reviewed. */
+    setLastSha(repoId: number, sha: string): Promise<void>;
     recentRuns(limit: number): Promise<(RunRow & { repo: string })[]>;
     openFindings(limit: number): Promise<(FindingRow & { repo: string })[]>;
     finding(id: string): Promise<FindingRow | null>;

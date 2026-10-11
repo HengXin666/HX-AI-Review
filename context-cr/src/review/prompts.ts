@@ -18,9 +18,17 @@ Reject when the context file is still accurate, the claim is speculative, it is 
 or the evidence does not hold. Confirm only when the mismatch is real and would mislead an agent.
 Call ${REPORT_VERDICT_TOOL} exactly once.`;
 
-function truncate(text: string, limit: number): string {
-    const size = Buffer.byteLength(text, "utf8");
-    return size <= limit ? text : text.slice(0, limit) + `\n... diff truncated (${size} bytes total)\n`;
+/** Truncate on a UTF-8 byte budget; a split multi-byte character at the cut is dropped. */
+export function truncate(text: string, limit: number): string {
+    const bytes = Buffer.from(text, "utf8");
+    if (bytes.length <= limit) {
+        return text;
+    }
+    const head = bytes
+        .subarray(0, limit)
+        .toString("utf8")
+        .replace(/\uFFFD+$/, "");
+    return head + `\n... diff truncated (${bytes.length} bytes total)\n`;
 }
 
 export function finderPrompt(scope: ContextScope, diff: string, suppressions: Suppression[]): string {

@@ -37,14 +37,15 @@ GitHub (计算)                                       Cloudflare (配置 / 存�
 | runner CLI | [context-cr/](../../context-cr/README.md) | init, l0, scope, review, publish 五个子命令 |
 | 配置与入库 Worker | [cf-admin/worker/](../../cf-admin/worker/index.ts) | /init, /runs, /feedback, /api/* |
 | 存储 | D1 + R2 | D1: repos, runs, findings, feedback, budget, suppressions; R2: MD/JSON 报告, pi 会话 JSONL, 补丁 |
-| 总览页 | [cf-admin/pages/](../../cf-admin/pages/src/App.tsx) | 所有仓库一屏: 最近运行, 待处理发现, 开关, 模式, 预算, 一键合入补丁, 驳回原因回流 |
+| 总览页 | [cf-admin/pages/](../../cf-admin/pages/src/App.tsx) | 部署状态, 仓库登记与开关/模式/预算, provider 管理, 最近运行, 待处理发现, 一键合入补丁, 驳回原因回流 |
+| 一键部署 | [.github/workflows/deploy-cf.yml](../../.github/workflows/deploy-cf.yml) | 手动触发: D1 + 迁移, R2, Worker, Pages, 可选写入模型 key secret |
 
 详细设计: [context-cr.md](context-cr.md) 与 [cf-admin.md](cf-admin.md).
 
 ## 一次运行
 
 1. checkout: `fetch-depth: 0`, 拿到完整历史, 以便计算 last_sha 到 head 的区间和 merge-base.
-2. init: `GET /init?repo=owner/name`, Bearer HX_CTX_TOKEN. 返回 api_url, api_key, finder/verifier 模型, last_sha, 抑制表. runner 立刻 `::add-mask::` api_key 并写入 `$GITHUB_ENV`, 只放进环境变量; `init.json` 不含 key. 仓库停用, 模式为 l0 或超预算时只下发 L0 配置, 没有 key.
+2. init: `GET /init?repo=owner/name`, Bearer HX_CTX_TOKEN. 返回 api_url, api_key, finder/verifier 模型, last_sha, 抑制表. runner 立刻 `::add-mask::` api_key, 写入 RUNNER_TEMP 下权限 0600 的文件, review 步骤读取后立即删除, publish 步骤兜底删除; key 不进 `$GITHUB_ENV`, 因此后续步骤与第三方 Action 看不到它. `init.json` 不含 key. 返回值必须是不含空白与控制字符的单行, 否则 init 失败. 仓库停用, 模式为 l0 或超预算时只下发 L0 配置, 没有 key.
 3. L0 确定性检查: HC-CONTEXT, HC-BUDGET, HC-DOCNAME, CX-DEADREF, CX-SKILL, CX-ORPHAN. 新 Error 让 job 失败, check 变红; 但后续步骤照常执行, 结果照常入库.
 4. context_scope: 区间 diff -> 每个变更路径的祖先 AGENTS 链 + 引用了该路径 (或其所在目录) 的上下文文件 + 改动的 AGENTS 的所有后代 AGENTS. 结果为空就结束, 0 次模型调用.
 5. pi finder -> verifier: finder 会话用只读工具 (read, grep, find, ls) 与 `report_finding` 找过时陈述并可附补丁; 每个候选在新的 verifier 会话里被尝试反驳, 只有 `confirmed` 才保留. 补丁用 `git apply --check` 确定性校验.
@@ -54,7 +55,7 @@ GitHub (计算)                                       Cloudflare (配置 / 存�
 
 - 需要仓库上下文的事都在 runner 里做: pi 直接读 checkout 下来的文件, 不用把代码搬到 CF.
 - 仓库里只放 HX_CTX_TOKEN; api_key 由 CF 按仓下发, 可在 CF 里随时换模型, 轮换或停用.
-- 串行和防抖交给 GitHub concurrency (cancel-in-progress), D1 里的 last_sha 保证审核区间不漏: 被取消的运行没有推进 last_sha, 下一次从更早的基点开始.
+- 串行和防抖交给 GitHub concurrency (cancel-in-progress), D1 里的 last_sha 保证审核区间不漏: 被取消的运行不执行 publish; review 失败时 publish 只把 L0 结果入库并标记 `complete: false`, Worker 不推进 last_sha, 下一次从更早的基点开始.
 - Error 仍只来自 L0; AI 只出 Warning + 补丁, 与 hx-agent-code 同一报告契约 ([report-contract.md](../reference/report-contract.md)).
 
 决策记录: [2026-10-11-pi-runner-direct-model.md](../decisions/2026-10-11-pi-runner-direct-model.md).
@@ -64,11 +65,12 @@ GitHub (计算)                                       Cloudflare (配置 / 存�
 | 资产 | 存放 | 暴露面 |
 |---|---|---|
 | HX_CTX_TOKEN | 业务仓库 secret; D1 只存 SHA-256 | /init, /runs, /feedback |
-| api_key | Worker secret, D1 只存 secret 名 | /init 响应, runner 进程环境, 被 mask |
-| GITHUB_TOKEN | Actions 自动注入 | 推补丁分支, 评论 |
+| api_key | Worker secret, D1 只存 secret 名 | /init 响应, RUNNER_TEMP 下 0600 文件 (review 读后即删), review 进程内存, 被 mask |
+| GITHUB_TOKEN | Actions 自动注入, 只传给 publish 步骤 | 推补丁分支, 评论 |
+| HX_CTX_TOKEN | 只传给 init 与 publish 步骤 | /init, /runs |
 | 管理权限 | Cloudflare Access | /api/* 校验 Access JWT (RS256, aud, exp), 未配置即 403 |
 
-fork PR 拿不到 secrets, init 会失败, 整个 job 在 init 处停止; 这是有意的: 不把 api_key 交给不受信任的代码.
+来自 fork 的 PR 在 job 条件里直接跳过: 它拿不到 secrets, head 提交也不在本仓库, 不能往本仓库推补丁分支. 模型生成的补丁只有在只改动被报告的那个上下文文件时才会推送.
 
 ## 已知限制
 

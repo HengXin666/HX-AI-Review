@@ -7,7 +7,8 @@ hx-context-review 的 Cloudflare 侧: 配置下发, 入库, 总览. 不转发任
 | Worker | `worker/index.ts` | /init 配置下发, POST /runs 入库, POST /feedback 采纳或驳回, /api/* 管理接口 |
 | D1 | `migrations/0001_init.sql` | providers, repos (含开关, 模式, 预算, last_sha), runs, findings, feedback, suppressions |
 | R2 | `worker/store/d1.ts` 的 `R2Blobs` | `runs/<repo>/<run>/report.md`, `report.json`, `sessions.jsonl`, `patches/<fingerprint>.diff` |
-| Pages | `pages/` | 总览页 (React + TS + Vite), 由 Cloudflare Access 保护 |
+| Pages | `pages/` | 总览页 (React + TS + Vite), 由 Cloudflare Access 保护; `pages/functions/` 把 /api/* 经 service binding 转给 Worker |
+| 部署 | `scripts/deploy.ts` | 由 [deploy-cf.yml](../.github/workflows/deploy-cf.yml) 手动触发的一键部署 |
 
 HTTP 契约见 [docs/reference/api/cf-admin.yaml](../docs/reference/api/cf-admin.yaml), 设计见 [docs/architecture/cf-admin.md](../docs/architecture/cf-admin.md), 部署见 [docs/tutorials/deploy-cf.md](../docs/tutorials/deploy-cf.md).
 

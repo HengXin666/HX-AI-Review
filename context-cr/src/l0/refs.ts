@@ -14,21 +14,42 @@ const LINK = /\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
 const CODE = /`([^`\s]+)`/g;
 const PATH_LIKE = /^[\w.@-]+(?:\/[\w.@-]+)+\/?$/;
 const EXTERNAL = /^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i;
-const FENCE = /^(```|~~~)/;
+const FENCE = /^(`{3,}|~{3,})/;
 
-/** Strip fenced blocks so example snippets never count as references; keeps line numbers. */
+/**
+ * Strip fenced blocks so example snippets never count as references; keeps line numbers.
+ * A fence closes only with the same character at least as long as its opener (CommonMark).
+ */
 function withoutFences(text: string): string {
-    let inFence = false;
+    let open: string | undefined;
     return text
-        .split("\n")
+        .split(/\r?\n/)
         .map((line) => {
-            if (FENCE.test(line.trim())) {
-                inFence = !inFence;
+            const marker = FENCE.exec(line.trim())?.[1];
+            if (!open && marker) {
+                open = marker;
                 return "";
             }
-            return inFence ? "" : line;
+            if (open) {
+                const closes =
+                    marker && marker[0] === open[0] && marker.length >= open.length && line.trim() === marker;
+                if (closes) {
+                    open = undefined;
+                }
+                return "";
+            }
+            return line;
         })
         .join("\n");
+}
+
+/** Malformed percent escapes keep the raw target so CX-DEADREF reports them instead of crashing L0. */
+function decodeTarget(target: string): string {
+    try {
+        return decodeURI(target);
+    } catch {
+        return target;
+    }
 }
 
 export function extractRefs(from: string, text: string): Ref[] {
@@ -37,7 +58,7 @@ export function extractRefs(from: string, text: string): Ref[] {
     for (const match of body.matchAll(LINK)) {
         const target = match[1].split("#")[0];
         if (target && !EXTERNAL.test(match[1])) {
-            refs.push({ from, target: decodeURI(target), line: lineOf(body, match.index), kind: "link" });
+            refs.push({ from, target: decodeTarget(target), line: lineOf(body, match.index), kind: "link" });
         }
     }
     for (const match of body.matchAll(CODE)) {

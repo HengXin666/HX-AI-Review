@@ -9,11 +9,12 @@ Cloudflare 侧. Worker 入口 [cf-admin/worker/index.ts](../../cf-admin/worker/i
 | `GET /init` | Bearer HX_CTX_TOKEN | 配置下发: api_url, api_key, api 类型, finder/verifier 模型, 上下文窗口, last_sha, 抑制表 |
 | `POST /runs` | Bearer HX_CTX_TOKEN | 入库: findings, 补丁, 耗时, token 用量, MD/JSON 报告, pi 会话 JSONL; 推进 last_sha 与预算 |
 | `POST /feedback` | Bearer HX_CTX_TOKEN | 按指纹采纳或驳回; 驳回必须带原因 |
-| `GET /api/overview` | Cloudflare Access | 所有仓库, 最近 50 次运行, 最近 50 条待处理发现 |
+| `GET /api/overview` | Cloudflare Access | 部署信息, 所有仓库, provider (只含 key 是否存在), 最近 50 次运行, 最近 50 条待处理发现 |
+| `GET /api/status` | Cloudflare Access | 部署的 commit, 时间, 运行链接, Access 是否配置 |
 | `POST /api/repos` | Access | 登记仓库, 返回一次性明文 token |
 | `PATCH /api/repos/{owner}/{repo}` | Access | 开关, 模式 (full/l0), provider, 模型分级, 月预算 |
 | `POST /api/repos/{owner}/{repo}/rotate-token` | Access | 轮换 token |
-| `PUT /api/providers/{name}` | Access | api_url, api 类型, key 所在 secret 名, 上下文窗口 |
+| `PUT /api/providers/{name}` | Access | api_url, api 类型, key 所在 secret 名, 上下文窗口, 每百万 token 输入/输出价格 |
 | `GET /api/findings/{id}/patch` | Access | 从 R2 取补丁 |
 | `POST /api/findings/{id}/feedback` | Access | 总览页的采纳或驳回 |
 
@@ -33,8 +34,8 @@ D1 结构见 [0001_init.sql](../../cf-admin/migrations/0001_init.sql).
 
 | 表 | 内容 |
 |---|---|
-| providers | 名称, api_url, api 类型, key_secret (Worker secret 名), 上下文窗口, 最大输出 |
-| repos | owner/repo, token SHA-256, 开关, 模式, provider, 模型分级, 月预算, 本月花费, 预算月份, last_sha |
+| providers | 名称, api_url, api 类型, key_secret (Worker secret 名), 上下文窗口, 最大输出, 输入/输出单价 |
+| repos | owner/repo (大小写不敏感, COLLATE NOCASE), token SHA-256, 开关, 模式, provider, 模型分级, 月预算, 本月花费, 预算月份, last_sha |
 | runs | 每次运行: sha, base, 事件, PR 号, 状态, Error/Warning 数, token, 花费, 耗时, 补丁分支 |
 | findings | 每条发现: 指纹, 规则, 等级, 位置, 说明, 证据, 补丁 R2 key, 状态 open/accepted/rejected |
 | feedback | 每次采纳或驳回: 指纹, 结论, 原因, 来源 (token 或 Access 身份) |
@@ -44,7 +45,9 @@ R2 键: `runs/<owner>/<repo>/<runId>/report.md`, `report.json`, `sessions.jsonl`
 
 ## last_sha 与预算
 
-`POST /runs` 在写入运行与发现之后, 用一条 UPDATE 推进 last_sha 并累加本月花费; 预算月份不同则先归零. PR 运行不推进 last_sha, 因为该游标只代表被 push 的分支历史.
+`POST /runs` 先完整校验请求 (findings 必须是对象数组, 等级合法), 再写 R2 与 D1, 不会留下孤儿对象. status 与 counts 缺省时由 findings 推导. baseline 认可的 historical 发现只留在 R2 报告里, 不进入待处理列表.
+
+每次运行 (包括 PR) 都计入本月花费: 费用取 runner 上报值与 `token 数 x provider 单价` 的较大值; 预算月份不同则先归零. last_sha 只在 push 运行且 `complete` 不为 false 时推进, 因为该游标代表已完整审核过的被 push 历史.
 
 ## 分层
 
@@ -52,14 +55,16 @@ R2 键: `runs/<owner>/<repo>/<runId>/report.md`, `report.json`, `sessions.jsonl`
 
 ## 总览页
 
-`cf-admin/pages` 是 React + TS + Vite 单页, 部署到 Pages, 与 Worker 的 /api/* 路由挂在同一域名下, 由同一个 Access 应用保护. 页面功能:
+`cf-admin/pages` 是 React + TS + Vite 单页, 部署到 Pages 并由 Access 保护. 页面同源请求 `/api/*`, 由 Pages Function `cf-admin/pages/functions/api/[[path]].ts` 经 service binding 转给 Worker, Access 在边缘加上的 JWT 头随请求传递, Worker 再次校验. 页面功能:
 
-- 所有仓库一屏: 开关, 模式, 模型分级, 本月花费/预算, last_sha.
+- 部署状态: 当前 commit, 部署时间, 部署运行日志, Access 是否已配置, 重新部署入口.
+- 仓库: 登记 (token 只显示一次), 轮换 token, 开关, 模式, 模型分级, 本月花费/预算 (清空预算框不会被当成 0, 会恢复原值), last_sha.
+- Model providers: 列表 (key 只显示是否存在) 与新增/修改表单.
 - 待处理发现: 查看补丁, 采纳, 驳回 (必须填写原因, 原因回流抑制表).
 - 最近运行: 状态, Error/Warning 数, 花费, 耗时, 补丁分支的 compare 链接 (一键开 PR 合入补丁).
 
-## Access 配置要点
+## 部署与 Access
 
-- Access 应用覆盖 Pages 域名与 `/api/*`.
-- `/init`, `/runs`, `/feedback` 加 Bypass 策略, 它们由 HX_CTX_TOKEN 鉴权.
-- Worker 变量 `ACCESS_TEAM_DOMAIN` 与 `ACCESS_AUD` 必须配置, 否则 /api/* 一律 403.
+- 部署用手动触发的 [deploy-cf.yml](../../.github/workflows/deploy-cf.yml), 步骤见 [deploy-cf.md](../tutorials/deploy-cf.md).
+- Access 应用只需覆盖总览页域名; Worker 的 `/init`, `/runs`, `/feedback` 用 HX_CTX_TOKEN 鉴权, `/api/*` 自己校验 Access JWT (格式错误的 JWT 同样按未认证处理, 返回 403).
+- Worker 变量 `ACCESS_TEAM_DOMAIN` 与 `ACCESS_AUD` 由部署工作流从仓库变量写入, 未配置时 /api/* 一律 403.

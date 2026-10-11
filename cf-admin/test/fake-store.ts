@@ -31,7 +31,7 @@ export class FakeStore implements Store {
         return this.strip(this.repos.find((item) => item.tokenHash === hash));
     }
     async repoByName(name: string) {
-        return this.strip(this.repos.find((item) => item.name === name));
+        return this.strip(this.repos.find((item) => item.name.toLowerCase() === name.toLowerCase()));
     }
     async listRepos() {
         return this.repos.map((item) => this.strip(item)!);
@@ -80,11 +80,16 @@ export class FakeStore implements Store {
         this.runs.push(run);
         this.findings.push(...findings);
     }
-    async advance(repoId: number, sha: string, costUsd: number, month: string) {
+    async listProviders() {
+        return [...this.providers.values()];
+    }
+    async charge(repoId: number, costUsd: number, month: string) {
         const row = this.repos.find((item) => item.id === repoId)!;
         row.spentUsd = row.budgetMonth === month ? row.spentUsd + costUsd : costUsd;
         row.budgetMonth = month;
-        row.lastSha = sha;
+    }
+    async setLastSha(repoId: number, sha: string) {
+        this.repos.find((item) => item.id === repoId)!.lastSha = sha;
     }
     async recentRuns(limit: number) {
         return this.runs

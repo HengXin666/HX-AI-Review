@@ -58,6 +58,15 @@ async function accessKeys(domain: string): Promise<Jwk[]> {
  * Fails closed: with no ACCESS_AUD or team domain configured nobody is an admin.
  */
 export async function verifyAccess(request: Request, aud?: string, domain?: string): Promise<string | null> {
+    try {
+        return await verifyAccessToken(request, aud, domain);
+    } catch {
+        // Malformed base64 or JSON in the assertion is an unauthenticated request, not a server error.
+        return null;
+    }
+}
+
+async function verifyAccessToken(request: Request, aud?: string, domain?: string): Promise<string | null> {
     const token = request.headers.get("cf-access-jwt-assertion");
     if (!token || !aud || !domain) {
         return null;

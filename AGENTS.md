@@ -7,7 +7,7 @@
 - `context-cr/` 只在 GitHub Actions runner 里运行, 读 checkout 下来的文件, 用 pi SDK 直连模型. 它不依赖 `cf-admin/` 的任何代码, 两边只通过 [docs/reference/api/cf-admin.yaml](docs/reference/api/cf-admin.yaml) 的 HTTP 契约对接.
 - `cf-admin/` 是 Cloudflare Worker + D1 + R2 + Pages. 它永远不转发模型请求, 只下发配置, 入库, 提供总览.
 - Error 只来自 L0 确定性检查; AI 阶段只产出 Warning 与补丁. 改规则等级前先改 [docs/reference/report-contract.md](docs/reference/report-contract.md).
-- api_key 只能出现在 /init 响应与 runner 的环境变量里, 不写文件, 不入 D1, 不进日志.
+- api_key 只能出现在 /init 响应, runner 的 0600 临时 key 文件 (review 读后即删) 与 review 进程里; 不进 `$GITHUB_ENV`, 不入 D1, 不进日志.
 
 ## 约定
 

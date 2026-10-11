@@ -63,7 +63,7 @@ export async function createPiRunner(root: string, config: InitConfig, apiKey: s
             name: id,
             reasoning: false,
             input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            cost: { input: config.pricing.input, output: config.pricing.output, cacheRead: 0, cacheWrite: 0 },
             contextWindow: config.limits.contextWindow,
             maxTokens: config.limits.maxTokens,
         })),

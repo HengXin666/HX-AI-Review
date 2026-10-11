@@ -59,7 +59,8 @@ async function main(argv: string[]): Promise<number> {
         }
         case "review": {
             const ai = await stepReview(args.root);
-            process.stdout.write(`review: ${ai.findings.length} confirmed, ${ai.rejected} rejected\n`);
+            const summary = ai ? `${ai.findings.length} confirmed, ${ai.rejected} rejected` : "skipped";
+            process.stdout.write(`review: ${summary}\n`);
             return 0;
         }
         case "publish": {

@@ -19,7 +19,10 @@ on:
 
 jobs:
     review:
-        if: github.event.deleted != true
+        # Fork pull requests get no secrets and their head lives in another repository: skip them explicitly.
+        if: >-
+            github.event.deleted != true &&
+            (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         runs-on: ubuntu-latest
         timeout-minutes: 30
         permissions:
@@ -29,10 +32,9 @@ jobs:
         concurrency:
             group: hx-context-review-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
             cancel-in-progress: true
+        # Credentials are scoped to the CLI steps that need them, never to the whole job.
         env:
             HX_CTX_ENDPOINT: ${{ inputs.endpoint || vars.HX_CTX_ENDPOINT }}
-            HX_CTX_TOKEN: ${{ secrets.HX_CTX_TOKEN }}
-            GITHUB_TOKEN: ${{ github.token }}
             TOOL: ${{ github.workspace }}/.hx-context-review-tool
         steps:
             - name: 1 checkout (fetch-depth 0, full history and context)
@@ -58,8 +60,10 @@ jobs:
             - name: Install runner dependencies
               working-directory: .hx-context-review-tool
               run: pnpm install --frozen-lockfile --filter context-cr...
-            - name: 2 init (GET /init, mask api_key)
+            - name: 2 init (GET /init, mask api_key into a 0600 file in RUNNER_TEMP)
               id: init
+              env:
+                  HX_CTX_TOKEN: ${{ secrets.HX_CTX_TOKEN }}
               run: node "$TOOL/context-cr/src/cli.ts" init
             - name: 3 L0 deterministic checks
               id: l0
@@ -68,14 +72,19 @@ jobs:
             - name: 4 context_scope
               id: scope
               run: node "$TOOL/context-cr/src/cli.ts" scope
-            - name: 5 pi finder -> verifier
+            - name: 5 pi finder -> verifier (reads and deletes the key file)
+              id: review
               if: steps.scope.outputs.empty != 'true' && steps.init.outputs.l0_only != 'true'
               run: node "$TOOL/context-cr/src/cli.ts" review
+            # Not on cancel; on a review failure it still publishes L0, marked incomplete so last_sha stays put.
             - name: 6 ingest + write-back (POST /runs, patch branch, comment)
-              if: always() && steps.init.outcome == 'success'
+              if: ${{ !cancelled() && steps.init.outcome == 'success' && steps.scope.outcome == 'success' }}
+              env:
+                  HX_CTX_TOKEN: ${{ secrets.HX_CTX_TOKEN }}
+                  GITHUB_TOKEN: ${{ github.token }}
               run: node "$TOOL/context-cr/src/cli.ts" publish
             - name: Upload MD/JSON report
-              if: always()
+              if: ${{ !cancelled() }}
               uses: actions/upload-artifact@v4
               with:
                   name: hx-context-review-${{ github.run_id }}-${{ github.run_attempt }}

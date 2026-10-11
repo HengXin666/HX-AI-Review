@@ -95,3 +95,16 @@ test("baseline marks approved findings historical so they do not block", () => {
     const again = runL0(memorySnapshot(content), DEFAULT_CONFIG, [finding]);
     assert.equal(again.find((item) => item.fingerprint === finding.fingerprint)?.origin, "historical");
 });
+
+test("fences close only on a matching marker; malformed escapes do not crash L0", () => {
+    const readme = ok["README.md"] + "~~~~\n```\n[x](nope.md)\n~~~~\n[bad](docs/%ZZ.md)\n";
+    const found = rules({ ...ok, "README.md": readme });
+    assert.deepEqual(found, ["CX-DEADREF:error:README.md"]);
+});
+
+test("CRLF SKILL.md front matter is accepted; allowed file names still check their directories", () => {
+    const crlf = { ...ok, ".agents/skills/demo/SKILL.md": "---\r\nname: demo\r\ndescription: d\r\n---\r\n" };
+    assert.deepEqual(rules(crlf), []);
+    const found = rules({ ...ok, "docs/Bad_Dir/README.md": "# r\n", "docs/Bad_Dir/AGENTS.md": "# a\n" });
+    assert.ok(found.includes("HC-DOCNAME:error:docs/Bad_Dir/README.md"));
+});

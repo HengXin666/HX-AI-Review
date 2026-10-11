@@ -4,3 +4,5 @@ dist/
 scripts/.hx_code_quality/
 *.tsbuildinfo
 .dev.vars
+.deploy/
+pages/wrangler.toml

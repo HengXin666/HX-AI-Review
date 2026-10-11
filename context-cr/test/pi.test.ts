@@ -44,6 +44,12 @@ test("pi runner reaches api_url directly and executes report_finding", async () 
                 };
                 res.write(chunk({ role: "assistant", tool_calls: [call] }));
                 res.write(chunk({}, "tool_calls"));
+                const usage = { prompt_tokens: 1000, completion_tokens: 100, total_tokens: 1100 };
+                res.write(
+                    "data: " +
+                        JSON.stringify({ id: "c", object: "chat.completion.chunk", choices: [], usage }) +
+                        "\n\n",
+                );
             } else {
                 res.write(chunk({ role: "assistant", content: "no more findings" }));
                 res.write(chunk({}, "stop"));
@@ -61,6 +67,7 @@ test("pi runner reaches api_url directly and executes report_finding", async () 
         api: "openai-completions",
         models: { finder: "finder-model", verifier: "verifier-model" },
         limits: { contextWindow: 32000, maxTokens: 1024, maxCandidates: 3 },
+        pricing: { input: 3, output: 15 },
         suppressions: [],
     };
     try {
@@ -81,6 +88,8 @@ test("pi runner reaches api_url directly and executes report_finding", async () 
             !seen[0].tools.includes("bash") && !seen[0].tools.includes("write") && !seen[0].tools.includes("edit"),
         );
         assert.ok(result.transcript.length >= 3);
+        // Pricing from /init reaches pi, so reported cost is real and the monthly budget can trip.
+        assert.ok(result.usage.cost > 0, `cost ${result.usage.cost}`);
     } finally {
         server.close();
     }

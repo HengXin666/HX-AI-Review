@@ -76,15 +76,13 @@
     },
     {
         "id": "HC-PY-IMPORT",
-        "status": "not-applicable",
-        "reason": "Repository has no Python sources",
-        "evidence": "git ls-files '*.py' returns nothing"
+        "status": "blocked",
+        "reason": "Only vendored .agents/skills/hx-agent-notes ships Python; no vendor exclusion or Python AST checker is configured yet"
     },
     {
         "id": "HC-PY-CONST",
-        "status": "not-applicable",
-        "reason": "Repository has no Python sources",
-        "evidence": "git ls-files '*.py' returns nothing"
+        "status": "blocked",
+        "reason": "Only vendored .agents/skills/hx-agent-notes ships Python; no vendor exclusion or Python AST checker is configured yet"
     },
     {
         "id": "HC-DOCSIG",

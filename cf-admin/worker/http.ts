@@ -10,6 +10,10 @@ export type Env = {
     ACCESS_TEAM_DOMAIN?: string;
     /** Public overview Pages URL used in links written back to GitHub. */
     OVERVIEW_URL?: string;
+    /** Written by the deploy workflow so the overview page can show what is running. */
+    DEPLOY_SHA?: string;
+    DEPLOYED_AT?: string;
+    DEPLOY_RUN_URL?: string;
     [secret: string]: unknown;
 };
 
@@ -20,8 +24,16 @@ export type Deps = {
     /** Returns the Access identity (email) or null when the request is not authenticated. */
     admin(request: Request): Promise<string | null>;
     overviewUrl?: string;
+    deployment: Deployment;
     now(): Date;
     id(): string;
+};
+
+export type Deployment = {
+    sha?: string;
+    deployedAt?: string;
+    runUrl?: string;
+    accessConfigured: boolean;
 };
 
 export class HttpError extends Error {

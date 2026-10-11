@@ -14,6 +14,8 @@ export type InitConfig = {
     api: ModelApi;
     models: { finder: string; verifier: string };
     limits: { contextWindow: number; maxTokens: number; maxCandidates: number };
+    /** USD per million tokens, so pi reports real cost and the monthly budget can trip. */
+    pricing: { input: number; output: number };
     lastSha?: string;
     suppressions: Suppression[];
     refIndex?: RefIndex;
@@ -28,10 +30,15 @@ function text(value: unknown, field: string): string {
     return value;
 }
 
+function price(value: unknown): number {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
 export function parseInit(raw: unknown): InitResponse {
     const data = raw as Record<string, unknown>;
     const models = (data.models ?? {}) as Record<string, unknown>;
     const limits = (data.limits ?? {}) as Record<string, unknown>;
+    const pricing = (data.pricing ?? {}) as Record<string, unknown>;
     const l0Only = data.l0Only === true;
     const result: InitResponse = {
         repo: text(data.repo, "repo"),
@@ -48,6 +55,7 @@ export function parseInit(raw: unknown): InitResponse {
             maxTokens: Number(limits.maxTokens ?? 8192),
             maxCandidates: Number(limits.maxCandidates ?? 12),
         },
+        pricing: { input: price(pricing.input), output: price(pricing.output) },
         lastSha: typeof data.lastSha === "string" ? data.lastSha : undefined,
         suppressions: Array.isArray(data.suppressions) ? (data.suppressions as InitResponse["suppressions"]) : [],
         refIndex: (data.refIndex as RefIndex | undefined) ?? undefined,

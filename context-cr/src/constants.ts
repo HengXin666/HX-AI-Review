@@ -15,7 +15,8 @@ export const DOCS_ROOT = "docs";
 export const MARKDOWN_EXT = ".md";
 
 export const CONFIG_FILE = ".hx-context-review.json";
-export const STATE_DIR = "scripts/.hx_code_quality/context-review";
+export const STATE_NAMESPACE = "hx-context-review";
+export const KEY_FILE = "api-key";
 export const REPORT_DIR = "scripts/.hx_code_quality/reports";
 export const REPORT_NAME = "context-review";
 export const INIT_FILE = "init.json";
@@ -24,7 +25,6 @@ export const L0_FILE = "l0.json";
 export const AI_FILE = "ai.json";
 export const SESSION_FILE = "sessions.jsonl";
 
-export const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbbe4904";
 export const ZERO_SHA = /^0+$/;
 export const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
@@ -51,8 +51,8 @@ export const ENV = {
     token: "HX_CTX_TOKEN",
     apiKey: "HX_CTX_API_KEY",
     githubToken: "GITHUB_TOKEN",
-    githubEnv: "GITHUB_ENV",
     githubOutput: "GITHUB_OUTPUT",
+    runnerTemp: "RUNNER_TEMP",
     githubEventPath: "GITHUB_EVENT_PATH",
     githubEventName: "GITHUB_EVENT_NAME",
     githubRepository: "GITHUB_REPOSITORY",

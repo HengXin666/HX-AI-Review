@@ -17,9 +17,9 @@ pnpm format        # prettier, 4 spaces, width 120
 pnpm typecheck     # tsc strict for context-cr, cf-admin worker and pages
 pnpm test          # node --test in both packages
 pnpm l0            # hx-context-review L0 on this repository's own context files
-pnpm quality:code  # hx-agent-code code group, report in scripts/.hx_code_quality/reports/
-pnpm quality:docs  # hx-agent-code docs group
 ```
+
+`pnpm quality:code` and `pnpm quality:docs` run the hx-agent-code CI groups. They need `GITHUB_EVENT_NAME` and `GITHUB_EVENT_PATH`, so they are for GitHub Actions; the commands above cover the same checks locally.
 
 Use `pnpm --filter context-cr test` or `pnpm --filter cf-admin test` for one package.
 

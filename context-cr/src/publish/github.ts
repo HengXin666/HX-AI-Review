@@ -38,8 +38,18 @@ export function pushPatchBranch(root: string, head: string, patches: Patch[]): s
     const branch = PATCH_BRANCH_PREFIX + head.slice(0, 12);
     git(root, ["switch", "--force-create", branch, head]);
     try {
+        let applied = 0;
         for (const patch of usable) {
-            git(root, ["apply", "--index", "-"], patch.diff);
+            // Each patch was checked against head alone; overlapping ones may conflict here and are skipped.
+            try {
+                git(root, ["apply", "--index", "-"], patch.diff);
+                applied++;
+            } catch {
+                process.stderr.write(`patch ${patch.fingerprint} conflicts with an earlier patch; skipped\n`);
+            }
+        }
+        if (applied === 0) {
+            return undefined;
         }
         const author = [
             "-c",

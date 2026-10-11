@@ -46,6 +46,12 @@ export default {
             secret: (name) => (typeof env[name] === "string" ? (env[name] as string) : undefined),
             admin: (req) => verifyAccess(req, env.ACCESS_AUD, env.ACCESS_TEAM_DOMAIN),
             overviewUrl: env.OVERVIEW_URL,
+            deployment: {
+                sha: env.DEPLOY_SHA || undefined,
+                deployedAt: env.DEPLOYED_AT || undefined,
+                runUrl: env.DEPLOY_RUN_URL || undefined,
+                accessConfigured: Boolean(env.ACCESS_AUD && env.ACCESS_TEAM_DOMAIN),
+            },
             now: () => new Date(),
             id: () => crypto.randomUUID(),
         };

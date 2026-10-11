@@ -1,17 +1,16 @@
 // Real adapter: D1 for rows, R2 for reports, sessions and patches.
+import { finding, provider, repo, run } from "./rows.ts";
+import type { Row } from "./rows.ts";
 import type {
     BlobStore,
     FeedbackInput,
     FindingRow,
     ProviderRow,
     RepoPatch,
-    RepoRow,
     RunRow,
     Store,
     Suppression,
 } from "./port.ts";
-
-type Row = Record<string, unknown>;
 
 const REPO_COLUMNS: Record<keyof RepoPatch, string> = {
     enabled: "enabled",
@@ -21,62 +20,6 @@ const REPO_COLUMNS: Record<keyof RepoPatch, string> = {
     verifierModel: "verifier_model",
     budgetUsd: "budget_usd",
 };
-
-function repo(row: Row): RepoRow {
-    return {
-        id: Number(row.id),
-        name: String(row.name),
-        enabled: Number(row.enabled) === 1,
-        mode: row.mode === "l0" ? "l0" : "full",
-        provider: String(row.provider),
-        finderModel: String(row.finder_model),
-        verifierModel: String(row.verifier_model),
-        budgetUsd: Number(row.budget_usd),
-        spentUsd: Number(row.spent_usd),
-        budgetMonth: String(row.budget_month),
-        lastSha: row.last_sha === null ? null : String(row.last_sha),
-    };
-}
-
-function run(row: Row): RunRow & { repo: string } {
-    return {
-        id: String(row.id),
-        repoId: Number(row.repo_id),
-        repo: String(row.repo ?? ""),
-        sha: String(row.sha),
-        baseSha: String(row.base_sha),
-        event: String(row.event),
-        prNumber: row.pr_number === null ? null : Number(row.pr_number),
-        status: String(row.status),
-        l0Only: Number(row.l0_only) === 1,
-        errors: Number(row.errors),
-        warnings: Number(row.warnings),
-        inputTokens: Number(row.input_tokens),
-        outputTokens: Number(row.output_tokens),
-        costUsd: Number(row.cost_usd),
-        durationMs: Number(row.duration_ms),
-        patchBranch: row.patch_branch === null ? null : String(row.patch_branch),
-        createdAt: String(row.created_at),
-    };
-}
-
-function finding(row: Row): FindingRow & { repo: string } {
-    return {
-        id: String(row.id),
-        runId: String(row.run_id),
-        repoId: Number(row.repo_id),
-        repo: String(row.repo ?? ""),
-        fingerprint: String(row.fingerprint),
-        ruleId: String(row.rule_id),
-        severity: String(row.severity),
-        path: String(row.path),
-        line: Number(row.line),
-        message: String(row.message),
-        evidence: String(row.evidence),
-        patchKey: row.patch_key === null ? null : String(row.patch_key),
-        status: row.status === "accepted" || row.status === "rejected" ? row.status : "open",
-    };
-}
 
 export class D1Store implements Store {
     private readonly db: D1Database;
@@ -144,26 +87,31 @@ export class D1Store implements Store {
 
     async provider(name: string) {
         const row = await this.one("SELECT * FROM providers WHERE name = ?", name);
-        if (!row) {
-            return null;
-        }
-        return {
-            name: String(row.name),
-            apiUrl: String(row.api_url),
-            api: row.api === "anthropic-messages" ? "anthropic-messages" : "openai-completions",
-            keySecret: String(row.key_secret),
-            contextWindow: Number(row.context_window),
-            maxTokens: Number(row.max_tokens),
-        } satisfies ProviderRow;
+        return row ? provider(row) : null;
+    }
+
+    async listProviders() {
+        return (await this.all("SELECT * FROM providers ORDER BY name")).map(provider);
     }
 
     async upsertProvider(row: ProviderRow) {
-        const sql = `INSERT INTO providers (name, api_url, api, key_secret, context_window, max_tokens) VALUES (?, ?, ?, ?, ?, ?)
+        const sql = `INSERT INTO providers (name, api_url, api, key_secret, context_window, max_tokens, price_input, price_output)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(name) DO UPDATE SET api_url = excluded.api_url, api = excluded.api, key_secret = excluded.key_secret,
-            context_window = excluded.context_window, max_tokens = excluded.max_tokens`;
+            context_window = excluded.context_window, max_tokens = excluded.max_tokens,
+            price_input = excluded.price_input, price_output = excluded.price_output`;
         await this.db
             .prepare(sql)
-            .bind(row.name, row.apiUrl, row.api, row.keySecret, row.contextWindow, row.maxTokens)
+            .bind(
+                row.name,
+                row.apiUrl,
+                row.api,
+                row.keySecret,
+                row.contextWindow,
+                row.maxTokens,
+                row.priceInput,
+                row.priceOutput,
+            )
             .run();
     }
 
@@ -221,11 +169,15 @@ export class D1Store implements Store {
         ]);
     }
 
-    async advance(repoId: number, sha: string, costUsd: number, month: string) {
-        const sql = `UPDATE repos SET last_sha = ?,
-            spent_usd = CASE WHEN budget_month = ? THEN spent_usd + ? ELSE ? END, budget_month = ?,
-            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`;
-        await this.db.prepare(sql).bind(sha, month, costUsd, costUsd, month, repoId).run();
+    async charge(repoId: number, costUsd: number, month: string) {
+        const sql = `UPDATE repos SET spent_usd = CASE WHEN budget_month = ? THEN spent_usd + ? ELSE ? END,
+            budget_month = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`;
+        await this.db.prepare(sql).bind(month, costUsd, costUsd, month, repoId).run();
+    }
+
+    async setLastSha(repoId: number, sha: string) {
+        const sql = "UPDATE repos SET last_sha = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?";
+        await this.db.prepare(sql).bind(sha, repoId).run();
     }
 
     async recentRuns(limit: number) {

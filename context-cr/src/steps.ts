@@ -1,11 +1,11 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { loadConfig } from "./config.ts";
-import { AI_FILE, ENV, INIT_FILE, L0_FILE, SCOPE_FILE, SESSION_FILE, STATE_DIR, UTF8 } from "./constants.ts";
+import { AI_FILE, ENV, INIT_FILE, L0_FILE, SCOPE_FILE, SESSION_FILE, UTF8 } from "./constants.ts";
 import { EMPTY_USAGE } from "./contract/finding.ts";
 import type { Finding, Patch, Usage } from "./contract/finding.ts";
 import { buildReport, isBlocking, renderMarkdown, writeReport } from "./contract/report.ts";
-import { applyCheck, changedFiles, diffText, headSha, showFile } from "./git.ts";
+import type { ReviewReport } from "./contract/report.ts";
+import { changedFiles, diffText, headSha, patchFiles, showFile } from "./git.ts";
 import { fetchInit, splitSecret } from "./init/client.ts";
 import type { InitConfig } from "./init/client.ts";
 import { runL0 } from "./l0/index.ts";
@@ -20,58 +20,36 @@ import { resolveBase } from "./scope/base.ts";
 import type { EventInfo } from "./scope/base.ts";
 import { computeScope } from "./scope/index.ts";
 import type { ContextScope } from "./scope/index.ts";
+import { dropKey, load, required, resetState, save, setOutput, stateFile, storeKey, takeKey } from "./state.ts";
 
-type InitState = { config: InitConfig; startedAt: number; head: string; event: EventInfo };
+type InitState = { nonce: string; config: InitConfig; startedAt: number; head: string; event: EventInfo };
 type L0State = { findings: Finding[] };
-type AiState = { findings: Finding[]; patches: Patch[]; usage: Usage; rejected: number };
+type AiState = { nonce: string; findings: Finding[]; patches: Patch[]; usage: Usage; rejected: number };
 
-function stateFile(root: string, name: string): string {
-    mkdirSync(join(root, STATE_DIR), { recursive: true });
-    return join(root, STATE_DIR, name);
-}
-
-function save(root: string, name: string, value: unknown): void {
-    writeFileSync(stateFile(root, name), JSON.stringify(value, null, 4) + "\n", UTF8);
-}
-
-function load<T>(root: string, name: string): T | undefined {
-    const file = join(root, STATE_DIR, name);
-    return existsSync(file) ? (JSON.parse(readFileSync(file, UTF8)) as T) : undefined;
-}
-
-function required(name: string): string {
-    const value = process.env[name];
-    if (!value) {
-        throw new Error(`environment variable ${name} is required`);
-    }
-    return value;
-}
-
-/** GitHub Actions key=value outputs; a no-op outside Actions. */
-export function setOutput(name: string, value: string): void {
-    const file = process.env[ENV.githubOutput];
-    if (file) {
-        appendFileSync(file, `${name}=${value}\n`);
-    }
-}
+const LOCAL_CONFIG: InitConfig = {
+    repo: "local",
+    enabled: true,
+    l0Only: true,
+    api: "openai-completions",
+    models: { finder: "", verifier: "" },
+    limits: { contextWindow: 0, maxTokens: 0, maxCandidates: 0 },
+    pricing: { input: 0, output: 0 },
+    suppressions: [],
+};
 
 export async function stepInit(root: string): Promise<InitState> {
     const repo = required(ENV.githubRepository);
     const response = await fetchInit(required(ENV.endpoint), required(ENV.token), repo);
+    const nonce = resetState(root);
     const { config, apiKey } = splitSecret(response);
     if (apiKey) {
-        // Mask before anything else can print it, then hand it to later steps only via the env file.
-        process.stdout.write(`::add-mask::${apiKey}\n`);
-        const envFile = process.env[ENV.githubEnv];
-        if (envFile) {
-            appendFileSync(envFile, `${ENV.apiKey}<<HX_CTX_EOF\n${apiKey}\nHX_CTX_EOF\n`);
-        }
-        process.env[ENV.apiKey] = apiKey;
+        storeKey(root, apiKey);
     }
     const head = headSha(root);
-    const state: InitState = { config, startedAt: Date.now(), head, event: resolveBase(root, head, config.lastSha) };
+    const event = resolveBase(root, head, config.lastSha);
+    const state: InitState = { nonce, config, startedAt: Date.now(), head, event };
     save(root, INIT_FILE, state);
-    setOutput("l0_only", String(config.l0Only));
+    setOutput("l0_only", config.l0Only ? "true" : "false");
     return state;
 }
 
@@ -81,16 +59,8 @@ function initState(root: string): InitState {
         return existing;
     }
     const head = headSha(root);
-    const config: InitConfig = {
-        repo: process.env[ENV.githubRepository] ?? "local",
-        enabled: true,
-        l0Only: true,
-        api: "openai-completions",
-        models: { finder: "", verifier: "" },
-        limits: { contextWindow: 0, maxTokens: 0, maxCandidates: 0 },
-        suppressions: [],
-    };
-    return { config, startedAt: Date.now(), head, event: resolveBase(root, head) };
+    const config = { ...LOCAL_CONFIG, repo: process.env[ENV.githubRepository] ?? "local" };
+    return { nonce: "local", config, startedAt: Date.now(), head, event: resolveBase(root, head) };
 }
 
 function baseline(root: string, base: string): Approved[] {
@@ -110,73 +80,85 @@ export function stepScope(root: string): ContextScope {
     const state = initState(root);
     const { base } = state.event;
     const changes = changedFiles(root, base, state.head);
-    const scope = computeScope(
-        worktreeSnapshot(root),
-        loadConfig(root),
-        changes,
-        base,
-        state.head,
-        state.config.refIndex,
-    );
+    const snapshot = worktreeSnapshot(root);
+    const scope = computeScope(snapshot, loadConfig(root), changes, base, state.head, state.config.refIndex);
     save(root, SCOPE_FILE, scope);
-    setOutput("empty", String(scope.contexts.length === 0));
+    setOutput("empty", scope.contexts.length === 0 ? "true" : "false");
     return scope;
 }
 
-export async function stepReview(root: string): Promise<AiState> {
+function reviewExpected(state: InitState, scope: ContextScope | undefined): boolean {
+    return !state.config.l0Only && (scope === undefined || scope.contexts.length > 0);
+}
+
+export async function stepReview(root: string): Promise<AiState | undefined> {
     const state = initState(root);
     const scope = load<ContextScope>(root, SCOPE_FILE) ?? stepScope(root);
-    if (state.config.l0Only || scope.contexts.length === 0) {
-        const skipped: AiState = { findings: [], patches: [], usage: EMPTY_USAGE, rejected: 0 };
-        save(root, AI_FILE, skipped);
-        return skipped;
+    const apiKey = takeKey(root);
+    if (!reviewExpected(state, scope)) {
+        return undefined;
     }
-    const run = await createPiRunner(root, state.config, required(ENV.apiKey));
+    if (!apiKey) {
+        throw new Error("no api key from init; run the init step first");
+    }
+    const run = await createPiRunner(root, state.config, apiKey);
     const diff = diffText(root, scope.base, scope.head);
-    const result = await runReview(state.config, scope, {
-        run,
-        diff,
-        patchApplies: (patch) => applyCheck(root, patch),
-    });
+    const result = await runReview(state.config, scope, { run, diff, patchFiles: (patch) => patchFiles(root, patch) });
     writeFileSync(stateFile(root, SESSION_FILE), sessionsToJsonl(result.transcripts), UTF8);
-    const ai: AiState = {
-        findings: result.findings,
-        patches: result.patches,
-        usage: result.usage,
-        rejected: result.rejected,
-    };
+    const { findings, patches, usage, rejected } = result;
+    const ai: AiState = { nonce: state.nonce, findings, patches, usage, rejected };
     save(root, AI_FILE, ai);
     return ai;
 }
 
-/** Aggregate, write MD/JSON, ingest to CF, push the patch branch, comment. Returns blocking count. */
+function safePatchBranch(root: string, head: string, report: ReviewReport): string | undefined {
+    try {
+        return pushPatchBranch(root, head, report.patches);
+    } catch (error) {
+        // The patch branch is optional; ingest and comments must still happen.
+        process.stderr.write(`patch branch skipped: ${error instanceof Error ? error.message : String(error)}\n`);
+        return undefined;
+    }
+}
+
+/** Aggregate, write MD/JSON, push the patch branch, ingest to CF, comment. Returns blocking count. */
 export async function stepPublish(root: string): Promise<number> {
+    dropKey(root);
     const state = initState(root);
     const l0 = load<L0State>(root, L0_FILE) ?? { findings: stepL0(root) };
     const scope = load<ContextScope>(root, SCOPE_FILE);
-    const ai = load<AiState>(root, AI_FILE) ?? { findings: [], patches: [], usage: EMPTY_USAGE, rejected: 0 };
+    const stored = load<AiState>(root, AI_FILE);
+    // Only AI output produced by this run's review step counts; anything else is ignored.
+    const ai = stored?.nonce === state.nonce ? stored : undefined;
+    const complete = scope !== undefined && (!reviewExpected(state, scope) || ai !== undefined);
     const report = buildReport({
         repo: state.config.repo,
         base: state.event.base,
         head: state.head,
-        findings: [...l0.findings, ...ai.findings],
-        patches: ai.patches,
-        usage: ai.usage,
+        findings: [...l0.findings, ...(ai?.findings ?? [])],
+        patches: ai?.patches ?? [],
+        usage: ai?.usage ?? EMPTY_USAGE,
         durationMs: Date.now() - state.startedAt,
         stages: {
             base: state.event.reason,
             scope: scope ? `${scope.contexts.length} context file(s)` : "not run",
-            ai: state.config.l0Only ? "L0 only: " + (state.config.reason ?? "disabled") : `${ai.rejected} rejected`,
+            ai: state.config.l0Only
+                ? "L0 only: " + (state.config.reason ?? "disabled")
+                : ai
+                  ? `${ai.rejected} rejected`
+                  : complete
+                    ? "nothing in scope"
+                    : "incomplete: review did not finish",
         },
     });
     writeReport(root, report);
     const target = githubTarget();
-    const patchBranch = target ? pushPatchBranch(root, state.head, report.patches) : undefined;
+    const patchBranch = target ? safePatchBranch(root, state.head, report) : undefined;
     const endpoint = process.env[ENV.endpoint];
     const token = process.env[ENV.token];
     let overviewUrl: string | undefined;
     if (endpoint && token) {
-        const sessionsPath = join(root, STATE_DIR, SESSION_FILE);
+        const sessionsPath = stateFile(root, SESSION_FILE);
         const ingest = await postRun(endpoint, token, {
             repo: state.config.repo,
             sha: state.head,
@@ -184,6 +166,7 @@ export async function stepPublish(root: string): Promise<number> {
             event: state.event.name,
             prNumber: state.event.prNumber,
             status: statusOf(report.counts, !scope?.contexts.length),
+            complete,
             l0Only: state.config.l0Only,
             durationMs: report.durationMs,
             usage: report.usage,
@@ -193,14 +176,13 @@ export async function stepPublish(root: string): Promise<number> {
             patchBranch,
             reportMarkdown: renderMarkdown(report),
             reportJson: JSON.stringify(report),
-            sessionsJsonl: existsSync(sessionsPath) ? readFileSync(sessionsPath, UTF8) : "",
+            sessionsJsonl: ai && existsSync(sessionsPath) ? readFileSync(sessionsPath, UTF8) : "",
         });
         overviewUrl = ingest.overviewUrl;
     }
     if (target && (report.findings.length || state.event.prNumber !== undefined)) {
         const patchUrl = patchBranch ? compareUrl(target, patchBranch) : undefined;
-        const body = renderComment(report, { patchUrl, overviewUrl });
-        await writeBack(target, state.head, body, state.event.prNumber);
+        await writeBack(target, state.head, renderComment(report, { patchUrl, overviewUrl }), state.event.prNumber);
     }
     return report.findings.filter(isBlocking).length;
 }

@@ -10,6 +10,8 @@ export type RunPayload = {
     event: string;
     prNumber?: number;
     status: RunStatus;
+    /** False when the AI stage was expected but did not finish; the Worker then keeps last_sha. */
+    complete: boolean;
     l0Only: boolean;
     durationMs: number;
     usage: Usage;

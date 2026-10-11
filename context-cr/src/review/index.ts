@@ -11,8 +11,8 @@ import type { Candidate, Verdict } from "./tools.ts";
 export type ReviewDeps = {
     run: AgentRunner;
     diff: string;
-    /** Deterministic `git apply --check` so an unusable patch never reaches write-back. */
-    patchApplies(patch: string): boolean;
+    /** Deterministic `git apply --check`: files the patch touches, or undefined when it does not apply. */
+    patchFiles(patch: string): string[] | undefined;
 };
 
 export type ReviewResult = {
@@ -76,7 +76,10 @@ export async function runReview(config: InitConfig, scope: ContextScope, deps: R
         result.findings.push(finding);
         if (candidate.patch) {
             const diff = candidate.patch.endsWith("\n") ? candidate.patch : candidate.patch + "\n";
-            result.patches.push({ fingerprint: finding.fingerprint, diff, applies: deps.patchApplies(diff) });
+            // A patch may only touch the context file it was reported for; anything else is never pushed.
+            const files = deps.patchFiles(diff);
+            const applies = Boolean(files?.length) && files!.every((file) => file === candidate.path);
+            result.patches.push({ fingerprint: finding.fingerprint, diff, applies });
         }
     }
     return result;

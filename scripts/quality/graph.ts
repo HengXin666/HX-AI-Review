@@ -4,7 +4,12 @@ const graph = {
     inputs: {},
     global: ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.base.json", "scripts/quality"],
     modules: {
-        "context-cr": { paths: ["context-cr"], tests: ["context-cr:unit"], dependsOn: [], contracts: [] },
+        "context-cr": {
+            paths: ["context-cr"],
+            tests: ["context-cr:unit"],
+            dependsOn: [],
+            contracts: ["docs/reference/api/cf-admin.yaml"],
+        },
         "cf-admin": {
             paths: ["cf-admin"],
             tests: ["cf-admin:unit"],

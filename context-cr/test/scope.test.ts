@@ -50,3 +50,20 @@ test("repository without context files yields an empty scope", () => {
     const bare = memorySnapshot({ "src/a.ts": "" });
     assert.equal(computeScope(bare, DEFAULT_CONFIG, [{ status: "M", path: "src/a.ts" }], "", "h").contexts.length, 0);
 });
+
+test("path segments named like Object members do not crash scope", () => {
+    const repo2 = memorySnapshot({
+        "AGENTS.md": "# r\n",
+        "README.md": "# r\n",
+        "constructor/toString.ts": "",
+        "__proto__/x.ts": "",
+    });
+    const changes = [
+        { status: "M", path: "constructor/toString.ts" },
+        { status: "A", path: "__proto__/x.ts" },
+    ];
+    assert.deepEqual(
+        computeScope(repo2, DEFAULT_CONFIG, changes, "b", "h").contexts.map((item) => item.path),
+        ["AGENTS.md"],
+    );
+});
