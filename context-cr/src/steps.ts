@@ -5,7 +5,7 @@ import { EMPTY_USAGE } from "./contract/finding.ts";
 import type { Finding, Patch, Usage } from "./contract/finding.ts";
 import { buildReport, isBlocking, renderMarkdown, writeReport } from "./contract/report.ts";
 import type { ReviewReport } from "./contract/report.ts";
-import { changedFiles, diffText, headSha, patchFiles, showFile } from "./git.ts";
+import { changedFiles, diffText, headSha, patchFiles, showFile, tryGit } from "./git.ts";
 import { fetchInit, splitSecret } from "./init/client.ts";
 import type { InitConfig } from "./init/client.ts";
 import { runL0 } from "./l0/index.ts";
@@ -13,8 +13,10 @@ import type { Approved } from "./l0/index.ts";
 import { worktreeSnapshot } from "./l0/snapshot.ts";
 import { renderComment } from "./publish/comment.ts";
 import { compareUrl, githubTarget, pushPatchBranch, writeBack } from "./publish/github.ts";
+import type { GithubTarget } from "./publish/github.ts";
 import { postRun, sessionsToJsonl, statusOf } from "./publish/ingest.ts";
 import { runReview } from "./review/index.ts";
+import type { Rejection } from "./review/index.ts";
 import { createPiRunner } from "./review/pi.ts";
 import { resolveBase } from "./scope/base.ts";
 import type { EventInfo } from "./scope/base.ts";
@@ -24,7 +26,17 @@ import { dropKey, load, required, resetState, save, setOutput, stateFile, storeK
 
 type InitState = { nonce: string; config: InitConfig; startedAt: number; head: string; event: EventInfo };
 type L0State = { findings: Finding[] };
-type AiState = { nonce: string; findings: Finding[]; patches: Patch[]; usage: Usage; rejected: number };
+type AiState = {
+    nonce: string;
+    findings: Finding[];
+    patches: Patch[];
+    usage: Usage;
+    rejected: number;
+    complete: boolean;
+    errors: string[];
+    notReviewed: string[];
+    rejections: Rejection[];
+};
 
 const LOCAL_CONFIG: InitConfig = {
     repo: "local",
@@ -32,7 +44,7 @@ const LOCAL_CONFIG: InitConfig = {
     l0Only: true,
     api: "openai-completions",
     models: { finder: "", verifier: "" },
-    limits: { contextWindow: 0, maxTokens: 0, maxCandidates: 0 },
+    limits: { contextWindow: 0, maxTokens: 0, maxCandidates: 0, maxRunUsd: null },
     pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     suppressions: [],
 };
@@ -81,7 +93,7 @@ export function stepScope(root: string): ContextScope {
     const { base } = state.event;
     const changes = changedFiles(root, base, state.head);
     const snapshot = worktreeSnapshot(root);
-    const scope = computeScope(snapshot, loadConfig(root), changes, base, state.head, state.config.refIndex);
+    const scope = computeScope(snapshot, loadConfig(root), changes, base, state.head);
     save(root, SCOPE_FILE, scope);
     setOutput("empty", scope.contexts.length === 0 ? "true" : "false");
     return scope;
@@ -103,17 +115,61 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
     }
     const run = await createPiRunner(root, state.config, apiKey);
     const diff = diffText(root, scope.base, scope.head);
-    const result = await runReview(state.config, scope, { run, diff, patchFiles: (patch) => patchFiles(root, patch) });
+    const result = await runReview(state.config, scope, {
+        run,
+        diff,
+        patchFiles: (patch) => patchFiles(root, patch),
+        readFile: (path) => readTracked(root, path),
+    });
     writeFileSync(stateFile(root, SESSION_FILE), sessionsToJsonl(result.transcripts), UTF8);
-    const { findings, patches, usage, rejected } = result;
-    const ai: AiState = { nonce: state.nonce, findings, patches, usage, rejected };
+    const { findings, patches, usage, rejected, complete, errors, notReviewed, rejections } = result;
+    const ai: AiState = {
+        nonce: state.nonce,
+        findings,
+        patches,
+        usage,
+        rejected,
+        complete,
+        errors,
+        notReviewed,
+        rejections,
+    };
+    for (const error of errors) {
+        process.stderr.write(`review: ${error}\n`);
+    }
     save(root, AI_FILE, ai);
     return ai;
 }
 
-function safePatchBranch(root: string, head: string, report: ReviewReport): string | undefined {
+function aiStage(ai: AiState): string {
+    const parts = [`${ai.findings.length} confirmed`, `${ai.rejected} rejected`];
+    if (ai.notReviewed.length) {
+        parts.push(`not reviewed (candidate limit): ${ai.notReviewed.join(", ")}`);
+    }
+    if (!ai.complete) {
+        parts.push("incomplete: " + ai.errors.join("; "));
+    }
+    return parts.join(", ");
+}
+
+const UNREVIEWED_CAUSES = new Set(["budget", "config"]);
+
+/** Context files come from the reviewed commit via git, never the filesystem: no .git, no symlink targets. */
+function readTracked(root: string, path: string): string | undefined {
+    if (path.split("/").includes(".git")) {
+        return undefined;
+    }
+    const entry = tryGit(root, ["ls-tree", "HEAD", "--", path]) ?? "";
+    // Mode 120000 is a symlink: its blob is a target path that may point outside the repository.
+    if (!entry.startsWith("100644 blob ") && !entry.startsWith("100755 blob ")) {
+        return undefined;
+    }
+    return showFile(root, "HEAD", path);
+}
+
+function safePatchBranch(root: string, head: string, report: ReviewReport, target: GithubTarget): string | undefined {
     try {
-        return pushPatchBranch(root, head, report.patches);
+        return pushPatchBranch(root, head, report.patches, target);
     } catch (error) {
         // The patch branch is optional; ingest and comments must still happen.
         process.stderr.write(`patch branch skipped: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -130,13 +186,16 @@ export async function stepPublish(root: string): Promise<number> {
     const stored = load<AiState>(root, AI_FILE);
     // Only AI output produced by this run's review step counts; anything else is ignored.
     const ai = stored?.nonce === state.nonce ? stored : undefined;
-    const complete = scope !== undefined && (!reviewExpected(state, scope) || ai !== undefined);
+    // Budget or provider problems mean the range was never reviewed: report incomplete so last_sha stays put.
+    const skippedReview = state.config.l0Only && UNREVIEWED_CAUSES.has(state.config.l0Cause ?? "");
+    const complete = scope !== undefined && !skippedReview && (!reviewExpected(state, scope) || ai?.complete === true);
     const report = buildReport({
         repo: state.config.repo,
         base: state.event.base,
         head: state.head,
         findings: [...l0.findings, ...(ai?.findings ?? [])],
         patches: ai?.patches ?? [],
+        rejections: ai?.rejections ?? [],
         usage: ai?.usage ?? EMPTY_USAGE,
         durationMs: Date.now() - state.startedAt,
         stages: {
@@ -145,7 +204,7 @@ export async function stepPublish(root: string): Promise<number> {
             ai: state.config.l0Only
                 ? "L0 only: " + (state.config.reason ?? "disabled")
                 : ai
-                  ? `${ai.rejected} rejected`
+                  ? aiStage(ai)
                   : complete
                     ? "nothing in scope"
                     : "incomplete: review did not finish",
@@ -153,7 +212,7 @@ export async function stepPublish(root: string): Promise<number> {
     });
     writeReport(root, report);
     const target = githubTarget();
-    const patchBranch = target ? safePatchBranch(root, state.head, report) : undefined;
+    const patchBranch = target ? safePatchBranch(root, state.head, report, target) : undefined;
     const endpoint = process.env[ENV.endpoint];
     const token = process.env[ENV.token];
     let overviewUrl: string | undefined;

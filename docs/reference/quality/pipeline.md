@@ -38,7 +38,7 @@ workflow_call (业务仓库调用, 本仓库自身不跑)
 | `pnpm typecheck` | code / typecheck | 所有包与 `scripts/quality` 的 tsc strict |
 | `pnpm format:check` | code / format | prettier, 4 空格, 行宽 120 |
 | `pnpm l0` | docs / context-l0 | 本仓库自己的上下文 L0 检查 |
-| `pnpm doc-links` | docs / doc-links | 默认与 origin/main 的 merge-base 比较, 可加 `-- --base <ref>` |
+| `pnpm doc-links` | docs / doc-links | 与 origin/main 的 merge-base 比较, 含未提交与未跟踪文件; 有 finding 时退出 1, 可作 `&&` 门禁; 可加 `-- --base <ref>` |
 | `pnpm test` | tests | 所有包的单元测试与 quality 自身测试 |
 | `pnpm build` | build | 构建总览页 |
 
@@ -57,10 +57,10 @@ workflow_call (业务仓库调用, 本仓库自身不跑)
 
 | 组 | 任务 ID | 命令 | 验证内容 | 失败条件 |
 |---|---|---|---|---|
-| code | typecheck | `pnpm -r typecheck && tsc -p scripts/quality` | context-cr, cf-admin Worker, 总览页, Pages Functions, 部署脚本, quality 脚本全部 tsc strict, 无未用变量, 仅可擦除语法 | 任一类型错误 |
+| code | typecheck | `pnpm typecheck` (即 `pnpm -r typecheck && tsc -p scripts/quality`; `pnpm -r` 不含根包, 所以 CI 必须调用根脚本) | context-cr, cf-admin Worker, 总览页, Pages Functions, 部署脚本, quality 脚本全部 tsc strict, 无未用变量, 仅可擦除语法 | 任一类型错误 |
 | code | format | `pnpm format:check` | prettier 格式 | 任一文件未格式化 |
 | docs | context-l0 | `node context-cr/src/cli.ts l0 --format findings` | 下面 L0 规则表 | 新 Error |
-| docs | doc-links | `node scripts/quality/doc-links/index.ts` | 被监视路径变更时关联文档同步变更 (HX-DOCLINK) | 漏改文档, 映射里的文档或前缀已不存在 |
+| docs | doc-links | `node scripts/quality/doc-links/index.ts --format findings` | 被监视路径变更时关联文档同步变更 (HX-DOCLINK) | 漏改文档, 映射里的文档或前缀已不存在 |
 | build | pages-build | `pnpm --filter cf-admin build` | 总览页能用 Vite 构建, 输出写到 `HX_QUALITY_BUILD` | 构建失败 |
 | tests | 见下表 | 由影响图选择 | 单元与集成测试 | 任一选中测试失败 |
 | compatibility | (无) | | 尚无已发布的 Worker 或 D1 schema, 记为不适用 | |
@@ -71,8 +71,8 @@ workflow_call (业务仓库调用, 本仓库自身不跑)
 
 | 测试 ID | 命令 | 覆盖 |
 |---|---|---|
-| context-cr:unit | `pnpm --filter context-cr test` | L0 六条规则正反例, scope 计算 (祖先链, 反向引用, 改名删除, 空范围零模型调用), finder/verifier 流程与抑制, 补丁只改被报告文件, 补丁冲突与非 ASCII 路径, incomplete 状态, 真实 pi SDK 直连本地 OpenAI 兼容端点并计费 |
-| cf-admin:unit | `pnpm --filter cf-admin test` | /init 鉴权与 L0 降级, /runs 校验顺序与 R2 补偿清理, 状态推导, 预算计费 (含 PR 与缓存 token), last_sha 只随完整 push 推进, 反馈回流抑制表, provider 校验与保留旧值, 仓库名大小写与 409, Access 失败关闭 |
+| context-cr:unit | `pnpm --filter context-cr test` | L0 六条规则正反例, scope 计算 (祖先链, 反向引用, 改名删除, 空范围零模型调用), 审查 agent (分批, 带行号上下文, 确定性闸门, verifier 补丁判定, 会话失败保留用量, 运行预算与运行时限导致 incomplete, 候选上限只计通过闸门的候选, 不可读文件), git 只读工具拒绝 .git 与越界路径, 补丁只能是单文件纯文本修改 (冲突, 非 ASCII 与含制表符路径), /init 严格解析, 真实 pi SDK 直连本地 OpenAI 兼容端点并计费, 模型 500 被识别为会话失败 |
+| cf-admin:unit | `pnpm --filter cf-admin test` | /init 鉴权, L0 降级与剩余预算, /runs 校验顺序与 R2 补偿清理, 状态推导, 预算计费 (含 PR 与缓存 token), last_sha 只随完整 push 推进, 反馈回流抑制表, provider, 仓库与 /runs 字段校验 (非法即 400, 省略保留旧值), 状态由服务端推导, l0Cause 与旧数据非法上限降级, 仓库名大小写与 409, Access 失败关闭与畸形断言 |
 | quality:unit | `node --test scripts/quality/doc-links/index.test.ts` | HX-DOCLINK 漏改, 改名, 失效映射 |
 
 ## L0 规则 (context-cr)
@@ -94,10 +94,11 @@ workflow_call (业务仓库调用, 本仓库自身不跑)
 
 | 监视路径前缀 | 必须同步的文档 |
 |---|---|
-| `scripts/quality/`, quality 工作流 (前缀 .github/workflows/quality-), `.agents/skills/hx-agent-code/`, `context-cr/src/l0/`, `.hx-context-review.json`, `.prettierrc.json`, `.prettierignore`, `tsconfig.base.json` | 本文 |
+| `scripts/quality/`, quality 工作流 (前缀 .github/workflows/quality-), `.agents/skills/hx-agent-code/`, `context-cr/src/l0/`, `.hx-context-review.json`, `.prettierrc.json`, `.prettierignore`, `tsconfig.base.json`, 各包的 tsconfig.json | 本文 |
 | `.github/workflows/deploy-cf.yml`, `cf-admin/scripts/deploy.ts` | [deploy-cf.md](../../tutorials/deploy-cf.md) |
 | `context-cr/src/contract/` | [report-contract.md](../report-contract.md) |
-| `.github/workflows/review.yml` | [context-cr.md](../../architecture/context-cr.md) |
+| `.github/workflows/review.yml`, `context-cr/src/` 下的 steps.ts, state.ts, cli.ts, publish/, init/ | [context-cr.md](../../architecture/context-cr.md) |
+| `context-cr/src/review/`, `context-cr/src/scope/` | [agent-review.md](../../architecture/agent-review.md) |
 
 新增一类"改了 X 就必须改文档 Y"的约束时, 在 links.json 加一项, 同时更新上表. 确实不需要改文档的特例, 按 hx-agent-code 基线流程把该 finding 写入 `scripts/quality/baseline.json` 并写明原因与批准人.
 

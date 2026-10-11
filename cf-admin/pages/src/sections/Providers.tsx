@@ -36,9 +36,12 @@ function readForm(form: HTMLFormElement, known: Provider[]): Parsed {
     if (!NAME.test(name)) {
         return { error: "name: letters, digits, '.', '_' or '-' only" };
     }
-    const input: Partial<ProviderInput> = {
-        api: text("api") === "anthropic-messages" ? "anthropic-messages" : "openai-completions",
-    };
+    const input: Partial<ProviderInput> = {};
+    // Empty select = keep the stored protocol on update (the Worker defaults a new provider to openai-completions).
+    const api = text("api");
+    if (api === "openai-completions" || api === "anthropic-messages") {
+        input.api = api;
+    }
     if (text("apiUrl")) {
         input.apiUrl = text("apiUrl");
     }
@@ -60,8 +63,9 @@ function readForm(form: HTMLFormElement, known: Provider[]): Parsed {
             continue;
         }
         const value = Number(raw);
-        if (!Number.isFinite(value) || value < 0) {
-            return { error: `${label}: must be a non-negative number` };
+        const integer = key === "contextWindow" || key === "maxTokens";
+        if (integer ? !Number.isSafeInteger(value) || value < 1 : !Number.isFinite(value) || value < 0) {
+            return { error: `${label}: must be ${integer ? "a positive integer" : "a non-negative number"}` };
         }
         input[key] = value;
     }
@@ -118,7 +122,8 @@ export function Providers({ providers, onSave }: Props) {
             <form onSubmit={submit} style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
                 <input name="name" placeholder="name, e.g. default" required />
                 <input name="apiUrl" placeholder="https://api.example.com/v1" size={32} />
-                <select name="api" defaultValue="openai-completions">
+                <select name="api" defaultValue="">
+                    <option value="">API: keep (new: openai-completions)</option>
                     <option value="openai-completions">openai-completions</option>
                     <option value="anthropic-messages">anthropic-messages</option>
                 </select>

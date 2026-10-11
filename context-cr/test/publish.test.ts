@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { headSha, patchFiles } from "../src/git.ts";
+import { headSha, isPlainEdit, patchFiles } from "../src/git.ts";
 import { pushPatchBranch } from "../src/publish/github.ts";
 import { statusOf } from "../src/publish/ingest.ts";
 
@@ -65,4 +65,22 @@ test("an unfinished AI stage is reported as incomplete, never passed", () => {
     assert.equal(statusOf(counts, false, false), "incomplete");
     assert.equal(statusOf({ ...counts, error: 1, blocking: 1 }, false, false), "failed");
     assert.equal(statusOf(counts, false), "passed");
+});
+
+test("a path containing a tab is kept whole, so it cannot pass as the reported file", () => {
+    const work = repo();
+    writeFileSync(join(work, "AGENTS.md\tother"), "# a\n\nEntry is `src/old.ts`.\n");
+    const diff = fix("src/new.ts")
+        .replace("--- a/AGENTS.md", '--- "a/AGENTS.md\\tother"')
+        .replace("+++ b/AGENTS.md", '+++ "b/AGENTS.md\\tother"');
+    assert.deepEqual(patchFiles(work, diff), ["AGENTS.md\tother"]);
+});
+
+test("only plain single-file text edits are accepted as patches", () => {
+    const edit = fix("src/new.ts");
+    assert.equal(isPlainEdit(edit), true);
+    assert.equal(isPlainEdit("diff --git a/AGENTS.md b/AGENTS.md\nold mode 100644\nnew mode 100755\n"), false);
+    assert.equal(isPlainEdit("diff --git a/AGENTS.md b/AGENTS.md\ndeleted file mode 100644\n" + edit), false);
+    assert.equal(isPlainEdit("diff --git a/AGENTS.md b/AGENTS.md\nnew file mode 120000\n" + edit), false);
+    assert.equal(isPlainEdit(edit + edit), false);
 });

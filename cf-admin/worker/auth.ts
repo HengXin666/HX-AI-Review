@@ -60,6 +60,10 @@ type AccessHeader = { kid?: string; alg?: string };
 type AccessClaims = { aud?: string | string[]; exp?: number; email?: string };
 type Parsed = { header: AccessHeader; claims: AccessClaims; signature: Uint8Array; signed: string };
 
+function isObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** Malformed base64 or JSON in the assertion means "not authenticated"; only parsing is caught here. */
 function parseAssertion(token: string): Parsed | null {
     const [head, payload, signature] = token.split(".");
@@ -67,10 +71,16 @@ function parseAssertion(token: string): Parsed | null {
         return null;
     }
     try {
-        const decode = (part: string) => JSON.parse(new TextDecoder().decode(fromBase64url(part)));
+        const decode = (part: string) => JSON.parse(new TextDecoder().decode(fromBase64url(part))) as unknown;
+        const header = decode(head);
+        const claims = decode(payload);
+        // Valid JSON is not a valid JWT: null, arrays or scalars are unauthenticated, not a 500.
+        if (!isObject(header) || !isObject(claims)) {
+            return null;
+        }
         return {
-            header: decode(head) as AccessHeader,
-            claims: decode(payload) as AccessClaims,
+            header: header as AccessHeader,
+            claims: claims as AccessClaims,
             signature: fromBase64url(signature),
             signed: head + "." + payload,
         };

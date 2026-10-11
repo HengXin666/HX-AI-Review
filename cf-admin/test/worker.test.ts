@@ -127,3 +127,11 @@ test("admin API fails closed without an Access identity", async () => {
     assert.equal((await call("GET", "/api/overview")).status, 403);
     assert.equal((await call("POST", "/api/repos", { name: "o/r" })).status, 403);
 });
+
+test("an Access assertion that decodes to JSON null is unauthenticated, not a 500", async () => {
+    const part = (value: unknown) => btoa(JSON.stringify(value)).replace(/=+$/, "");
+    const request = new Request(ORIGIN + "/api/overview", {
+        headers: { "cf-access-jwt-assertion": `${part(null)}.${part({})}.c2ln` },
+    });
+    assert.equal(await verifyAccess(request, "aud", "team.example"), null);
+});

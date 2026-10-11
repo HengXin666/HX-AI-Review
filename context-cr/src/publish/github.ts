@@ -30,7 +30,29 @@ async function call(target: GithubTarget, method: string, path: string, body?: u
 }
 
 /** Push confirmed, applicable patches as one commit on hx-ctx/patch-<sha>; never touches the reviewed branch. */
-export function pushPatchBranch(root: string, head: string, patches: Patch[]): string | undefined {
+/**
+ * The reviewed checkout keeps no credentials (persist-credentials: false), so .git/config never holds the
+ * token the model tools could read. The push passes it through the environment for this one command.
+ */
+function pushAuth(target: GithubTarget | undefined): Record<string, string> | undefined {
+    if (!target) {
+        return undefined;
+    }
+    const server = (process.env[ENV.githubServerUrl] ?? "https://github.com").replace(/\/+$/, "");
+    const basic = Buffer.from("x-access-token:" + target.token).toString("base64");
+    return {
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: `http.${server}/.extraheader`,
+        GIT_CONFIG_VALUE_0: "AUTHORIZATION: basic " + basic,
+    };
+}
+
+export function pushPatchBranch(
+    root: string,
+    head: string,
+    patches: Patch[],
+    target?: GithubTarget,
+): string | undefined {
     const usable = patches.filter((item) => item.applies);
     if (!usable.length) {
         return undefined;
@@ -64,7 +86,7 @@ export function pushPatchBranch(root: string, head: string, patches: Patch[]): s
             "-m",
             `docs(context): apply hx-context-review patch for ${head.slice(0, 12)}`,
         ]);
-        git(root, ["push", "--force", "origin", "HEAD:refs/heads/" + branch]);
+        git(root, ["push", "--force", "origin", "HEAD:refs/heads/" + branch], undefined, pushAuth(target));
     } finally {
         git(root, ["switch", "--detach", head]);
     }

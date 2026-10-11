@@ -19,7 +19,7 @@ hx-context-review 的 runner 侧. 由 [review.yml](../.github/workflows/review.y
 |---|---|
 | `HX_CTX_ENDPOINT` | CF Worker 基础 URL |
 | `HX_CTX_TOKEN` | 每仓一个的访问令牌, 只用于 /init 与 /runs |
-| `HX_CTX_API_KEY` | 可选, 设置时优先于 key 文件 (key 文件照样删除). review 仍需要一次非 L0 的 init 状态, 所以本地流程是: 设好 HX_CTX_ENDPOINT/HX_CTX_TOKEN 跑 init, 再跑 review |
+| `HX_CTX_API_KEY` | 可选, 设置时优先于 key 文件 (key 文件照样删除). review 仍需要一次非 L0 的 init 状态, 所以本地流程是: 设好 HX_CTX_ENDPOINT, HX_CTX_TOKEN 与 GITHUB_REPOSITORY=owner/repo 跑 init, 再跑 review. 本地终端不处理 `::add-mask::`, 所以只有 GitHub Actions 里才输出它 |
 | `RUNNER_TEMP` | Actions 自带, 状态目录的根 |
 | `GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `GITHUB_EVENT_PATH` | Actions 自带, 用于范围计算, 推补丁和评论 |
 

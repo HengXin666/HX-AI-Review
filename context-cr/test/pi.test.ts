@@ -4,8 +4,10 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import type { InitConfig } from "../src/init/client.ts";
-import { createPiRunner } from "../src/review/pi.ts";
-import { reportFindingTool } from "../src/review/tools.ts";
+import { join } from "node:path";
+import { SessionError } from "../src/review/agent.ts";
+import { createPiRunner, failureOf } from "../src/review/pi.ts";
+import { repoTools, reportFindingTool } from "../src/review/tools.ts";
 import type { Candidate } from "../src/review/tools.ts";
 
 function chunk(delta: Record<string, unknown>, finish: string | null = null): string {
@@ -66,7 +68,7 @@ test("pi runner reaches api_url directly and executes report_finding", async () 
         apiUrl: `http://127.0.0.1:${port}/v1`,
         api: "openai-completions",
         models: { finder: "finder-model", verifier: "verifier-model" },
-        limits: { contextWindow: 32000, maxTokens: 1024, maxCandidates: 3 },
+        limits: { contextWindow: 32000, maxTokens: 1024, maxCandidates: 3, maxRunUsd: null },
         pricing: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
         suppressions: [],
     };
@@ -79,6 +81,7 @@ test("pi runner reaches api_url directly and executes report_finding", async () 
             system: "test system",
             prompt: "review",
             tools: [reportFindingTool(sink, 3)],
+            timeoutMs: 60000,
         });
         assert.equal(sink.length, 1);
         assert.equal(sink[0].path, "AGENTS.md");
@@ -93,4 +96,56 @@ test("pi runner reaches api_url directly and executes report_finding", async () 
     } finally {
         server.close();
     }
+});
+
+test("a provider error ends the session with a SessionError that keeps the transcript", async () => {
+    const server = createServer((req, res) => {
+        req.resume();
+        req.on("end", () => {
+            res.writeHead(500, { "content-type": "application/json" });
+            res.end(JSON.stringify({ error: { message: "upstream down" } }));
+        });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const config: InitConfig = {
+        repo: "o/r",
+        enabled: true,
+        l0Only: false,
+        apiUrl: `http://127.0.0.1:${port}/v1`,
+        api: "openai-completions",
+        models: { finder: "m", verifier: "m" },
+        limits: { contextWindow: 32000, maxTokens: 1024, maxCandidates: 3, maxRunUsd: null },
+        pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        suppressions: [],
+    };
+    try {
+        const run = await createPiRunner(process.cwd(), config, "sk-test");
+        const request = { role: "finder" as const, model: "m", system: "s", prompt: "p", tools: [], timeoutMs: 60000 };
+        await assert.rejects(run(request), (error: unknown) => {
+            assert.ok(error instanceof SessionError);
+            assert.match(error.message, /ended with error/);
+            assert.ok(error.partial.transcript.length >= 1);
+            return true;
+        });
+    } finally {
+        server.close();
+    }
+});
+
+test("failureOf: only a normal stop counts as success", () => {
+    assert.equal(failureOf([{ role: "assistant", stopReason: "stop" }]), "");
+    assert.match(failureOf([{ role: "assistant", stopReason: "length" }]), /token limit/);
+    assert.match(failureOf([{ role: "user" }]), /no assistant message/);
+});
+
+test("repository tools see only tracked files at HEAD, never .git or paths outside", () => {
+    const tools = Object.fromEntries(repoTools(join(process.cwd(), "..")).map((tool) => [tool.name, tool]));
+    assert.match(tools.read.execute({ path: "AGENTS.md", limit: 2 }), /^1\| /);
+    assert.match(tools.read.execute({ path: ".git/config" }), /Refused/);
+    assert.match(tools.read.execute({ path: "../etc/passwd" }), /Refused/);
+    assert.match(tools.read.execute({ path: "/etc/passwd" }), /Refused/);
+    assert.ok(tools.find.execute({ pattern: "**/AGENTS.md" }).includes("context-cr/AGENTS.md"));
+    assert.ok(tools.ls.execute({}).includes("context-cr/"));
+    assert.ok(tools.grep.execute({ pattern: "hx-context-review", path: "README.md" }).startsWith("README.md:"));
 });

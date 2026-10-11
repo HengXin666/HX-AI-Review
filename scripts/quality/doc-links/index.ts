@@ -1,5 +1,6 @@
 // HX-DOCLINK checker: a change to a watched path must change its linked doc in the same range.
 // Reads the hx-agent-code scope (HX_QUALITY_SCOPE) in CI; locally pass --base <ref> (default origin/main).
+// Default output is human-readable with exit 1 on any finding; --format findings prints JSON for the runner.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -86,9 +87,11 @@ function git(root: string, args: string[]): string {
     return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
 }
 
+/** Committed, staged, unstaged and untracked changes since the merge-base, so a local run sees the worktree. */
 function localChanges(root: string, base: string): Change[] {
     const from = git(root, ["merge-base", base, "HEAD"]).trim();
     const out = git(root, ["diff", "--name-status", "-z", "-M", from]).split("\0");
+    const untracked = git(root, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean);
     const changes: Change[] = [];
     for (let index = 0; index < out.length - 1;) {
         const status = out[index++];
@@ -98,7 +101,7 @@ function localChanges(root: string, base: string): Change[] {
             changes.push({ status, path: out[index++] });
         }
     }
-    return changes;
+    return [...changes, ...untracked.map((path) => ({ status: "A", path }))];
 }
 
 function main(): void {
@@ -113,9 +116,19 @@ function main(): void {
     if (!existsSync(configPath)) {
         throw new Error(`${CONFIG} is missing`);
     }
-    const tracked = git(root, ["ls-files", "-z"]).split("\0").filter(Boolean);
-    const findings = checkLinks(parseLinks(readFileSync(configPath, "utf8")), changes, tracked);
-    process.stdout.write(JSON.stringify(findings, null, 4) + "\n");
+    // Files as they exist now: tracked or untracked-but-not-ignored, minus anything deleted in the worktree.
+    const listed = git(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]).split("\0");
+    const present = [...new Set(listed.filter(Boolean))].filter((path) => existsSync(join(root, path)));
+    const findings = checkLinks(parseLinks(readFileSync(configPath, "utf8")), changes, present);
+    if (args.includes("--format") && args[args.indexOf("--format") + 1] === "findings") {
+        process.stdout.write(JSON.stringify(findings, null, 4) + "\n");
+        return;
+    }
+    for (const item of findings) {
+        process.stdout.write(`error [${item.ruleId}] ${item.path}: ${item.message}\n`);
+    }
+    process.stdout.write(`${RULE}: ${findings.length} finding(s)\n`);
+    process.exitCode = findings.length ? 1 : 0;
 }
 
 if (process.argv[1] && process.argv[1].endsWith("doc-links/index.ts")) {

@@ -11,7 +11,12 @@
                 ".hx-context-review.json",
                 ".prettierrc.json",
                 ".prettierignore",
-                "tsconfig.base.json"
+                "tsconfig.base.json",
+                "context-cr/tsconfig.json",
+                "cf-admin/tsconfig.json",
+                "cf-admin/pages/tsconfig.json",
+                "cf-admin/scripts/tsconfig.json",
+                "cf-admin/pages/functions/tsconfig.json"
             ],
             "reason": "quality pipeline, checks and rule coverage"
         },
@@ -27,8 +32,20 @@
         },
         {
             "doc": "docs/architecture/context-cr.md",
-            "watch": [".github/workflows/review.yml"],
+            "watch": [
+                ".github/workflows/review.yml",
+                "context-cr/src/steps.ts",
+                "context-cr/src/state.ts",
+                "context-cr/src/cli.ts",
+                "context-cr/src/publish/",
+                "context-cr/src/init/"
+            ],
             "reason": "reusable review workflow steps"
+        },
+        {
+            "doc": "docs/architecture/agent-review.md",
+            "watch": ["context-cr/src/review/", "context-cr/src/scope/"],
+            "reason": "AI review agent design: roles, inputs, gates, limits"
         }
     ]
 }

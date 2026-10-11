@@ -11,9 +11,11 @@ import {
     SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { ResourceLoader, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { PI_PROVIDER, READ_ONLY_TOOLS } from "../constants.ts";
+import { PI_PROVIDER, SESSION_MAX_TURNS } from "../constants.ts";
 import type { InitConfig } from "../init/client.ts";
+import { SessionError } from "./agent.ts";
 import type { AgentRequest, AgentResult, AgentRunner, ToolSpec } from "./agent.ts";
+import { repoTools } from "./tools.ts";
 
 /** No discovery: the reviewed repo's AGENTS, skills and extensions are data under review, not instructions. */
 function isolatedLoader(system: string): ResourceLoader {
@@ -43,6 +45,22 @@ function toPiTool(spec: ToolSpec): ToolDefinition {
             details: {},
         }),
     }) as unknown as ToolDefinition;
+}
+
+/** Why the last assistant message ended abnormally, or "" when it finished normally. */
+export function failureOf(messages: readonly unknown[]): string {
+    const last = [...messages].reverse().find((item) => (item as { role?: string }).role === "assistant") as
+        { stopReason?: string; errorMessage?: string } | undefined;
+    if (!last) {
+        return "produced no assistant message";
+    }
+    if (last.stopReason === "error" || last.stopReason === "aborted") {
+        return `ended with ${last.stopReason}${last.errorMessage ? ": " + last.errorMessage : ""}`;
+    }
+    if (last.stopReason === "length") {
+        return "hit the output token limit";
+    }
+    return "";
 }
 
 export async function createPiRunner(root: string, config: InitConfig, apiKey: string): Promise<AgentRunner> {
@@ -76,7 +94,9 @@ export async function createPiRunner(root: string, config: InitConfig, apiKey: s
         if (!model) {
             throw new Error(`model ${request.model} is not registered for ${PI_PROVIDER}`);
         }
-        const customTools = request.tools.map(toPiTool);
+        // pi's built-in read/grep/find/ls resolve any path; the review uses git-backed tools limited to tracked files.
+        const specs = [...repoTools(root), ...request.tools];
+        const customTools = specs.map(toPiTool);
         const { session } = await createAgentSession({
             cwd: root,
             agentDir: home,
@@ -84,7 +104,7 @@ export async function createPiRunner(root: string, config: InitConfig, apiKey: s
             thinkingLevel: "off",
             modelRuntime: runtime,
             resourceLoader: isolatedLoader(request.system),
-            tools: [...READ_ONLY_TOOLS, ...request.tools.map((tool) => tool.name)],
+            tools: specs.map((tool) => tool.name),
             customTools,
             sessionManager: SessionManager.inMemory(root),
             settingsManager: SettingsManager.inMemory({
@@ -92,10 +112,26 @@ export async function createPiRunner(root: string, config: InitConfig, apiKey: s
                 retry: { enabled: true, maxRetries: 2 },
             }),
         });
+        // A looping or hanging session is aborted; the caller treats the throw as an incomplete review.
+        let turns = 0;
+        let stopped = "";
+        const stop = (why: string) => {
+            stopped ||= why;
+            void session.abort();
+        };
+        const unsubscribe = session.subscribe((event) => {
+            if (event.type === "turn_end" && ++turns >= SESSION_MAX_TURNS) {
+                stop(`exceeded ${SESSION_MAX_TURNS} turns`);
+            }
+        });
+        const timer = setTimeout(
+            () => stop(`timed out after ${Math.round(request.timeoutMs / 1000)}s`),
+            request.timeoutMs,
+        );
         try {
             await session.prompt(request.prompt);
             const stats = session.getSessionStats();
-            return {
+            const result: AgentResult = {
                 usage: {
                     input: stats.tokens.input,
                     output: stats.tokens.output,
@@ -105,7 +141,15 @@ export async function createPiRunner(root: string, config: InitConfig, apiKey: s
                 },
                 transcript: [...session.messages],
             };
+            // pi does not throw on provider errors: it ends the run with an error stop reason instead.
+            const failure = stopped || failureOf(session.messages);
+            if (failure) {
+                throw new SessionError(`${request.role} session ${failure}`, result);
+            }
+            return result;
         } finally {
+            clearTimeout(timer);
+            unsubscribe();
             session.dispose();
         }
     };

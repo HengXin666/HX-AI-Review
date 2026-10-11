@@ -3,31 +3,48 @@ import { HttpError, field, json, month, readJson } from "../http.ts";
 import type { Deps } from "../http.ts";
 import type { RepoPatch } from "../store/port.ts";
 import { verdictOf } from "./feedback.ts";
-import { handleProviderPut } from "./providers.ts";
+import { PROVIDER_NAME, handleProviderPut } from "./providers.ts";
 
 const LIST_LIMIT = 50;
 const REPO_NAME = /^[\w.-]+\/[\w.-]+$/;
 const CONFLICT = "repository already registered (names are case-insensitive)";
 
+/** Omitted fields stay untouched; a present field with a wrong type or value is a 400, never ignored. */
 function repoPatch(body: Record<string, unknown>): RepoPatch {
     const patch: RepoPatch = {};
-    if (typeof body.enabled === "boolean") {
+    const bad = (key: string, rule: string) => new HttpError(400, `${key} must be ${rule}`);
+    if (body.enabled !== undefined) {
+        if (typeof body.enabled !== "boolean") {
+            throw bad("enabled", "a boolean");
+        }
         patch.enabled = body.enabled;
     }
-    if (body.mode === "full" || body.mode === "l0") {
+    if (body.mode !== undefined) {
+        if (body.mode !== "full" && body.mode !== "l0") {
+            throw bad("mode", '"full" or "l0"');
+        }
         patch.mode = body.mode;
     }
-    if (typeof body.provider === "string" && body.provider) {
+    if (body.provider !== undefined) {
+        if (typeof body.provider !== "string" || !PROVIDER_NAME.test(body.provider)) {
+            throw bad("provider", "a provider name (letters, digits, '.', '_', '-')");
+        }
         patch.provider = body.provider;
     }
-    if (typeof body.finderModel === "string") {
-        patch.finderModel = body.finderModel;
+    for (const key of ["finderModel", "verifierModel"] as const) {
+        if (body[key] !== undefined) {
+            if (typeof body[key] !== "string") {
+                throw bad(key, "a string");
+            }
+            patch[key] = body[key];
+        }
     }
-    if (typeof body.verifierModel === "string") {
-        patch.verifierModel = body.verifierModel;
-    }
-    if (typeof body.budgetUsd === "number" && body.budgetUsd >= 0) {
-        patch.budgetUsd = body.budgetUsd;
+    if (body.budgetUsd !== undefined) {
+        const budget = body.budgetUsd;
+        if (typeof budget !== "number" || !Number.isFinite(budget) || budget < 0) {
+            throw bad("budgetUsd", "a non-negative number (0 means no cap)");
+        }
+        patch.budgetUsd = budget;
     }
     return patch;
 }

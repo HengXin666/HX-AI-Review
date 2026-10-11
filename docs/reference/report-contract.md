@@ -55,9 +55,12 @@ hx-context-review 与 hx-agent-code 使用同一份报告契约: 同样的 Findi
     "patches": [{ "fingerprint": "...", "diff": "diff --git ...", "applies": true }],
     "usage": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "cost": 0 },
     "durationMs": 0,
-    "stages": { "base": "push before", "scope": "2 context file(s)", "ai": "1 rejected" }
+    "stages": { "base": "push before", "scope": "2 context file(s)", "ai": "1 confirmed, 1 rejected" },
+    "rejections": [{ "path": "AGENTS.md", "title": "...", "reason": "verifier: still accurate" }]
 }
 ```
+
+`rejections` 是被确定性闸门或 verifier 驳回的 AI 候选及理由, 用于调提示词, 不计入 counts. `stages.ai` 写明确认数, 驳回数, 因候选上限或无法读取而未审的文件, 以及 incomplete 的原因. Markdown 版本在开头列出每个 stage 与驳回数.
 
 Markdown 版本与 GitHub 评论遵守同一展示规则: 问题合计超过 10 条只列数量与类型统计, 不超过 10 条才逐条展开.
 

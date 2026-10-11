@@ -17,10 +17,13 @@ export type ReviewReport = {
     usage: Usage;
     durationMs: number;
     stages: Record<string, string>;
+    /** AI candidates dropped by the deterministic gate or the verifier, with the reason. */
+    rejections: { path: string; title: string; reason: string }[];
 };
 
-export type ReportInput = Omit<ReviewReport, "tool" | "version" | "ok" | "counts" | "findings"> & {
+export type ReportInput = Omit<ReviewReport, "tool" | "version" | "ok" | "counts" | "findings" | "rejections"> & {
     findings: Finding[];
+    rejections?: ReviewReport["rejections"];
 };
 
 /** Only new Error findings block, matching hx-agent-code baseline semantics. */
@@ -36,6 +39,7 @@ export function buildReport(input: ReportInput): ReviewReport {
         tool: TOOL_NAME,
         version: TOOL_VERSION,
         ...input,
+        rejections: input.rejections ?? [],
         findings,
         ok: findings.length === 0,
         counts: { error, warning: findings.length - error, blocking },
@@ -77,6 +81,8 @@ export function renderMarkdown(report: ReviewReport): string {
         `Range: ${report.base.slice(0, 12)}..${report.head.slice(0, 12)}`,
         `Errors: ${report.counts.error}, warnings: ${report.counts.warning}, blocking: ${report.counts.blocking}`,
         `Patches: ${report.patches.filter((item) => item.applies).length}`,
+        ...Object.entries(report.stages).map(([stage, value]) => `Stage ${stage}: ${escapeMd(value)}`),
+        `Rejected AI candidates: ${report.rejections.length}`,
         "",
     ];
     return head.join("\n") + summarize(report.findings);

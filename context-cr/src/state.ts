@@ -47,8 +47,11 @@ export function assertSafeSecret(value: string): void {
  */
 export function storeKey(root: string, apiKey: string): void {
     assertSafeSecret(apiKey);
-    // Workflow commands decode %25, %0D, %0A; escape % so the registered mask equals the real key.
-    process.stdout.write(`::add-mask::${apiKey.replaceAll("%", "%25")}\n`);
+    // Only GitHub Actions understands ::add-mask::; anywhere else the line would print the key.
+    // Workflow commands decode %25, %0D, %0A, so escape % to make the mask equal the real key.
+    if (process.env.GITHUB_ACTIONS === "true") {
+        process.stdout.write(`::add-mask::${apiKey.replaceAll("%", "%25")}\n`);
+    }
     writeFileSync(stateFile(root, KEY_FILE), apiKey, { encoding: UTF8, mode: 0o600 });
 }
 

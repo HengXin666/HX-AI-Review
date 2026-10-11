@@ -12,7 +12,7 @@
             "tasks": [
                 {
                     "id": "typecheck",
-                    "command": ["pnpm", "-r", "typecheck"],
+                    "command": ["pnpm", "typecheck"],
                     "format": "exit"
                 },
                 {
@@ -31,7 +31,7 @@
                 },
                 {
                     "id": "doc-links",
-                    "command": ["node", "scripts/quality/doc-links/index.ts"],
+                    "command": ["node", "scripts/quality/doc-links/index.ts", "--format", "findings"],
                     "format": "findings"
                 }
             ]

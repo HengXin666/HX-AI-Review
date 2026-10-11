@@ -1,5 +1,3 @@
-import type { RefIndex } from "../scope/index.ts";
-
 export type ModelApi = "openai-completions" | "anthropic-messages";
 export type Suppression = { fingerprint: string; reason: string };
 
@@ -10,15 +8,17 @@ export type InitConfig = {
     /** True when the repo is disabled or over budget: only L0 runs, no model credentials sent. */
     l0Only: boolean;
     reason?: string;
+    /** Machine-readable reason for l0Only: disabled and mode are intentional; budget and config leave the range unreviewed. */
+    l0Cause?: "disabled" | "mode" | "budget" | "config";
     apiUrl?: string;
     api: ModelApi;
     models: { finder: string; verifier: string };
-    limits: { contextWindow: number; maxTokens: number; maxCandidates: number };
+    /** maxRunUsd: remaining monthly budget, null when the repo has no cap. */
+    limits: { contextWindow: number; maxTokens: number; maxCandidates: number; maxRunUsd: number | null };
     /** USD per million tokens, so pi reports real cost and the monthly budget can trip. */
     pricing: { input: number; output: number; cacheRead: number; cacheWrite: number };
     lastSha?: string;
     suppressions: Suppression[];
-    refIndex?: RefIndex;
 };
 
 export type InitResponse = InitConfig & { apiKey?: string };
@@ -30,8 +30,58 @@ function text(value: unknown, field: string): string {
     return value;
 }
 
-function price(value: unknown): number {
-    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+// A malformed /init is a hard error: silently defaulting a price, limit or protocol would mis-bill or misroute.
+function price(value: unknown, field: string): number {
+    if (value === undefined) {
+        return 0;
+    }
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+        throw new Error(`init response field ${field} must be a non-negative number`);
+    }
+    return value;
+}
+
+function count(value: unknown, field: string, fallback: number): number {
+    if (value === undefined) {
+        return fallback;
+    }
+    if (!Number.isSafeInteger(value) || (value as number) < 1) {
+        throw new Error(`init response field ${field} must be a positive integer`);
+    }
+    return value as number;
+}
+
+const CAUSES = ["disabled", "mode", "budget", "config"] as const;
+
+function apiOf(value: unknown, l0Only: boolean): ModelApi {
+    if (value === "openai-completions" || value === "anthropic-messages") {
+        return value;
+    }
+    if (l0Only && value === undefined) {
+        return "openai-completions";
+    }
+    throw new Error(`init response field api is not a supported protocol: ${String(value)}`);
+}
+
+/** Model prices must be present when a model will be called, or the run budget could never trip. */
+function modelPrice(value: unknown, field: string, l0Only: boolean): number {
+    if (value === undefined && !l0Only) {
+        throw new Error(`init response field ${field} is required`);
+    }
+    return price(value, field);
+}
+
+function suppressionsOf(value: unknown): Suppression[] {
+    if (value === undefined) {
+        return [];
+    }
+    const valid = (item: unknown): item is Suppression =>
+        typeof (item as Suppression | null)?.fingerprint === "string" &&
+        typeof (item as Suppression).reason === "string";
+    if (!Array.isArray(value) || !value.every(valid)) {
+        throw new Error("init response field suppressions must be a list of { fingerprint, reason }");
+    }
+    return value;
 }
 
 export function parseInit(raw: unknown): InitResponse {
@@ -45,25 +95,27 @@ export function parseInit(raw: unknown): InitResponse {
         enabled: data.enabled !== false,
         l0Only,
         reason: typeof data.reason === "string" ? data.reason : undefined,
-        api: data.api === "anthropic-messages" ? "anthropic-messages" : "openai-completions",
+        l0Cause: CAUSES.find((cause) => cause === data.l0Cause),
+        api: apiOf(data.api, l0Only),
         models: {
             finder: l0Only ? String(models.finder ?? "") : text(models.finder, "models.finder"),
             verifier: l0Only ? String(models.verifier ?? "") : text(models.verifier, "models.verifier"),
         },
         limits: {
-            contextWindow: Number(limits.contextWindow ?? 128000),
-            maxTokens: Number(limits.maxTokens ?? 8192),
-            maxCandidates: Number(limits.maxCandidates ?? 12),
+            // An L0-only config carries zeros here; they are never used.
+            contextWindow: l0Only ? 0 : count(limits.contextWindow, "limits.contextWindow", 128000),
+            maxTokens: l0Only ? 0 : count(limits.maxTokens, "limits.maxTokens", 8192),
+            maxCandidates: l0Only ? 0 : count(limits.maxCandidates, "limits.maxCandidates", 12),
+            maxRunUsd: limits.maxRunUsd == null ? null : price(limits.maxRunUsd, "limits.maxRunUsd"),
         },
         pricing: {
-            input: price(pricing.input),
-            output: price(pricing.output),
-            cacheRead: price(pricing.cacheRead),
-            cacheWrite: price(pricing.cacheWrite),
+            input: modelPrice(pricing.input, "pricing.input", l0Only),
+            output: modelPrice(pricing.output, "pricing.output", l0Only),
+            cacheRead: price(pricing.cacheRead, "pricing.cacheRead"),
+            cacheWrite: price(pricing.cacheWrite, "pricing.cacheWrite"),
         },
         lastSha: typeof data.lastSha === "string" ? data.lastSha : undefined,
-        suppressions: Array.isArray(data.suppressions) ? (data.suppressions as InitResponse["suppressions"]) : [],
-        refIndex: (data.refIndex as RefIndex | undefined) ?? undefined,
+        suppressions: suppressionsOf(data.suppressions),
     };
     if (!l0Only) {
         result.apiUrl = text(data.apiUrl, "apiUrl");

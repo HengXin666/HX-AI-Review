@@ -69,3 +69,67 @@ test("cache tokens are charged at cache prices", async () => {
     );
     assert.equal(store.repos[0].spentUsd, 10);
 });
+
+test("present-but-invalid repo fields are a 400, never silently ignored", async () => {
+    const { call } = await registered();
+    for (const body of [
+        { budgetUsd: "5" },
+        { budgetUsd: -1 },
+        { mode: "fast" },
+        { enabled: "yes" },
+        { provider: "a b" },
+    ]) {
+        assert.equal((await call("PATCH", "/api/repos/o/r", body)).status, 400, JSON.stringify(body));
+    }
+    assert.equal((await call("POST", "/api/repos", { name: "x/y", budgetUsd: "ten" })).status, 400);
+});
+
+test("provider api protocol: unknown is a 400, omitted keeps the stored one; token limits are integers", async () => {
+    const { call, store } = await registered();
+    await call("PUT", "/api/providers/default", { api: "anthropic-messages" });
+    await call("PUT", "/api/providers/default", { priceInput: 5 });
+    assert.equal((await store.provider("default"))?.api, "anthropic-messages");
+    assert.equal((await call("PUT", "/api/providers/default", { api: "openai-chat" })).status, 400);
+    assert.equal((await call("PUT", "/api/providers/default", { maxTokens: 2048.5 })).status, 400);
+});
+
+test("runner status cannot override derived failed or incomplete; init carries the remaining budget", async () => {
+    const { call, token, store } = await registered();
+    await call(
+        "POST",
+        "/runs",
+        { repo: "o/r", sha: "x", event: "push", findings: [], complete: false, status: "passed" },
+        token,
+    );
+    assert.equal(store.runs.at(-1)?.status, "incomplete");
+    assert.equal(
+        (await call("POST", "/runs", { repo: "o/r", sha: "y", findings: [], status: "great" }, token)).status,
+        400,
+    );
+    const init = (await (await call("GET", "/init", undefined, token)).json()) as { limits: { maxRunUsd: number } };
+    assert.equal(init.limits.maxRunUsd, 1);
+});
+
+test("/runs rejects coerced values and keeps last_sha when the runner says incomplete", async () => {
+    const { call, token, store } = await registered();
+    const run = { repo: "o/r", sha: "a", event: "push", findings: [] };
+    for (const extra of [{ complete: "false" }, { usage: { cost: "0.5" } }, { prNumber: "12" }, { durationMs: -1 }]) {
+        assert.equal((await call("POST", "/runs", { ...run, ...extra }, token)).status, 400, JSON.stringify(extra));
+    }
+    await call("POST", "/runs", { ...run, status: "incomplete" }, token);
+    assert.equal(store.runs.at(-1)?.status, "incomplete");
+    assert.equal((await store.repoByName("o/r"))?.lastSha ?? null, null);
+});
+
+test("init: a spent budget and invalid stored limits are machine-readable L0 causes", async () => {
+    const { call, token, store } = await registered();
+    const read = async () => (await (await call("GET", "/init", undefined, token)).json()) as Record<string, unknown>;
+    const provider = (await store.provider("default"))!;
+    await store.upsertProvider({ ...provider, maxTokens: 0 });
+    assert.equal((await read()).l0Cause, "config");
+    await store.upsertProvider(provider);
+    await store.charge((await store.repoByName("o/r"))!.id, 5, new Date().toISOString().slice(0, 7));
+    const init = await read();
+    assert.equal(init.l0Cause, "budget");
+    assert.equal(init.apiKey, undefined);
+});

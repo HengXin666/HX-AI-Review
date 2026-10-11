@@ -43,6 +43,8 @@ jobs:
               with:
                   fetch-depth: 0
                   ref: ${{ github.event.pull_request.head.sha || github.sha }}
+                  # No token in .git/config: the model's tools run in this tree. publish passes GITHUB_TOKEN per push.
+                  persist-credentials: false
             - name: Checkout hx-context-review tool
               uses: actions/checkout@v4
               with:

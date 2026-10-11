@@ -34,6 +34,14 @@ export const BUDGET_MAX_BYTES = 65536;
 export const DETAIL_LIMIT = 10;
 export const DIFF_MAX_BYTES = 60000;
 export const DEFAULT_MAX_CANDIDATES = 12;
+/** Context bytes shown to one finder session; more files are split into further sessions. */
+export const CONTEXT_BATCH_BYTES = 40000;
+export const EXCERPT_RADIUS = 15;
+/** Per model session: a session that loops or hangs is aborted and the run reported incomplete. */
+export const SESSION_MAX_TURNS = 40;
+export const SESSION_TIMEOUT_MS = 8 * 60 * 1000;
+/** Whole AI review, kept under the 30-minute job timeout so publish still runs and spend is still charged. */
+export const RUN_DEADLINE_MS = 20 * 60 * 1000;
 
 export const RULE = {
     context: "HC-CONTEXT",
@@ -65,6 +73,5 @@ export const ENV = {
 export const COMMENT_MARKER = "<!-- hx-context-review -->";
 export const PATCH_BRANCH_PREFIX = "hx-ctx/patch-";
 export const PI_PROVIDER = "hx-ctx";
-export const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
 export const REPORT_FINDING_TOOL = "report_finding";
 export const REPORT_VERDICT_TOOL = "report_verdict";

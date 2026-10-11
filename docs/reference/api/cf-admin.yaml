@@ -43,6 +43,10 @@ components:
                 enabled: { type: boolean }
                 l0Only: { type: boolean }
                 reason: { type: string }
+                l0Cause:
+                    type: string
+                    enum: [disabled, mode, budget, config]
+                    description: Present when l0Only. budget and config mean the range was not reviewed.
                 apiUrl: { type: string, description: Present only when l0Only is false }
                 apiKey: { type: string, description: Present only when l0Only is false; runner masks it }
                 api: { type: string, enum: [openai-completions, anthropic-messages] }
@@ -57,6 +61,9 @@ components:
                         contextWindow: { type: integer }
                         maxTokens: { type: integer }
                         maxCandidates: { type: integer }
+                        maxRunUsd:
+                            type: [number, "null"]
+                            description: Remaining monthly budget in USD; null when the repo has no cap
                 pricing:
                     type: object
                     description: USD per million tokens
@@ -85,10 +92,13 @@ components:
                 status:
                     type: string
                     enum: [passed, warned, failed, skipped, incomplete]
-                    description: Derived from findings when omitted
+                    description: >-
+                        Always derived by the server: failed (blocking new Error), incomplete (complete is false or
+                        the runner sends incomplete), warned or passed by the findings. The runner's skipped is kept
+                        only when there are no findings. An unknown value is a 400.
                 complete:
                     type: boolean
-                    description: false when the AI stage did not finish; last_sha then stays put
+                    description: false when the AI stage did not finish (session failure, run budget or deadline, or L0-only because of budget or config); last_sha then stays put. Must be a boolean when present.
                     default: true
                 l0Only: { type: boolean }
                 durationMs: { type: integer }
@@ -97,6 +107,8 @@ components:
                     properties:
                         input: { type: integer }
                         output: { type: integer }
+                        cacheRead: { type: integer }
+                        cacheWrite: { type: integer }
                         cost: { type: number }
                 counts:
                     type: object
@@ -114,10 +126,10 @@ components:
             type: object
             properties:
                 id: { type: integer }
-                name: { type: string, description: owner/repo, case-insensitive }
+                name: { type: string, description: "owner/repo, case-insensitive" }
                 enabled: { type: boolean }
                 mode: { type: string, enum: [full, l0] }
-                provider: { type: string }
+                provider: { type: string, pattern: "^[A-Za-z0-9._-]+$" }
                 finderModel: { type: string }
                 verifierModel: { type: string }
                 budgetUsd: { type: number, description: Monthly cap in USD; 0 means no cap }
@@ -129,7 +141,7 @@ components:
             properties:
                 enabled: { type: boolean }
                 mode: { type: string, enum: [full, l0] }
-                provider: { type: string }
+                provider: { type: string, pattern: "^[A-Za-z0-9._-]+$" }
                 finderModel: { type: string }
                 verifierModel: { type: string }
                 budgetUsd: { type: number, minimum: 0 }
@@ -145,15 +157,20 @@ components:
             description: Create requires apiUrl, keySecret, priceInput and priceOutput; update keeps omitted fields
             properties:
                 apiUrl: { type: string }
-                api: { type: string, enum: [openai-completions, anthropic-messages] }
+                api:
+                    {
+                        type: string,
+                        enum: [openai-completions, anthropic-messages],
+                        description: Omitted keeps the stored protocol (new providers default to openai-completions),
+                    }
                 keySecret:
                     {
                         type: string,
                         pattern: "^[A-Z][A-Z0-9_]{0,63}$",
                         description: Name of the Worker secret holding the key,
                     }
-                contextWindow: { type: integer, minimum: 0 }
-                maxTokens: { type: integer, minimum: 0 }
+                contextWindow: { type: integer, minimum: 1 }
+                maxTokens: { type: integer, minimum: 1 }
                 priceInput: { type: number, minimum: 0, description: USD per million input tokens }
                 priceOutput: { type: number, minimum: 0, description: USD per million output tokens }
                 priceCacheRead: { type: number, minimum: 0, description: USD per million cache-read tokens }
@@ -169,7 +186,7 @@ components:
             type: object
             required: [token]
             properties:
-                token: { type: string, description: Plaintext HX_CTX_TOKEN, returned only once }
+                token: { type: string, description: "Plaintext HX_CTX_TOKEN, returned only once" }
         Feedback:
             type: object
             required: [verdict]
@@ -209,7 +226,10 @@ paths:
                                 properties:
                                     runId: { type: string }
                                     overviewUrl: { type: string }
-                "400": { description: Invalid payload }
+                "400":
+                    {
+                        description: "Invalid payload: a missing required field or a present field with a wrong type or range",
+                    }
     /feedback:
         post:
             operationId: postFeedback
@@ -277,7 +297,7 @@ paths:
                                 properties:
                                     repo: { $ref: "#/components/schemas/Repo" }
                                     token: { type: string }
-                "400": { description: Invalid name }
+                "400": { description: "Invalid name, or a present field with a wrong type or value" }
                 "409": { description: Repository already registered; names compare case-insensitively }
     /api/repos/{owner}/{repo}:
         patch:
@@ -295,6 +315,7 @@ paths:
                     content:
                         application/json:
                             schema: { type: object, properties: { repo: { $ref: "#/components/schemas/Repo" } } }
+                "400": { description: A present field with a wrong type or value }
                 "404": { description: Unknown repo }
     /api/repos/{owner}/{repo}/rotate-token:
         post:
@@ -323,7 +344,10 @@ paths:
                 "200":
                     description: Saved
                     content: { application/json: { schema: { type: object, properties: { ok: { type: boolean } } } } }
-                "400": { description: Invalid name, secret name or number, or a missing price on create }
+                "400":
+                    description: >-
+                        Invalid name or secret name, a negative price, a non-integer or non-positive contextWindow or
+                        maxTokens, an unknown api protocol, or a missing input/output price on create
     /api/findings/{id}/patch:
         get:
             operationId: getPatch

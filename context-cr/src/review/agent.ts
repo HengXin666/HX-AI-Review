@@ -19,6 +19,8 @@ export type AgentRequest = {
     system: string;
     prompt: string;
     tools: ToolSpec[];
+    /** Wall-clock limit for this session; the runner aborts and throws a SessionError past it. */
+    timeoutMs: number;
 };
 
 export type AgentResult = {
@@ -28,3 +30,13 @@ export type AgentResult = {
 };
 
 export type AgentRunner = (request: AgentRequest) => Promise<AgentResult>;
+
+/** A session that failed after spending tokens: the usage still counts and the transcript is still stored. */
+export class SessionError extends Error {
+    readonly partial: AgentResult;
+
+    constructor(message: string, partial: AgentResult) {
+        super(message);
+        this.partial = partial;
+    }
+}

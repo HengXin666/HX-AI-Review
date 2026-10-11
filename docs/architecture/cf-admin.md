@@ -49,7 +49,9 @@ R2 键: `runs/<owner>/<repo>/<runId>/report.md`, `report.json`, `sessions.jsonl`
 
 每次运行 (包括 PR) 都计入本月花费: 费用取 runner 上报值与 `输入/输出/缓存读/缓存写 token 数 x provider 对应单价` 的较大值; 预算月份不同则先归零. last_sha 只在 `event` 为 push, 没有 PR 编号且 `complete` 不为 false 时推进, 因为该游标代表已完整审核过的被 push 历史.
 
-provider 名只允许字母, 数字, `.`, `_`, `-`; 新建 provider 必须显式给出输入/输出单价 (免费填 0), 更新时省略的字段保留原值. 同名仓库 (大小写不敏感) 重复登记返回 409, 并发创建撞唯一约束同样映射为 409.
+provider 名只允许字母, 数字, `.`, `_`, `-`; 新建 provider 必须显式给出输入/输出单价 (免费填 0), 更新时省略的字段 (包括 API 协议) 保留原值; 未知协议, 负数或非整数的 token 上限返回 400. 仓库的 enabled, mode, provider, 模型名, budgetUsd 同理: 省略不改, 出现但类型或取值不对返回 400, 不会被静默忽略. `POST /runs` 同样严格: complete, l0Only 必须是布尔, usage 各项与 durationMs 必须是非负数, prNumber 与 finding 行号必须是正整数, 字符串字段必须是字符串, 否则 400. status 一律由服务端推导 (failed, incomplete, warned, passed), runner 只能在没有发现时标 skipped; runner 发 incomplete 时同样不推进 last_sha.
+
+`/init` 的 `limits.maxRunUsd` 是本月剩余预算 (无上限时为 null), runner 达到它就不再开新的模型会话. 只下发 L0 时附带 `l0Cause`: disabled, mode (主动选择), budget, config (区间未审, runner 报 incomplete). 旧数据里 contextWindow 或 maxTokens 不是正整数的 provider 也按 config 降级, 不会把非法上限发给模型. 同名仓库 (大小写不敏感) 重复登记返回 409, 并发创建撞唯一约束同样映射为 409.
 
 ## 分层
 

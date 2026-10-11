@@ -14,9 +14,45 @@ const STATUSES = new Set(["passed", "warned", "failed", "skipped", "incomplete"]
 type InFinding = Omit<FindingRow, "id" | "runId" | "repoId" | "patchKey" | "status"> & { origin: string };
 type InPatch = { fingerprint: string; diff: string };
 
-function num(value: unknown): number {
-    const result = typeof value === "number" ? value : 0;
-    return Number.isFinite(result) && result >= 0 ? result : 0;
+// Omitted fields take their default; a present field of the wrong type or range is a 400, never coerced.
+function num(value: unknown, what: string): number {
+    if (value === undefined) {
+        return 0;
+    }
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+        throw new HttpError(400, `${what} must be a non-negative number`);
+    }
+    return value;
+}
+
+function int(value: unknown, what: string, min: number): number | null {
+    if (value === undefined || value === null) {
+        return null;
+    }
+    if (!Number.isSafeInteger(value) || (value as number) < min) {
+        throw new HttpError(400, `${what} must be an integer >= ${min}`);
+    }
+    return value as number;
+}
+
+function text(value: unknown, what: string): string | null {
+    if (value === undefined || value === null) {
+        return null;
+    }
+    if (typeof value !== "string") {
+        throw new HttpError(400, `${what} must be a string`);
+    }
+    return value;
+}
+
+function flag(value: unknown, what: string, fallback: boolean): boolean {
+    if (value === undefined) {
+        return fallback;
+    }
+    if (typeof value !== "boolean") {
+        throw new HttpError(400, `${what} must be a boolean`);
+    }
+    return value;
 }
 
 function object(value: unknown, what: string): Record<string, unknown> {
@@ -39,13 +75,20 @@ function findings(value: unknown): InFinding[] {
             ruleId: field(item, "ruleId"),
             severity: item.severity,
             path: field(item, "path"),
-            line: Math.max(1, Math.trunc(num(item.line))),
+            line: int(item.line, "finding line", 1) ?? 1,
             message: field(item, "message"),
-            evidence: String(item.evidence ?? ""),
+            evidence: text(item.evidence, "finding evidence") ?? "",
             fingerprint: field(item, "fingerprint"),
-            origin: item.origin === "historical" ? "historical" : "new",
+            origin: originOf(item.origin),
         };
     });
+}
+
+function originOf(value: unknown): string {
+    if (value === undefined || value === "new" || value === "historical") {
+        return (value as string | undefined) ?? "new";
+    }
+    throw new HttpError(400, "finding origin must be new or historical");
 }
 
 function patches(value: unknown): InPatch[] {
@@ -61,28 +104,42 @@ function patches(value: unknown): InPatch[] {
         .map((item) => ({ fingerprint: field(item, "fingerprint"), diff: String(item.diff) }));
 }
 
-/** Status and counts derive from the findings when the runner omits them (API contract allows it). */
+/**
+ * Status derives from facts: blocking Errors are failed, an unfinished run (complete false, or the runner
+ * saying incomplete) is incomplete, otherwise warned or passed by the findings. The only label the runner
+ * adds is skipped (nothing in scope), and only when there are no findings.
+ */
 function derive(body: Record<string, unknown>, list: InFinding[]) {
     const errors = list.filter((item) => item.severity === "error");
     const blocking = errors.filter((item) => item.origin === "new").length;
     const counts = { error: errors.length, warning: list.length - errors.length };
-    const incomplete = body.complete === false;
-    const fallback = blocking ? "failed" : incomplete ? "incomplete" : list.length ? "warned" : "passed";
-    const status = typeof body.status === "string" && STATUSES.has(body.status) ? body.status : fallback;
-    return { counts, status };
+    if (body.status !== undefined && (typeof body.status !== "string" || !STATUSES.has(body.status))) {
+        throw new HttpError(400, `status must be one of ${[...STATUSES].join(", ")}`);
+    }
+    const incomplete = !flag(body.complete, "complete", true) || body.status === "incomplete";
+    const status = blocking
+        ? "failed"
+        : incomplete
+          ? "incomplete"
+          : list.length
+            ? "warned"
+            : body.status === "skipped"
+              ? "skipped"
+              : "passed";
+    return { counts, status, incomplete };
 }
 
 /** Charge from token counts with the provider's prices, never less than what the runner reported. */
 function costOf(usage: Record<string, unknown>, provider: ProviderRow | null): number {
-    const reported = num(usage.cost);
+    const reported = num(usage.cost, "usage.cost");
     if (!provider) {
         return reported;
     }
     const tokens =
-        num(usage.input) * provider.priceInput +
-        num(usage.output) * provider.priceOutput +
-        num(usage.cacheRead) * provider.priceCacheRead +
-        num(usage.cacheWrite) * provider.priceCacheWrite;
+        num(usage.input, "usage.input") * provider.priceInput +
+        num(usage.output, "usage.output") * provider.priceOutput +
+        num(usage.cacheRead, "usage.cacheRead") * provider.priceCacheRead +
+        num(usage.cacheWrite, "usage.cacheWrite") * provider.priceCacheWrite;
     const computed = tokens / MILLION;
     return Math.max(reported, computed);
 }
@@ -101,9 +158,17 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
     const list = findings(body.findings);
     const fixes = patches(body.patches);
     const usage = body.usage === undefined ? {} : object(body.usage, "usage");
-    const { counts, status } = derive(body, list);
-    const prNumber = typeof body.prNumber === "number" ? body.prNumber : null;
+    const { counts, status, incomplete } = derive(body, list);
+    const prNumber = int(body.prNumber, "prNumber", 1);
+    for (const key of ["input", "output", "cacheRead", "cacheWrite", "cost"]) {
+        num(usage[key], "usage." + key);
+    }
     const costUsd = costOf(usage, await deps.store.provider(repo.provider));
+    const blobs = {
+        reportMarkdown: text(body.reportMarkdown, "reportMarkdown") ?? "",
+        reportJson: text(body.reportJson, "reportJson") ?? "{}",
+        sessionsJsonl: text(body.sessionsJsonl, "sessionsJsonl") ?? "",
+    };
 
     const runId = deps.id();
     const prefix = `runs/${repo.name}/${runId}/`;
@@ -118,18 +183,18 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
         id: runId,
         repoId: repo.id,
         sha,
-        baseSha: String(body.baseSha ?? ""),
-        event: String(body.event ?? "unknown"),
+        baseSha: text(body.baseSha, "baseSha") ?? "",
+        event: text(body.event, "event") ?? "unknown",
         prNumber,
         status,
-        l0Only: body.l0Only === true,
+        l0Only: flag(body.l0Only, "l0Only", false),
         errors: counts.error,
         warnings: counts.warning,
-        inputTokens: num(usage.input),
-        outputTokens: num(usage.output),
+        inputTokens: num(usage.input, "usage.input"),
+        outputTokens: num(usage.output, "usage.output"),
         costUsd,
-        durationMs: num(body.durationMs),
-        patchBranch: typeof body.patchBranch === "string" ? body.patchBranch : null,
+        durationMs: num(body.durationMs, "durationMs"),
+        patchBranch: text(body.patchBranch, "patchBranch"),
         createdAt: now.toISOString(),
     };
     // Baseline-approved (historical) findings stay in the R2 report but never re-enter the pending queue.
@@ -150,10 +215,10 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
             await put(key, patch.diff, DIFF);
             patchKeys.set(patch.fingerprint, key);
         }
-        await put(prefix + "report.md", String(body.reportMarkdown ?? ""), MD);
-        await put(prefix + "report.json", String(body.reportJson ?? "{}"), JSON_TYPE);
-        if (typeof body.sessionsJsonl === "string" && body.sessionsJsonl) {
-            await put(prefix + "sessions.jsonl", body.sessionsJsonl, NDJSON);
+        await put(prefix + "report.md", blobs.reportMarkdown, MD);
+        await put(prefix + "report.json", blobs.reportJson, JSON_TYPE);
+        if (blobs.sessionsJsonl) {
+            await put(prefix + "sessions.jsonl", blobs.sessionsJsonl, NDJSON);
         }
         await deps.store.insertRun(run, rows());
     } catch (error) {
@@ -163,7 +228,7 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
     }
     await deps.store.charge(repo.id, costUsd, month(now));
     // last_sha tracks the pushed history only, and only once the AI stage really finished for this range.
-    if (run.event === "push" && prNumber === null && body.complete !== false) {
+    if (run.event === "push" && prNumber === null && !incomplete) {
         await deps.store.setLastSha(repo.id, sha);
     }
     const overviewUrl = deps.overviewUrl ? `${deps.overviewUrl.replace(/\/$/, "")}/#/runs/${runId}` : undefined;
