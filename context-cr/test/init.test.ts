@@ -25,3 +25,17 @@ test("malformed init values fail instead of silently defaulting", () => {
     assert.throws(() => parseInit({ ...ok, pricing: { input: -1 } }), /pricing.input/);
     assert.throws(() => parseInit({ ...ok, limits: { ...ok.limits, maxTokens: 10.5 } }), /maxTokens/);
 });
+
+test("a missing run budget fails closed; only an explicit null means no cap", () => {
+    const { maxRunUsd: _drop, ...limits } = ok.limits;
+    assert.throws(() => parseInit({ ...ok, limits }), /maxRunUsd is required/);
+    // L0-only runs never open a session, so there the missing field is harmless.
+    assert.equal(parseInit({ ...ok, l0Only: true, limits }).limits.maxRunUsd, null);
+});
+
+test("an unknown or missing l0Cause fails closed as config, so the range is not marked reviewed", () => {
+    const l0 = { ...ok, l0Only: true, apiKey: undefined, apiUrl: undefined };
+    assert.equal(parseInit({ ...l0, l0Cause: "budget" }).l0Cause, "budget");
+    assert.equal(parseInit({ ...l0, l0Cause: "something-new" }).l0Cause, "config");
+    assert.equal(parseInit(l0).l0Cause, "config");
+});

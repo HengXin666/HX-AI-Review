@@ -139,13 +139,20 @@ test("failureOf: only a normal stop counts as success", () => {
     assert.match(failureOf([{ role: "user" }]), /no assistant message/);
 });
 
-test("repository tools see only tracked files at HEAD, never .git or paths outside", () => {
+test("repository tools see only tracked files at HEAD, never .git or paths outside", async () => {
     const tools = Object.fromEntries(repoTools(join(process.cwd(), "..")).map((tool) => [tool.name, tool]));
-    assert.match(tools.read.execute({ path: "AGENTS.md", limit: 2 }), /^1\| /);
-    assert.match(tools.read.execute({ path: ".git/config" }), /Refused/);
-    assert.match(tools.read.execute({ path: "../etc/passwd" }), /Refused/);
-    assert.match(tools.read.execute({ path: "/etc/passwd" }), /Refused/);
-    assert.ok(tools.find.execute({ pattern: "**/AGENTS.md" }).includes("context-cr/AGENTS.md"));
-    assert.ok(tools.ls.execute({}).includes("context-cr/"));
-    assert.ok(tools.grep.execute({ pattern: "hx-context-review", path: "README.md" }).startsWith("README.md:"));
+    assert.match(await tools.read.execute({ path: "AGENTS.md", limit: 2 }), /^1\| /);
+    assert.match(await tools.read.execute({ path: ".git/config" }), /Refused/);
+    assert.match(await tools.read.execute({ path: "../etc/passwd" }), /Refused/);
+    assert.match(await tools.read.execute({ path: "/etc/passwd" }), /Refused/);
+    assert.ok((await tools.find.execute({ pattern: "**/AGENTS.md" })).includes("context-cr/AGENTS.md"));
+    assert.ok((await tools.ls.execute({})).includes("context-cr/"));
+    assert.ok((await tools.grep.execute({ pattern: "hx-context-review", path: "README.md" })).startsWith("README.md:"));
+});
+
+test("grep keeps a HEAD: that is part of the matched line, stripping only git's revision prefix", async () => {
+    const tools = Object.fromEntries(repoTools(join(process.cwd(), "..")).map((tool) => [tool.name, tool]));
+    // publish/github.ts pushes to "HEAD:refs/heads/..."; that inner HEAD: is code, not git's prefix.
+    const out = await tools.grep.execute({ pattern: "refs/heads/", path: "context-cr/src/publish/github.ts" });
+    assert.ok(out.includes("HEAD:refs/heads/"), out);
 });

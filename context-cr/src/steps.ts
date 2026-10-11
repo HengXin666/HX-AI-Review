@@ -144,7 +144,8 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
 function aiStage(ai: AiState): string {
     const parts = [`${ai.findings.length} confirmed`, `${ai.rejected} rejected`];
     if (ai.notReviewed.length) {
-        parts.push(`not reviewed (candidate limit): ${ai.notReviewed.join(", ")}`);
+        // Each entry states its own cause (unreadable, symlink, candidate limit); do not mislabel them all.
+        parts.push(`not reviewed: ${ai.notReviewed.join(", ")}`);
     }
     if (!ai.complete) {
         parts.push("incomplete: " + ai.errors.join("; "));

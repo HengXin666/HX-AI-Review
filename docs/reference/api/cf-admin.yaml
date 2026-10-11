@@ -129,7 +129,7 @@ components:
                 name: { type: string, description: "owner/repo, case-insensitive" }
                 enabled: { type: boolean }
                 mode: { type: string, enum: [full, l0] }
-                provider: { type: string, pattern: "^[A-Za-z0-9._-]+$" }
+                provider: { type: string, pattern: "^[A-Za-z0-9._-]{1,64}$" }
                 finderModel: { type: string }
                 verifierModel: { type: string }
                 budgetUsd: { type: number, description: Monthly cap in USD; 0 means no cap }
@@ -141,7 +141,7 @@ components:
             properties:
                 enabled: { type: boolean }
                 mode: { type: string, enum: [full, l0] }
-                provider: { type: string, pattern: "^[A-Za-z0-9._-]+$" }
+                provider: { type: string, pattern: "^[A-Za-z0-9._-]{1,64}$" }
                 finderModel: { type: string }
                 verifierModel: { type: string }
                 budgetUsd: { type: number, minimum: 0 }

@@ -18,6 +18,8 @@ export class FakeStore implements Store {
     findings: FindingRow[] = [];
     supp = new Map<string, Suppression>();
     feedbackLog: FeedbackInput[] = [];
+    /** ISO timestamp of the live budget claim per repo id, "" when none (see reserveBudget). */
+    reservedAt = new Map<number, string>();
 
     private strip(row?: RepoRow & { tokenHash: string }): RepoRow | null {
         if (!row) {
@@ -83,10 +85,20 @@ export class FakeStore implements Store {
     async listProviders() {
         return [...this.providers.values()];
     }
+    async reserveBudget(repoId: number, now: string, staleBefore: string) {
+        // Mirrors the conditional UPDATE: only claim when no live claim holds the row.
+        const held = this.reservedAt.get(repoId);
+        if (held && held >= staleBefore) {
+            return false;
+        }
+        this.reservedAt.set(repoId, now);
+        return true;
+    }
     async charge(repoId: number, costUsd: number, month: string) {
         const row = this.repos.find((item) => item.id === repoId)!;
         row.spentUsd = row.budgetMonth === month ? row.spentUsd + costUsd : costUsd;
         row.budgetMonth = month;
+        this.reservedAt.delete(repoId);
     }
     async setLastSha(repoId: number, sha: string) {
         this.repos.find((item) => item.id === repoId)!.lastSha = sha;

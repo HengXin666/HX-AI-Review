@@ -98,7 +98,9 @@ workflow_call (业务仓库调用, 本仓库自身不跑)
 | `.github/workflows/deploy-cf.yml`, `cf-admin/scripts/deploy.ts` | [deploy-cf.md](../../tutorials/deploy-cf.md) |
 | `context-cr/src/contract/` | [report-contract.md](../report-contract.md) |
 | `.github/workflows/review.yml`, `context-cr/src/` 下的 steps.ts, state.ts, cli.ts, publish/, init/ | [context-cr.md](../../architecture/context-cr.md) |
-| `context-cr/src/review/`, `context-cr/src/scope/` | [agent-review.md](../../architecture/agent-review.md) |
+| `context-cr/src/review/`, `context-cr/src/scope/`, `context-cr/src/constants.ts` | [agent-review.md](../../architecture/agent-review.md) |
+
+`constants.ts` 被 agent-review.md 记录 (会话轮数, 会话时长, 运行截止时间, 批次与 diff 预算), 所以改这些上限必须同步该文档.
 
 新增一类"改了 X 就必须改文档 Y"的约束时, 在 links.json 加一项, 同时更新上表. 确实不需要改文档的特例, 按 hx-agent-code 基线流程把该 finding 写入 `scripts/quality/baseline.json` 并写明原因与批准人.
 

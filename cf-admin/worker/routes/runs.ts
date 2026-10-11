@@ -25,8 +25,9 @@ function num(value: unknown, what: string): number {
     return value;
 }
 
+// Only undefined is "omitted"; an explicit null is a present-but-invalid value and gets a 400.
 function int(value: unknown, what: string, min: number): number | null {
-    if (value === undefined || value === null) {
+    if (value === undefined) {
         return null;
     }
     if (!Number.isSafeInteger(value) || (value as number) < min) {
@@ -36,13 +37,22 @@ function int(value: unknown, what: string, min: number): number | null {
 }
 
 function text(value: unknown, what: string): string | null {
-    if (value === undefined || value === null) {
+    if (value === undefined) {
         return null;
     }
     if (typeof value !== "string") {
         throw new HttpError(400, `${what} must be a string`);
     }
     return value;
+}
+
+/** Token counts and durations are integers in D1 and in the contract, so fractions are a 400. */
+function count(value: unknown, what: string): number {
+    const parsed = num(value, what);
+    if (!Number.isSafeInteger(parsed)) {
+        throw new HttpError(400, `${what} must be an integer`);
+    }
+    return parsed;
 }
 
 function flag(value: unknown, what: string, fallback: boolean): boolean {
@@ -62,6 +72,17 @@ function object(value: unknown, what: string): Record<string, unknown> {
     return value as Record<string, unknown>;
 }
 
+/** Finding lines are required and 1-based; a missing or null line is a 400, never a default. */
+function line(value: unknown): number {
+    if (value === undefined || value === null) {
+        throw new HttpError(400, "finding line is required");
+    }
+    if (!Number.isSafeInteger(value) || (value as number) < 1) {
+        throw new HttpError(400, "finding line must be an integer >= 1");
+    }
+    return value as number;
+}
+
 function findings(value: unknown): InFinding[] {
     if (!Array.isArray(value) || value.length > MAX_FINDINGS) {
         throw new HttpError(400, `findings must be an array of at most ${MAX_FINDINGS}`);
@@ -75,7 +96,8 @@ function findings(value: unknown): InFinding[] {
             ruleId: field(item, "ruleId"),
             severity: item.severity,
             path: field(item, "path"),
-            line: int(item.line, "finding line", 1) ?? 1,
+            // A missing line must fail: defaulting to 1 would file the finding against the wrong code.
+            line: line(item.line),
             message: field(item, "message"),
             evidence: text(item.evidence, "finding evidence") ?? "",
             fingerprint: field(item, "fingerprint"),
@@ -99,9 +121,18 @@ function patches(value: unknown): InPatch[] {
         throw new HttpError(400, "patches must be an array");
     }
     return value
-        .map((raw) => object(raw, "each patch"))
-        .filter((item) => item.applies === true && typeof item.diff === "string")
-        .map((item) => ({ fingerprint: field(item, "fingerprint"), diff: String(item.diff) }));
+        .map((raw) => {
+            const item = object(raw, "each patch");
+            const fingerprint = field(item, "fingerprint");
+            const diff = field(item, "diff");
+            if (typeof item.applies !== "boolean") {
+                throw new HttpError(400, "patch applies must be a boolean");
+            }
+            // A patch that does not apply is dropped on purpose; an invalid one is never accepted.
+            return { fingerprint, diff, applies: item.applies };
+        })
+        .filter((item) => item.applies)
+        .map((item) => ({ fingerprint: item.fingerprint, diff: item.diff }));
 }
 
 /**
@@ -160,9 +191,11 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
     const usage = body.usage === undefined ? {} : object(body.usage, "usage");
     const { counts, status, incomplete } = derive(body, list);
     const prNumber = int(body.prNumber, "prNumber", 1);
-    for (const key of ["input", "output", "cacheRead", "cacheWrite", "cost"]) {
-        num(usage[key], "usage." + key);
+    // Token counts are integers; usage.cost stays fractional because prices are per-million tokens.
+    for (const key of ["input", "output", "cacheRead", "cacheWrite"]) {
+        count(usage[key], "usage." + key);
     }
+    num(usage.cost, "usage.cost");
     const costUsd = costOf(usage, await deps.store.provider(repo.provider));
     const blobs = {
         reportMarkdown: text(body.reportMarkdown, "reportMarkdown") ?? "",
@@ -193,7 +226,7 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
         inputTokens: num(usage.input, "usage.input"),
         outputTokens: num(usage.output, "usage.output"),
         costUsd,
-        durationMs: num(body.durationMs, "durationMs"),
+        durationMs: count(body.durationMs, "durationMs"),
         patchBranch: text(body.patchBranch, "patchBranch"),
         createdAt: now.toISOString(),
     };

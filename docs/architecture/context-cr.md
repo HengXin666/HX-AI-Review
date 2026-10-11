@@ -14,6 +14,8 @@ runner 侧 CLI. 入口 [context-cr/src/cli.ts](../../context-cr/src/cli.ts), 步
 | `context-cr/src/review/` | `InitConfig`, `ContextScope`, diff, `AgentRunner` | 确认后的 Warning, 补丁, 用量, 会话记录 |
 | `context-cr/src/publish/` | 汇总报告 | POST /runs, 补丁分支, 评论 |
 
+`context-cr/src/init/client.ts` 对可能让运行被误判为完整的字段失败关闭: `l0Only` 时缺失或未知的 `l0Cause` 按 `config` 处理 (不能与主动选择混淆, 否则该区间会被当成已审并推进 last_sha); 非 L0 响应缺少 `limits.maxRunUsd` 时报错, 只有显式 `null` 才表示无上限, 避免单次运行超出月预算.
+
 快照只看 git 跟踪的文件, 所以 runner 在工作区里 checkout 的工具目录不会被当成被审内容. 运行状态 (init, l0, scope, ai, 会话) 放在 `RUNNER_TEMP` 下而不是被审仓库里, init 每次清空并生成 nonce; publish 只采用带同一 nonce 的 AI 结果, PR 无法通过提交文件伪造发现或补丁.
 
 ## 审核区间
@@ -66,6 +68,7 @@ skill 注入上界 = 所有 skill 的 front matter (常驻 L1) + 最大的 `conc
 - 被审仓库的 checkout 设置 `persist-credentials: false`, .git 目录的 config 里没有 token; 推补丁分支时 publish 只为那一条 `git push` 通过 `GIT_CONFIG_*` 环境变量注入 GITHUB_TOKEN.
 - 用量取 `session.getSessionStats()` 的 tokens 与 cost, 会话消息以 JSONL 入 R2.
 - review 结果带 `complete`; 会话失败或运行预算用尽时为 false, publish 据此发送 `complete: false`.
+- `steps.ts` 的 `stages.ai` 把未审文件逐条列出并自带原因 (不可读或符号链接, 候选数上限), 不再统一标注为 candidate limit; 该阶段时长上限按 workflow 传入的 `HX_CTX_STARTED_AT` 扣除前置步骤耗时.
 
 ## 回写
 

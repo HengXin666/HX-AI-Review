@@ -172,9 +172,19 @@ export class D1Store implements Store {
         ]);
     }
 
+    async reserveBudget(repoId: number, now: string, staleBefore: string) {
+        // One conditional UPDATE: the row is only claimed when no live claim holds it, so two
+        // concurrent /init requests cannot both succeed.
+        const sql = `UPDATE repos SET reserved_at = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ? AND (reserved_at = '' OR reserved_at < ?)`;
+        const result = await this.db.prepare(sql).bind(now, repoId, staleBefore).run();
+        return result.meta.changes > 0;
+    }
+
     async charge(repoId: number, costUsd: number, month: string) {
+        // Charging also releases the claim, so the next run may claim the remainder right away.
         const sql = `UPDATE repos SET spent_usd = CASE WHEN budget_month = ? THEN spent_usd + ? ELSE ? END,
-            budget_month = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`;
+            budget_month = ?, reserved_at = '', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`;
         await this.db.prepare(sql).bind(month, costUsd, costUsd, month, repoId).run();
     }
 

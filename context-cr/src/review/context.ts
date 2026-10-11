@@ -21,7 +21,10 @@ export function loadDocs(entries: ScopeEntry[], read: (path: string) => string |
         if (text === undefined) {
             unreadable.push(entry.path);
         } else {
-            docs.push({ path: entry.path, reasons: entry.reasons, lines: text.replace(/\r\n/g, "\n").split("\n") });
+            // One trailing newline is a terminator, not an extra empty line: otherwise the finder could
+            // report a line past the real end of the file and still pass the line gate.
+            const body = text.replace(/\r\n/g, "\n").replace(/\n$/, "");
+            docs.push({ path: entry.path, reasons: entry.reasons, lines: body.split("\n") });
         }
     }
     return { docs, unreadable };

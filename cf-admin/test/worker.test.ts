@@ -114,6 +114,37 @@ test("invalid findings are rejected before anything is written; status derives f
     );
 });
 
+test("null, fractional and missing required fields are 400s, never coerced defaults", async () => {
+    const { call, token } = await registered();
+    const base = { repo: "o/r", sha: "s", findings: [] };
+    const post = (body: Record<string, unknown>) => call("POST", "/runs", body, token);
+    // An explicit null is a present-but-invalid value, not an omission.
+    assert.equal((await post({ ...base, prNumber: null })).status, 400);
+    assert.equal((await post({ ...base, event: null })).status, 400);
+    assert.equal((await post({ ...base, durationMs: null })).status, 400);
+    // Token counts and durations are integers; fractions would be billed and stored in integer columns.
+    assert.equal((await post({ ...base, durationMs: 1.5 })).status, 400);
+    assert.equal((await post({ ...base, usage: { input: 1.5 } })).status, 400);
+    assert.equal((await post({ ...base, usage: { cost: 0.5 } })).status, 201);
+    // finding.line is required: a missing line must not be filed as line 1.
+    const finding = { ruleId: "HC-CONTEXT", severity: "error", path: "a/AGENTS.md", message: "m", evidence: "e" };
+    assert.equal((await post({ ...base, findings: [{ ...finding, fingerprint: "f" }] })).status, 400);
+    assert.equal((await post({ ...base, findings: [{ ...finding, fingerprint: "f", line: 2 }] })).status, 201);
+});
+
+test("patches with invalid fields are a 400; only a valid non-applying patch is dropped", async () => {
+    const { call, token, store, blobs } = await registered();
+    const base = { repo: "o/r", sha: "s", findings: [] };
+    const post = (patches: unknown[]) => call("POST", "/runs", { ...base, patches }, token);
+    assert.equal((await post([{ fingerprint: "fp", diff: "d" }])).status, 400);
+    assert.equal((await post([{ fingerprint: "fp", applies: "yes", diff: "d" }])).status, 400);
+    assert.equal((await post([{ applies: true, diff: "d" }])).status, 400);
+    // A well-formed patch that does not apply is skipped on purpose, not an error.
+    assert.equal((await post([{ fingerprint: "fp", applies: false, diff: "d" }])).status, 201);
+    assert.equal(blobs.data.size > 0, true);
+    assert.equal(store.runs[0].status, "passed");
+});
+
 test("repo names are case-insensitive and malformed Access tokens are a 403, not a 500", async () => {
     const { call, token } = await registered();
     assert.equal((await call("GET", "/init?repo=O/R", undefined, token)).status, 200);

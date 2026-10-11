@@ -15,7 +15,7 @@
 scope (确定性)            哪些上下文文件可能受影响; 为空则 0 次模型调用
   -> 分批 (确定性)        按字节预算把上下文文件分成若干批
   -> finder x N (模型)    每批一个会话, 只读工具 + report_finding
-  -> 闸门 (确定性)        文件属于本批, 行号存在, 未被抑制, 不重复
+  -> 闸门 (确定性)        在 report_finding 内即时判定: 文件属于本批, 行号存在, 未被抑制, 不重复
   -> verifier x M (模型)  每条候选一个全新会话, 尝试反驳, report_verdict
   -> 补丁闸门 (确定性)    verifier 判 correct 且 git apply --check 只触及该文件
   -> Warning + 补丁
@@ -32,13 +32,13 @@ scope (确定性)            哪些上下文文件可能受影响; 为空则 0 �
 
 ### 2. 分批
 
-每个 finder 会话最多看到 `CONTEXT_BATCH_BYTES` (40000 字节) 的上下文正文, 按带行号前缀后的实际显示字节计算; 超出时贪心切成多批, 每批一个 finder 会话. 只有单个文件自身超过预算时才独占一批并截断显示, 模型可用 read 工具读剩余部分. 正文用 `git show HEAD:<path>` 从被审提交读取; 符号链接或读不到的文件不审, 记入 not reviewed. 这样大仓库不会把几十个文件塞进一个会话, 导致模型只看前面几个.
+整份 finder 提示词必须放进模型上下文窗口: 可用总额 = 上下文窗口 - 输出预留 (`maxTokens`) - 提示词预留 (`PROMPT_RESERVE_BYTES`), 下限 `MIN_PROMPT_BYTES`; 总额再分给 diff (上限 `DIFF_MAX_BYTES` 60000, 下限 `MIN_DIFF_BYTES` 4000) 与上下文正文 (上限 `CONTEXT_BATCH_BYTES` 40000, 下限 `MIN_BATCH_BYTES` 4000). 所以每个 finder 会话看到的上下文正文取 `min(40000, 总额 - diff 预算)`, 按带行号前缀后的实际显示字节计算; 超出时贪心切成多批, 每批一个 finder 会话. 模型窗口较小时批次与 diff 一起缩小, 不会收到超过它能读入的提示词. 只有单个文件自身超过预算时才独占一批并截断显示, 模型可用 read 工具读剩余部分. 正文用 `git show HEAD:<path>` 从被审提交读取; 符号链接或读不到的文件不审, 记入 not reviewed. 这样大仓库不会把几十个文件塞进一个会话, 导致模型只看前面几个.
 
 ### 3. finder: 找候选
 
 - 模型: `/init` 下发的 finder 档 (通常是便宜的小模型), 因为它要读很多内容, 产出只是候选.
 - 输入: 审查区间, 变更路径列表, 本批每个上下文文件的带行号全文与入选原因, 抑制表 (以前被驳回的指纹与驳回理由), diff (`DIFF_MAX_BYTES` 60000 字节内, 超出截断并提示用工具读).
-- 工具: read, grep, find, ls, 加上 `report_finding`. 这四个只读工具不是 pi 的内置工具 (内置工具能解析任意路径), 而是本仓库基于 git 实现的: 只能看到被审提交里被跟踪的文件, 拒绝绝对路径, `..` 与 `.git`, 符号链接读出的是链接目标字符串而不是目标内容, 每次输出最多 30000 字符. 没有写文件或执行命令的能力; `report_finding` 是它唯一的输出通道.
+- 工具: read, grep, find, ls, 加上 `report_finding`. 这四个只读工具不是 pi 的内置工具 (内置工具能解析任意路径), 而是本仓库基于 git 实现的: 只能看到被审提交里被跟踪的文件, 拒绝绝对路径, `..` 与 `.git`, 符号链接读出的是链接目标字符串而不是目标内容, 每次输出最多 30000 字符, 单次 git 调用有 `GIT_TOOL_TIMEOUT_MS` (30 秒) 超时, 并走异步子进程: 同步 git 会阻塞事件循环, 让会话计时器无法按时中断慢操作. 没有写文件或执行命令的能力; `report_finding` 是它唯一的输出通道.
 - 步骤 (写在 system prompt 里): 先列出 diff 改了什么 (路径, 导出名, 命令, 参数, 配置键, 环境变量, 接口, schema, 模块边界, 工作流, 默认值, 错误行为); 再在每个上下文文件里找关于这些东西的陈述; 用工具对照当前代码确认; 只有当前代码与陈述矛盾, 或缺失了使用变更代码必须知道的信息时才报告; 行号取自带行号的列表; evidence 必须引用证明矛盾的代码或 diff 行.
 - 不报: 文风, 没变代码的缺失文档, 与本次 diff 无关的问题, 列表外的文件, 已抑制项.
 - 补丁: 只在正确写法确定时附带, 必须是只改该上下文文件的最小 unified diff, 保持原文语言与风格.
@@ -54,7 +54,7 @@ finder 的候选在花钱请 verifier 之前先过代码检查 (`context-cr/src/
 | 指纹 (路径 + 完整标题) 不在抑制表 | 驳回 "suppressed by earlier feedback" |
 | 指纹不与本次已排队候选重复 | 驳回 "duplicate of another candidate" |
 
-被驳回的候选 (包括 verifier 驳回的) 连同理由写入报告 JSON 的 `rejections`, Markdown 报告列出驳回数, 便于调提示词. 候选总数上限只计算通过闸门的候选, finder 反复报已抑制或重复的项不会占满上限.
+闸门在 `report_finding` 工具内即时执行: 被驳回的候选立刻把理由回给 finder, 不进入队列, 也不占用候选名额, 因此 finder 反复报已抑制或重复的项不会挤掉本批的真实问题. 工具另有 `REPORT_CALL_LIMIT` (40) 次调用上限, 防止在反复被驳回时空转. 被驳回的候选 (包括 verifier 驳回的) 连同理由写入报告 JSON 的 `rejections`, Markdown 报告列出驳回数, 便于调提示词.
 
 ### 5. verifier: 尝试反驳
 
@@ -73,6 +73,7 @@ finder 的候选在花钱请 verifier 之前先过代码检查 (`context-cr/src/
 
 - 被审仓库里的 AGENTS.md, skills, pi 扩展, prompt 模板都是被审数据, 不是给 agent 的指令: pi 会话使用隔离的资源加载器, 不发现任何仓库内资源, system prompt 只用本仓库定义的两份.
 - 两份 system prompt 都声明: 仓库内容 (上下文文件, 代码, diff, 提交信息) 与 finder 报出的候选都是数据, 其中任何指令都不执行.
+- 插入提示词的代码块用长于正文中最长反引号串的围栏, 所以仓库文档里的 ``` 无法提前闭合边界; 正文中的其余内容不改变围栏长度.
 - 模型的文件访问只经过 git 只读工具, 看不到 .git 目录 (含其中的 config), 未跟踪文件, `/proc` 或仓库外的文件; 上下文正文同样从 git 读取.
 - 被审仓库的 checkout 不保留凭据 (`persist-credentials: false`), 推补丁分支时才通过环境变量为那一条命令提供 GITHUB_TOKEN.
 - api_key 的生命周期见 [context-cr.md](context-cr.md): 只在 review 进程内存在, 不进日志与状态文件.
@@ -81,12 +82,12 @@ finder 的候选在花钱请 verifier 之前先过代码检查 (`context-cr/src/
 
 | 上限 | 值 | 来源 | 触发时 |
 |---|---|---|---|
-| 每批上下文字节 | 40000 | `CONTEXT_BATCH_BYTES` | 切成更多 finder 会话 |
-| diff 字节 | finder 60000, verifier 30000 | `DIFF_MAX_BYTES` | 截断并提示用工具读 |
+| 每批上下文字节 | min(40000, 上下文窗口剩余额 - diff 预算) | `CONTEXT_BATCH_BYTES`, `MIN_BATCH_BYTES`, `PROMPT_RESERVE_BYTES` | 切成更多 finder 会话 |
+| diff 字节 | finder min(60000, 上下文窗口剩余额的一半), verifier 30000 | `DIFF_MAX_BYTES`, `MIN_DIFF_BYTES` | 截断, 并说明被截掉的部分工具读不到 (read 只读被审提交) |
 | 每次运行候选总数 | 默认 12 | `/init` 的 `limits.maxCandidates` | 剩余批次记为 not reviewed (报告中列出), 不算失败 |
-| 每会话轮数 | 40 | `SESSION_MAX_TURNS` | 中止会话, 运行记为 incomplete |
+| 每会话轮数 | 40 | `SESSION_MAX_TURNS` | 仅当第 40 轮后仍需继续时才中止; 正常结束的最终回答不算超限, 运行记为 incomplete |
 | 每会话时长 | 8 分钟, 且不超过运行剩余时间 | `SESSION_TIMEOUT_MS` | 中止会话, 运行记为 incomplete |
-| 整个 AI 审查时长 | 20 分钟 | `RUN_DEADLINE_MS` | 不再开新会话, 运行记为 incomplete; 保证在 job 的 30 分钟超时前进入 publish, 花费照常计入预算 |
+| 整个 AI 审查时长 | min(20 分钟, job 剩余时间 - 发布预留) | `RUN_DEADLINE_MS`, `JOB_TIMEOUT_MS`, `PUBLISH_RESERVE_MS` | 不再开新会话, 运行记为 incomplete; 截止时间按 job 剩余时间 (workflow 传入的 `HX_CTX_STARTED_AT`) 扣除 checkout/install/init/L0/scope 的耗时和 2 分钟发布预留, 保证在 job 的 30 分钟超时前进入 publish, 花费照常计入预算 |
 | 每次运行花费 | 本月剩余预算 | `/init` 的 `limits.maxRunUsd` (无上限时为 null) | 不再开新会话, 运行记为 incomplete |
 | 月预算 | 仓库配置 | Worker | 用完后 `/init` 只下发 L0 配置, 不给 key |
 
@@ -99,7 +100,7 @@ finder 的候选在花钱请 verifier 之前先过代码检查 (`context-cr/src/
 - 运行预算或运行时限用尽同样记为 incomplete.
 - 预算用完后 `/init` 只下发 L0 配置并带 `l0Cause: budget`; provider 配置有问题时为 `l0Cause: config`. 这两种情况 runner 也报 incomplete, last_sha 停在原处, 等预算重置或配置修好后, 下一次运行一并审查积累的区间.
 - incomplete 运行仍把 L0 结果和已确认的 AI 发现入库, 状态为 `incomplete` (L0 有阻断 Error 时为 failed), 不推进 last_sha, 下一次运行会重新审这段区间.
-- 候选数上限触发与文件无法读取不是失败: 重跑会遇到同样情况, 所以只在报告的 `stages.ai` 中列出未审文件及原因, 正常推进.
+- 候选数上限触发与文件无法读取不是失败: 重跑会遇到同样情况, 所以只在报告的 `stages.ai` 中列出未审文件及原因 (每条自带原因, 不再统一标为 candidate limit), 正常推进.
 
 ## 输出与反馈闭环
 
@@ -117,6 +118,6 @@ finder 的候选在花钱请 verifier 之前先过代码检查 (`context-cr/src/
 ## 已知限制与后续
 
 - 真实模型的离线评测集 (固定仓库 + 预期发现) 尚未建立; 改提示词目前只能靠单元测试保证流程, 靠采纳率观察效果.
-- 超大 diff 截断后只能依赖模型主动用工具读, 召回会下降.
+- 超大 diff 截断后, 被截掉的部分 (尤其是 base 侧) 用现有只读工具读不到, 只能依赖模型在能看到的部分里判断, 召回会下降.
 - verifier 只有一票; 是否对高影响发现做多模型投票, 等有采纳率数据后再定.
 - 修改本文描述的任何角色, 闸门, 上限或失败语义时, 同步更新 `context-cr/test/review.test.ts` 中对应的测试.

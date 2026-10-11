@@ -41,7 +41,7 @@ function toPiTool(spec: ToolSpec): ToolDefinition {
         description: spec.description,
         parameters: spec.parameters,
         execute: async (_id, params) => ({
-            content: [{ type: "text", text: spec.execute(params as Record<string, unknown>) }],
+            content: [{ type: "text", text: await spec.execute(params as Record<string, unknown>) }],
             details: {},
         }),
     }) as unknown as ToolDefinition;
@@ -120,8 +120,15 @@ export async function createPiRunner(root: string, config: InitConfig, apiKey: s
             void session.abort();
         };
         const unsubscribe = session.subscribe((event) => {
-            if (event.type === "turn_end" && ++turns >= SESSION_MAX_TURNS) {
-                stop(`exceeded ${SESSION_MAX_TURNS} turns`);
+            // Abort only when a further turn is needed. A session that ends on its 40th turn_end with a
+            // normal answer is complete; aborting there would discard the candidates it just reported.
+            if (event.type === "turn_end") {
+                turns++;
+                const assistant = event.message as { stopReason?: string } | undefined;
+                const finished = assistant?.stopReason === "stop" || assistant?.stopReason === "length";
+                if (turns >= SESSION_MAX_TURNS && !finished) {
+                    stop(`exceeded ${SESSION_MAX_TURNS} turns`);
+                }
             }
         });
         const timer = setTimeout(

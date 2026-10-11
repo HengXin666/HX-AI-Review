@@ -37,11 +37,26 @@ export const DEFAULT_MAX_CANDIDATES = 12;
 /** Context bytes shown to one finder session; more files are split into further sessions. */
 export const CONTEXT_BATCH_BYTES = 40000;
 export const EXCERPT_RADIUS = 15;
+/** Rough bytes per token, for turning the model's context window into a prompt budget. */
+export const BYTES_PER_TOKEN = 4;
+/** Prompt space kept for the system prompt, instructions and framing beyond the output reservation. */
+export const PROMPT_RESERVE_BYTES = 8000;
+/** Floors so even a tiny context window still leaves a usable prompt. */
+export const MIN_BATCH_BYTES = 4000;
+export const MIN_DIFF_BYTES = 4000;
+export const MIN_PROMPT_BYTES = MIN_BATCH_BYTES + MIN_DIFF_BYTES;
+/** A finder may keep reporting after a gate rejection; this caps total report_finding calls. */
+export const REPORT_CALL_LIMIT = 40;
+/** Read-only git tools run async under this timeout, so a hung git cannot outlive the session timer. */
+export const GIT_TOOL_TIMEOUT_MS = 30000;
 /** Per model session: a session that loops or hangs is aborted and the run reported incomplete. */
 export const SESSION_MAX_TURNS = 40;
 export const SESSION_TIMEOUT_MS = 8 * 60 * 1000;
 /** Whole AI review, kept under the 30-minute job timeout so publish still runs and spend is still charged. */
 export const RUN_DEADLINE_MS = 20 * 60 * 1000;
+/** The reusable workflow's job timeout, and the slice publish needs at the end of it. */
+export const JOB_TIMEOUT_MS = 30 * 60 * 1000;
+export const PUBLISH_RESERVE_MS = 2 * 60 * 1000;
 
 export const RULE = {
     context: "HC-CONTEXT",

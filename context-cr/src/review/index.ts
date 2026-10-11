@@ -1,6 +1,20 @@
 // AI review orchestration: batched finders, deterministic gates, one fresh verifier per candidate.
 // Design and rationale: docs/architecture/agent-review.md.
-import { CONTEXT_BATCH_BYTES, RULE, RUN_DEADLINE_MS, SESSION_TIMEOUT_MS, WARNING } from "../constants.ts";
+import {
+    BYTES_PER_TOKEN,
+    CONTEXT_BATCH_BYTES,
+    DIFF_MAX_BYTES,
+    JOB_TIMEOUT_MS,
+    MIN_BATCH_BYTES,
+    MIN_DIFF_BYTES,
+    MIN_PROMPT_BYTES,
+    PROMPT_RESERVE_BYTES,
+    PUBLISH_RESERVE_MS,
+    RULE,
+    RUN_DEADLINE_MS,
+    SESSION_TIMEOUT_MS,
+    WARNING,
+} from "../constants.ts";
 import { isPlainEdit } from "../git.ts";
 import { addUsage, EMPTY_USAGE, fingerprint, makeFinding } from "../contract/finding.ts";
 import type { Finding, Patch, Usage } from "../contract/finding.ts";
@@ -51,6 +65,31 @@ function toFinding(candidate: Candidate, reason: string): Finding {
 
 type Queued = { candidate: Candidate; doc: ContextDoc; fingerprint: string };
 
+/**
+ * Byte budgets for one finder prompt. The whole prompt must fit the model's context window, so the
+ * window (minus the output reservation and the prompt reserve) is split between the diff and the
+ * context files, each also capped by its own fixed budget. Without this a model with a small window
+ * would be sent a prompt larger than it can read, and the session would fail.
+ */
+function finderBudgets(config: InitConfig): { doc: number; diff: number } {
+    const window = config.limits.contextWindow * BYTES_PER_TOKEN;
+    const total = Math.max(MIN_PROMPT_BYTES, window - config.limits.maxTokens * BYTES_PER_TOKEN - PROMPT_RESERVE_BYTES);
+    const diff = Math.max(MIN_DIFF_BYTES, Math.min(DIFF_MAX_BYTES, Math.floor(total / 2)));
+    const doc = Math.max(MIN_BATCH_BYTES, Math.min(CONTEXT_BATCH_BYTES, total - diff));
+    return { doc, diff };
+}
+
+/** When the job started: epoch milliseconds or an ISO timestamp, as set by the reusable workflow. */
+function jobStartedAt(now: () => number): number {
+    const raw = process.env.HX_CTX_STARTED_AT;
+    if (!raw) {
+        return now();
+    }
+    const value = Number(raw);
+    const parsed = Number.isFinite(value) ? value : Date.parse(raw);
+    return Number.isFinite(parsed) ? parsed : now();
+}
+
 class Review {
     readonly result: ReviewResult = {
         findings: [],
@@ -73,7 +112,10 @@ class Review {
         this.config = config;
         this.deps = deps;
         this.now = deps.now ?? Date.now;
-        this.deadline = this.now() + RUN_DEADLINE_MS;
+        // The AI stage is a slice of the whole job: checkout, install, init, L0 and scope already spent
+        // time, and publish still needs its reserve, so neither may push the job past its own timeout.
+        const jobLeft = jobStartedAt(this.now) + JOB_TIMEOUT_MS - this.now() - PUBLISH_RESERVE_MS;
+        this.deadline = this.now() + Math.max(0, Math.min(RUN_DEADLINE_MS, jobLeft));
     }
 
     reject(candidate: Candidate, reason: string): void {
@@ -126,22 +168,26 @@ class Review {
  * Deterministic gate between finder and verifier: the candidate must name a context file of its batch,
  * a line that exists, and must not be suppressed or a duplicate. Only survivors cost a verifier session.
  */
+type GateResult = { item: Queued } | { reason: string };
+
 function gate(review: Review, candidate: Candidate, batch: ContextDoc[], seen: Set<string>, suppressed: Set<string>) {
     const doc = batch.find((item) => item.path === candidate.path);
     const id = toFinding(candidate, "").fingerprint;
-    if (!doc) {
-        review.reject(candidate, "not a context file of this batch");
-    } else if (candidate.line > doc.lines.length) {
-        review.reject(candidate, `line ${candidate.line} is past the end of the file (${doc.lines.length} lines)`);
-    } else if (suppressed.has(id)) {
-        review.reject(candidate, "suppressed by earlier feedback");
-    } else if (seen.has(id)) {
-        review.reject(candidate, "duplicate of another candidate");
-    } else {
-        seen.add(id);
-        return { candidate, doc, fingerprint: id };
+    const reason = !doc
+        ? "not a context file of this batch"
+        : candidate.line > doc.lines.length
+          ? `line ${candidate.line} is past the end of the file (${doc.lines.length} lines)`
+          : suppressed.has(id)
+            ? "suppressed by earlier feedback"
+            : seen.has(id)
+              ? "duplicate of another candidate"
+              : undefined;
+    if (reason !== undefined) {
+        review.reject(candidate, reason);
+        return { reason } satisfies GateResult;
     }
-    return undefined;
+    seen.add(id);
+    return { item: { candidate, doc: doc as ContextDoc, fingerprint: id } } satisfies GateResult;
 }
 
 async function verify(review: Review, config: InitConfig, deps: ReviewDeps, item: Queued): Promise<void> {
@@ -186,7 +232,8 @@ export async function runReview(config: InitConfig, scope: ContextScope, deps: R
     const queue: Queued[] = [];
     const { docs, unreadable } = loadDocs(scope.contexts, deps.readFile);
     review.result.notReviewed.push(...unreadable.map((path) => path + " (unreadable or a symlink)"));
-    for (const batch of batchDocs(docs, CONTEXT_BATCH_BYTES)) {
+    const budgets = finderBudgets(config);
+    for (const batch of batchDocs(docs, budgets.doc)) {
         // Only candidates that pass the gate use the cap, so re-reported suppressed items cannot exhaust it.
         const left = config.limits.maxCandidates - queue.length;
         if (left <= 0) {
@@ -195,21 +242,25 @@ export async function runReview(config: InitConfig, scope: ContextScope, deps: R
             continue;
         }
         const sink: Candidate[] = [];
+        // The gate runs inside the tool: a refused candidate is reported back to the finder and does not
+        // consume the cap, so suppressed or duplicate reports cannot crowd out real findings in this batch.
+        const accept = (candidate: Candidate): string | undefined => {
+            const outcome = gate(review, candidate, batch, seen, suppressed);
+            if ("reason" in outcome) {
+                return outcome.reason;
+            }
+            queue.push(outcome.item);
+            return undefined;
+        };
         const ran = await review.session({
             role: "finder",
             model: config.models.finder,
             system: FINDER_SYSTEM,
-            prompt: finderPrompt(scope, batch, deps.diff, config.suppressions, CONTEXT_BATCH_BYTES),
-            tools: [reportFindingTool(sink, left)],
+            prompt: finderPrompt(scope, batch, deps.diff, config.suppressions, budgets),
+            tools: [reportFindingTool(sink, left, accept)],
         });
         if (!ran) {
             continue;
-        }
-        for (const candidate of sink) {
-            const item = gate(review, candidate, batch, seen, suppressed);
-            if (item) {
-                queue.push(item);
-            }
         }
     }
     for (const item of queue) {

@@ -86,7 +86,12 @@ export interface Store {
     suppressions(repoId: number): Promise<Suppression[]>;
     insertRun(run: RunRow, findings: FindingRow[]): Promise<void>;
     listProviders(): Promise<ProviderRow[]>;
-    /** Add to the month's spend; every run is charged, pull requests included. */
+    /**
+     * Atomically claim the repo's run budget until `staleBefore`, so concurrent runs cannot both be
+     * handed the same remainder. False means another live claim holds it. Released by charge.
+     */
+    reserveBudget(repoId: number, now: string, staleBefore: string): Promise<boolean>;
+    /** Add to the month's spend and release the run-budget claim; every run is charged, PRs included. */
     charge(repoId: number, costUsd: number, month: string): Promise<void>;
     /** Move the push cursor; only complete push runs call this, so cancelled ranges are re-reviewed. */
     setLastSha(repoId: number, sha: string): Promise<void>;

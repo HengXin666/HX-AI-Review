@@ -53,6 +53,28 @@ function count(value: unknown, field: string, fallback: number): number {
 
 const CAUSES = ["disabled", "mode", "budget", "config"] as const;
 
+/**
+ * Why the server went L0-only. A missing or unknown cause cannot be distinguished from an intentional
+ * choice, so it fails closed as "config": the range counts as unreviewed and last_sha stays put.
+ */
+function l0CauseOf(value: unknown, l0Only: boolean): InitConfig["l0Cause"] {
+    return CAUSES.find((cause) => cause === value) ?? (l0Only ? "config" : undefined);
+}
+
+/** Only an explicit null means "no cap"; a missing field would silently disable the run budget. */
+function runBudget(value: unknown, l0Only: boolean): number | null {
+    if (value === null) {
+        return null;
+    }
+    if (value === undefined) {
+        if (l0Only) {
+            return null;
+        }
+        throw new Error("init response field limits.maxRunUsd is required; null means no cap");
+    }
+    return price(value, "limits.maxRunUsd");
+}
+
 function apiOf(value: unknown, l0Only: boolean): ModelApi {
     if (value === "openai-completions" || value === "anthropic-messages") {
         return value;
@@ -95,7 +117,7 @@ export function parseInit(raw: unknown): InitResponse {
         enabled: data.enabled !== false,
         l0Only,
         reason: typeof data.reason === "string" ? data.reason : undefined,
-        l0Cause: CAUSES.find((cause) => cause === data.l0Cause),
+        l0Cause: l0CauseOf(data.l0Cause, l0Only),
         api: apiOf(data.api, l0Only),
         models: {
             finder: l0Only ? String(models.finder ?? "") : text(models.finder, "models.finder"),
@@ -106,7 +128,7 @@ export function parseInit(raw: unknown): InitResponse {
             contextWindow: l0Only ? 0 : count(limits.contextWindow, "limits.contextWindow", 128000),
             maxTokens: l0Only ? 0 : count(limits.maxTokens, "limits.maxTokens", 8192),
             maxCandidates: l0Only ? 0 : count(limits.maxCandidates, "limits.maxCandidates", 12),
-            maxRunUsd: limits.maxRunUsd == null ? null : price(limits.maxRunUsd, "limits.maxRunUsd"),
+            maxRunUsd: runBudget(limits.maxRunUsd, l0Only),
         },
         pricing: {
             input: modelPrice(pricing.input, "pricing.input", l0Only),

@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { GIT_MAX_BUFFER, UTF8, ZERO_SHA } from "./constants.ts";
 
 export type Change = { status: string; path: string; oldPath?: string };
@@ -7,6 +7,30 @@ export function git(root: string, args: string[], input?: string, env?: Record<s
     const stdio: ["pipe", "pipe", "pipe"] = ["pipe", "pipe", "pipe"];
     const options = { cwd: root, encoding: UTF8 as BufferEncoding, maxBuffer: GIT_MAX_BUFFER, input, stdio };
     return execFileSync("git", args, env ? { ...options, env: { ...process.env, ...env } } : options);
+}
+
+/**
+ * Async git with a kill timer. The model tools run through this: execFileSync would block the event loop,
+ * so the session timer could not fire until a hung git returned and a slow tool could outlive its deadline.
+ */
+export function gitAsync(root: string, args: string[], timeoutMs: number): Promise<string> {
+    return new Promise((resolve, reject) => {
+        execFile(
+            "git",
+            args,
+            { cwd: root, encoding: UTF8 as BufferEncoding, maxBuffer: GIT_MAX_BUFFER, timeout: timeoutMs },
+            (error, stdout) => (error ? reject(error) : resolve(stdout)),
+        );
+    });
+}
+
+/** Async `tryGit`: undefined when git fails (missing path, no matches), so callers can tell it from "". */
+export async function tryGitAsync(root: string, args: string[], timeoutMs: number): Promise<string | undefined> {
+    try {
+        return await gitAsync(root, args, timeoutMs);
+    } catch {
+        return undefined;
+    }
 }
 
 export function tryGit(root: string, args: string[]): string | undefined {
@@ -79,8 +103,17 @@ export function isPlainEdit(patch: string): boolean {
     if (lines.some((line) => STRUCTURAL.test(line))) {
         return false;
     }
-    const headers = lines.filter((line, index) => line.startsWith("--- ") && lines[index + 1]?.startsWith("+++ "));
-    return headers.length === 1 && lines.filter((line) => line.startsWith("diff --git ")).length <= 1;
+    const headers: [string, string][] = [];
+    for (let index = 0; index < lines.length - 1; index++) {
+        if (lines[index].startsWith("--- ") && lines[index + 1].startsWith("+++ ")) {
+            headers.push([lines[index], lines[index + 1]]);
+        }
+    }
+    if (headers.length !== 1 || lines.filter((line) => line.startsWith("diff --git ")).length > 1) {
+        return false;
+    }
+    // "/dev/null" on either side means the patch creates or deletes the file, which is never pushed.
+    return headers[0].every((header) => header.slice(4).split("\t")[0].trim() !== "/dev/null");
 }
 
 /**

@@ -83,4 +83,9 @@ test("only plain single-file text edits are accepted as patches", () => {
     assert.equal(isPlainEdit("diff --git a/AGENTS.md b/AGENTS.md\ndeleted file mode 100644\n" + edit), false);
     assert.equal(isPlainEdit("diff --git a/AGENTS.md b/AGENTS.md\nnew file mode 120000\n" + edit), false);
     assert.equal(isPlainEdit(edit + edit), false);
+    // A /dev/null side means the patch creates or deletes the file, even without a mode header.
+    const create = "diff --git a/AGENTS.md b/AGENTS.md\n--- /dev/null\n+++ b/AGENTS.md\n@@ -0,0 +1 @@\n+# new\n";
+    const remove = "diff --git a/AGENTS.md b/AGENTS.md\n--- a/AGENTS.md\n+++ /dev/null\n@@ -1 +0,0 @@\n-# gone\n";
+    assert.equal(isPlainEdit(create), false);
+    assert.equal(isPlainEdit(remove), false);
 });

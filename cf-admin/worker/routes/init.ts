@@ -4,6 +4,8 @@ import type { Deps } from "../http.ts";
 import type { ProviderRow, RepoRow } from "../store/port.ts";
 
 const MAX_CANDIDATES = 12;
+/** A claim older than this is treated as abandoned (job timeout is 30 minutes), so a crashed run cannot block. */
+const RESERVE_TTL_MS = 60 * 60 * 1000;
 
 function spentThisMonth(repo: RepoRow, now: Date): number {
     return repo.budgetMonth === month(now) ? repo.spentUsd : 0;
@@ -12,6 +14,12 @@ function spentThisMonth(repo: RepoRow, now: Date): number {
 type L0 = { cause: "disabled" | "mode" | "budget" | "config"; reason: string };
 
 const positiveInt = (value: number) => Number.isSafeInteger(value) && value >= 1;
+
+/** True when this request owns the repo's budget until the claim expires or POST /runs releases it. */
+async function claimBudget(deps: Deps, repoId: number, now: Date): Promise<boolean> {
+    const stale = new Date(now.getTime() - RESERVE_TTL_MS).toISOString();
+    return deps.store.reserveBudget(repoId, now.toISOString(), stale);
+}
 
 /**
  * Why a repo gets L0-only config, or null when the model step may run. disabled and mode are choices;
@@ -42,6 +50,10 @@ function l0Reason(repo: RepoRow, now: Date, provider: ProviderRow | null, hasKey
 /**
  * GET /init: validate HX_CTX_TOKEN, return api_url + api_key + model tiers, last_sha and the
  * suppression table. Disabled or over-budget repos get L0 config only, never a key.
+ *
+ * A budgeted repo's remainder is claimed atomically here, before the key is handed out: runs finish
+ * minutes later and only then report their cost, so without a claim two concurrent PRs would each be
+ * given the same unspent remainder and could overspend the month together.
  */
 export async function handleInit(request: Request, deps: Deps): Promise<Response> {
     const repo = await repoFromToken(request, deps);
@@ -51,7 +63,13 @@ export async function handleInit(request: Request, deps: Deps): Promise<Response
     }
     const provider = await deps.store.provider(repo.provider);
     const apiKey = provider ? deps.secret(provider.keySecret) : undefined;
-    const l0 = l0Reason(repo, deps.now(), provider, Boolean(apiKey));
+    const now = deps.now();
+    // Only a capped repo needs a claim; an uncapped one is handed no budget at all.
+    const l0 =
+        l0Reason(repo, now, provider, Boolean(apiKey)) ??
+        (repo.budgetUsd > 0 && !(await claimBudget(deps, repo.id, now))
+            ? { cause: "budget" as const, reason: "another run is using this month's budget" }
+            : null);
     const base = {
         repo: repo.name,
         enabled: repo.enabled,
@@ -65,7 +83,7 @@ export async function handleInit(request: Request, deps: Deps): Promise<Response
             maxTokens: provider?.maxTokens ?? 0,
             maxCandidates: MAX_CANDIDATES,
             // Remaining monthly budget; the runner stops opening model sessions once a run reaches it.
-            maxRunUsd: repo.budgetUsd > 0 ? Math.max(0, repo.budgetUsd - spentThisMonth(repo, deps.now())) : null,
+            maxRunUsd: repo.budgetUsd > 0 ? Math.max(0, repo.budgetUsd - spentThisMonth(repo, now)) : null,
         },
         pricing: {
             input: provider?.priceInput ?? 0,

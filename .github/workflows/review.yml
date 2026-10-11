@@ -38,6 +38,11 @@ jobs:
             HX_CTX_ENDPOINT: ${{ inputs.endpoint || vars.HX_CTX_ENDPOINT }}
             TOOL: ${{ github.workspace }}/.hx-context-review-tool
         steps:
+            # The AI stage bounds itself by the time left in this job, so it needs the job's own start
+            # time: the 20-minute deadline covers only step 5, while checkout, install, init, L0 and
+            # scope run before it and publish needs its reserve after it.
+            - name: 0 record job start time
+              run: echo "HX_CTX_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
             - name: 1 checkout (fetch-depth 0, full history and context)
               uses: actions/checkout@v4
               with:

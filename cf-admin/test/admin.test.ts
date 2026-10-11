@@ -121,6 +121,36 @@ test("/runs rejects coerced values and keeps last_sha when the runner says incom
     assert.equal((await store.repoByName("o/r"))?.lastSha ?? null, null);
 });
 
+test("concurrent /init calls cannot both be handed the same unspent budget", async () => {
+    const { call, token, store } = await registered();
+    const read = async () => (await (await call("GET", "/init", undefined, token)).json()) as Record<string, unknown>;
+    const repo = (await store.repoByName("o/r"))!;
+    assert.equal(repo.budgetUsd, 1);
+    // Two runs start before either reports its cost: the second must not get the same remainder.
+    const [first, second] = await Promise.all([read(), read()]);
+    const l0Only = [first.l0Only, second.l0Only].filter(Boolean);
+    assert.equal(l0Only.length, 1);
+    const blocked = first.l0Only ? first : second;
+    assert.equal(blocked.l0Cause, "budget");
+    assert.equal(blocked.apiKey, undefined);
+    // Charging the finished run releases the claim, so the next run may claim the remainder again.
+    await store.charge(repo.id, 0.25, "2026-10");
+    const next = await read();
+    assert.equal(next.l0Only, false);
+    assert.equal((next.limits as { maxRunUsd: number }).maxRunUsd, 0.75);
+});
+
+test("an abandoned claim expires so a crashed run cannot block the month forever", async () => {
+    const { call, token, store } = await registered();
+    const read = async () => (await (await call("GET", "/init", undefined, token)).json()) as Record<string, unknown>;
+    const repo = (await store.repoByName("o/r"))!;
+    assert.equal((await read()).l0Only, false);
+    assert.equal((await read()).l0Cause, "budget");
+    // Older than the TTL: the claim is treated as abandoned and may be taken over.
+    store.reservedAt.set(repo.id, "2000-01-01T00:00:00.000Z");
+    assert.equal((await read()).l0Only, false);
+});
+
 test("init: a spent budget and invalid stored limits are machine-readable L0 causes", async () => {
     const { call, token, store } = await registered();
     const read = async () => (await (await call("GET", "/init", undefined, token)).json()) as Record<string, unknown>;
@@ -128,7 +158,8 @@ test("init: a spent budget and invalid stored limits are machine-readable L0 cau
     await store.upsertProvider({ ...provider, maxTokens: 0 });
     assert.equal((await read()).l0Cause, "config");
     await store.upsertProvider(provider);
-    await store.charge((await store.repoByName("o/r"))!.id, 5, new Date().toISOString().slice(0, 7));
+    // The harness clock is fixed; the real system month would land in a different budgetMonth and be ignored.
+    await store.charge((await store.repoByName("o/r"))!.id, 5, "2026-10");
     const init = await read();
     assert.equal(init.l0Cause, "budget");
     assert.equal(init.apiKey, undefined);
