@@ -20,7 +20,7 @@ runner 侧 CLI. 入口 [context-cr/src/cli.ts](../../context-cr/src/cli.ts), 步
 
 标记用 `Review` 上的 `spendMarked` / `spendRefused` 状态而不是会话序号: finder 批次失败时循环只 `continue`, 所以按 "第 0 个会话" 判断会让第二个批次和之后的 verifier 会话绕过标记直接花预算. 一旦标记失败, 之后每个会话都被拒绝, 整次运行记为 incomplete. 标记本身是有界的网络调用: 上限为 `min(SPEND_MARK_TIMEOUT_MS, 剩余审查时限)`, 超时即 abort 并按 fail closed 处理, 不会让一个连上却不返回的 `/spend` 把运行拖到 job 超时、连 publish 都跑不到; 标记返回后重新读取时限再算本次会话的时长上限, 否则等待标记的时间会让会话越过在等待前算好的时限.
 
-因此 `review.yml` 的 review 步骤也要拿到 `HX_CTX_TOKEN` (之前只有 init 与 publish 步骤有): 少了它 `steps.ts` 不会注册 `onSpend`, 有预算的运行就从不发 `POST /spend`, 接管时按 0 结算, 连续取消的运行可以反复拿到整份月余额. fork 的 PR 依然进不到这一步 (job 级条件). 同理, `steps.ts` 在 `maxRunUsd` 非 null 却缺少 `budgetClaim`, `HX_CTX_ENDPOINT` 或 `HX_CTX_TOKEN` 时按配置错误失败关闭, `context-cr/src/init/client.ts` 也会拒绝这种 /init 响应, 而不是开始一次没有标记的模型会话.
+因此 `review.yml` 的 review 步骤也要拿到 `HX_CTX_TOKEN` (之前只有 init 与 publish 步骤有): 少了它 `steps.ts` 不会注册 `onSpend`, 有预算的运行就从不发 `POST /spend`, 接管时按 0 结算, 连续取消的运行可以反复拿到整份月余额. fork 的 PR 依然进不到这一步 (job 级条件). 同理, `steps.ts` 在 `maxRunUsd` 非 null 却缺少 `budgetClaim`, `HX_CTX_ENDPOINT` 或 `HX_CTX_TOKEN` 时按配置错误失败关闭, 而不是开始一次没有标记的模型会话: endpoint 与 token 是环境配置, 由 `steps.ts` 校验; `context-cr/src/init/client.ts` 只拒绝非 L0 且 `maxRunUsd` 非 null 却缺少 `budgetClaim` 的 /init 响应, 它看不到环境变量.
 
 快照只看 git 跟踪的文件, 所以 runner 在工作区里 checkout 的工具目录不会被当成被审内容. 运行状态 (init, l0, scope, ai, 会话) 放在 `RUNNER_TEMP` 下而不是被审仓库里, init 每次清空并生成 nonce; publish 只采用带同一 nonce 的 AI 结果, PR 无法通过提交文件伪造发现或补丁.
 

@@ -40,8 +40,10 @@ test("a capped run without a budget claim fails closed instead of spending unmar
     // Without the claim the runner cannot POST /spend, so a takeover would settle this run as free and
     // hand the same remainder out again. Refusing to parse keeps the range unreviewed instead.
     assert.throws(() => parseInit(noClaim), /budgetClaim is required/);
-    // No cap means nothing to reserve, and an L0-only run never opens a session.
-    assert.equal(parseInit({ ...ok, limits: { ...ok.limits, maxRunUsd: null } }).budgetClaim, "claim-1");
+    // No cap means nothing to reserve: an uncapped Worker response carries no claim, and that must parse.
+    // Keeping a claim here would make stepReview POST /spend for an uncapped run, which the Worker refuses.
+    assert.equal(parseInit({ ...noClaim, limits: { ...noClaim.limits, maxRunUsd: null } }).budgetClaim, undefined);
+    // An L0-only run never opens a session either, so it needs no claim whatever the cap says.
     assert.equal(parseInit({ ...noClaim, l0Only: true }).budgetClaim, undefined);
 });
 

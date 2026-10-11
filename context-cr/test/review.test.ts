@@ -329,8 +329,10 @@ test("the first session marks the budget claim as spending; later ones do not re
 
 test("a refused spend marker stops later batches and verifiers, not just the first session", async () => {
     const calls: AgentRequest[] = [];
-    // Two context files in separate batches, so a failed first batch would be followed by a second finder
-    // and then a verifier. Keying the marker off the session index would let those spend unmarked.
+    // Two context files that cannot share a batch. batchDocs splits only once the running size passes
+    // CONTEXT_BATCH_BYTES (40000), so small files would be one batch and this test would pass without ever
+    // reaching a later batch. ~30000 bytes each forces the second file into its own finder session.
+    const big = Array.from({ length: 20 }, () => "x".repeat(1500)).join("\n");
     const wide: ContextScope = {
         ...scope,
         contexts: [
@@ -340,8 +342,7 @@ test("a refused spend marker stops later batches and verifiers, not just the fir
     };
     const result = await runReview({ ...config, limits: { ...config.limits, maxCandidates: 5 } }, wide, {
         ...base,
-        // A tiny context budget forces one batch per file, i.e. a second finder session.
-        diff: "d",
+        readFile: () => big,
         run: fake(calls),
         onSpend: async () => {
             throw new Error("POST /spend failed with 409");

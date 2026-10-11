@@ -36,6 +36,10 @@ export function isNoMatch(error: unknown): boolean {
  * `git ls-tree <rev> -- <path>`: a successful empty listing means the revision resolves and holds no such
  * path. Any other outcome, including a failure of that second call, is a real git error. A killed or aborted
  * call is never a missing path, so a cancellation still reports as cancelled.
+ *
+ * The path is passed literally: without --literal-pathspecs, ls-tree parses its argument as a pathspec and
+ * applies magic (":(literal)x" would be rewritten to "x"), while `git show <rev>:<path>` always treats it
+ * as a literal tree path. Both must agree, or a path could look absent in one call and present in the other.
  */
 export async function isMissingPath(
     root: string,
@@ -49,7 +53,9 @@ export async function isMissingPath(
         return false;
     }
     try {
-        return (await gitAsync(root, ["ls-tree", rev, "--", path], timeoutMs, signal)).trim() === "";
+        // --literal-pathspecs is a global option and must precede the subcommand; ls-tree rejects it.
+        const args = ["--literal-pathspecs", "ls-tree", rev, "--", path];
+        return (await gitAsync(root, args, timeoutMs, signal)).trim() === "";
     } catch {
         return false;
     }
