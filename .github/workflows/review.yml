@@ -1,0 +1,89 @@
+name: hx-context-review
+# Reusable workflow. Callers: uses: HengXin666/HX-AI-Review/.github/workflows/review.yml@v1
+on:
+    workflow_call:
+        inputs:
+            endpoint:
+                description: CF Worker base URL serving /init and /runs. Falls back to the caller variable HX_CTX_ENDPOINT.
+                type: string
+                required: false
+                default: ""
+            tool-ref:
+                description: Ref of HengXin666/HX-AI-Review to run; keep it equal to the ref in uses.
+                type: string
+                required: false
+                default: v1
+        secrets:
+            HX_CTX_TOKEN:
+                required: true
+
+jobs:
+    review:
+        if: github.event.deleted != true
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        permissions:
+            contents: write
+            pull-requests: write
+        # Serialization and debounce: newer pushes cancel older runs; D1 last_sha keeps the range gap-free.
+        concurrency:
+            group: hx-context-review-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+            cancel-in-progress: true
+        env:
+            HX_CTX_ENDPOINT: ${{ inputs.endpoint || vars.HX_CTX_ENDPOINT }}
+            HX_CTX_TOKEN: ${{ secrets.HX_CTX_TOKEN }}
+            GITHUB_TOKEN: ${{ github.token }}
+            TOOL: ${{ github.workspace }}/.hx-context-review-tool
+        steps:
+            - name: 1 checkout (fetch-depth 0, full history and context)
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+                  ref: ${{ github.event.pull_request.head.sha || github.sha }}
+            - name: Checkout hx-context-review tool
+              uses: actions/checkout@v4
+              with:
+                  repository: HengXin666/HX-AI-Review
+                  ref: ${{ inputs.tool-ref }}
+                  path: .hx-context-review-tool
+                  persist-credentials: false
+            - name: Keep the tool out of the reviewed tree
+              run: echo ".hx-context-review-tool/" >> .git/info/exclude
+            - uses: pnpm/action-setup@v4
+              with:
+                  package_json_file: .hx-context-review-tool/package.json
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "24"
+            - name: Install runner dependencies
+              working-directory: .hx-context-review-tool
+              run: pnpm install --frozen-lockfile --filter context-cr...
+            - name: 2 init (GET /init, mask api_key)
+              id: init
+              run: node "$TOOL/context-cr/src/cli.ts" init
+            - name: 3 L0 deterministic checks
+              id: l0
+              continue-on-error: true
+              run: node "$TOOL/context-cr/src/cli.ts" l0
+            - name: 4 context_scope
+              id: scope
+              run: node "$TOOL/context-cr/src/cli.ts" scope
+            - name: 5 pi finder -> verifier
+              if: steps.scope.outputs.empty != 'true' && steps.init.outputs.l0_only != 'true'
+              run: node "$TOOL/context-cr/src/cli.ts" review
+            - name: 6 ingest + write-back (POST /runs, patch branch, comment)
+              if: always() && steps.init.outcome == 'success'
+              run: node "$TOOL/context-cr/src/cli.ts" publish
+            - name: Upload MD/JSON report
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: hx-context-review-${{ github.run_id }}-${{ github.run_attempt }}
+                  path: scripts/.hx_code_quality/reports/
+                  include-hidden-files: true
+                  if-no-files-found: warn
+            - name: Fail on L0 Error (AI findings never fail the job)
+              if: steps.l0.outcome == 'failure'
+              run: |
+                  echo "L0 found blocking Error findings; see the report artifact."
+                  exit 1
