@@ -142,6 +142,11 @@ export function parseInit(raw: unknown): InitResponse {
         suppressions: suppressionsOf(data.suppressions),
         budgetClaim: typeof data.budgetClaim === "string" ? data.budgetClaim : undefined,
     };
+    // A capped run is handed a reservation that must be marked as spending before its first session;
+    // without the claim the marker cannot be sent, and a takeover would settle the run as free.
+    if (!l0Only && result.limits.maxRunUsd !== null && !result.budgetClaim) {
+        throw new Error("init response field budgetClaim is required for a capped run; null maxRunUsd means no cap");
+    }
     if (!l0Only) {
         result.apiUrl = text(data.apiUrl, "apiUrl");
         result.apiKey = text(data.apiKey, "apiKey");

@@ -61,7 +61,8 @@ export function skillInjection(snapshot: Snapshot, config: RepoConfig): number {
     const skills = snapshot.files.filter(
         (file) =>
             baseName(file) === SKILL_FILE &&
-            config.skillRoots.some((root) => file.startsWith(root.replace(/\/+$/, "") + "/")),
+            config.skillRoots.some((root) => file.startsWith(root.replace(/\/+$/, "") + "/")) &&
+            !isExcluded(config, file),
     );
     const resident = skills.reduce((sum, file) => sum + bytes(frontMatter(snapshot.read(file) ?? "")), 0);
     const bodies = skills
@@ -90,7 +91,12 @@ export function checkBudget(snapshot: Snapshot, config: RepoConfig): Finding[] {
         }
         let total = skills;
         for (const dir of dirs) {
-            total += bytes(snapshot.read(inDir(dir, AGENTS_FILE)) ?? "");
+            const ancestor = inDir(dir, AGENTS_FILE);
+            // An excluded AGENTS.md is never injected, so it must not consume the byte budget either.
+            if (isExcluded(config, ancestor)) {
+                continue;
+            }
+            total += bytes(snapshot.read(ancestor) ?? "");
         }
         seen.set(key, total);
         if (total > BUDGET_MAX_BYTES) {

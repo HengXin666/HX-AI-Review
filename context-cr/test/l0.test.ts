@@ -50,6 +50,40 @@ test("HC-BUDGET: ancestor chain plus skills over 65536 bytes is an error, equal 
     assert.ok(rules(tree(1537)).includes("HC-BUDGET:error:a/b/c/AGENTS.md"));
 });
 
+test("HC-BUDGET: an excluded ancestor AGENTS.md does not count toward the byte total", () => {
+    const filler = (size: number): string => "a".repeat(size - 1) + "\n";
+    const tree: Record<string, string> = {
+        "README.md": "# r\n",
+        "AGENTS.md": filler(16000),
+        "vendor/README.md": "# v\n",
+        "vendor/AGENTS.md": filler(60000),
+        "vendor/pkg/README.md": "# p\n",
+        "vendor/pkg/x.ts": "export {};\n",
+    };
+    const budget = (config: typeof DEFAULT_CONFIG) =>
+        runL0(memorySnapshot(tree), config).filter((item) => item.ruleId === "HC-BUDGET");
+    // The excluded AGENTS.md is never injected, so its 60000 bytes must not reach the vendor/pkg chain.
+    assert.deepEqual(budget({ ...DEFAULT_CONFIG, exclude: ["vendor/AGENTS.md"] }), []);
+    // Without the exclusion the same chain is over the limit, so the fixture is an error by itself.
+    assert.ok(budget(DEFAULT_CONFIG).some((item) => item.path === "vendor/AGENTS.md"));
+});
+
+test("HC-BUDGET: an excluded SKILL.md does not count toward the skill injection bound", () => {
+    const head = "---\nname: big\ndescription: d\n---\n";
+    const tree: Record<string, string> = {
+        "README.md": "# r\n",
+        "AGENTS.md": "# a\n",
+        "src/app.ts": "export {};\n",
+        ".agents/skills/big/SKILL.md": head + "a".repeat(70000 - head.length - 1) + "\n",
+    };
+    const budget = (config: typeof DEFAULT_CONFIG) =>
+        runL0(memorySnapshot(tree), config).filter((item) => item.ruleId === "HC-BUDGET");
+    // The excluded skill is never injected, so it must not appear in the resident-plus-loaded bound.
+    assert.deepEqual(budget({ ...DEFAULT_CONFIG, exclude: [".agents/skills/big"] }), []);
+    // Without the exclusion the same skill alone pushes every directory over the limit.
+    assert.ok(budget(DEFAULT_CONFIG).length > 0);
+});
+
 test("HC-DOCNAME: kebab names pass, v2/Upper/dated outside decisions fail", () => {
     const docs = {
         ...ok,

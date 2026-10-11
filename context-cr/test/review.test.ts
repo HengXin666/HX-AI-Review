@@ -311,10 +311,86 @@ test("the first session marks the budget claim as spending; later ones do not re
         { path: "api/AGENTS.md", line: 3, title: "real stale path" },
         { path: "api/AGENTS.md", line: 4, title: "real other" },
     ];
-    await runReview(config, scope, { ...base, run: fake(calls, { finder }), onSpend: async () => void spends++ });
+    await runReview(config, scope, {
+        ...base,
+        run: fake(calls, { finder }),
+        onSpend: async () => {
+            // The marker is only load-bearing if it lands before the first model session: a run cancelled
+            // mid-session must already be marked as spending. Moving it after the session must fail here.
+            assert.equal(calls.length, 0, "the spend marker ran after a model session had already started");
+            spends++;
+        },
+    });
     // A run cancelled before its first session spent nothing, so the Worker must only be told once the
     // first session is really about to open, and never again for the verifier sessions.
     assert.equal(spends, 1);
+    assert.ok(calls.length > 0, "the review never opened a session");
+});
+
+test("a refused spend marker stops later batches and verifiers, not just the first session", async () => {
+    const calls: AgentRequest[] = [];
+    // Two context files in separate batches, so a failed first batch would be followed by a second finder
+    // and then a verifier. Keying the marker off the session index would let those spend unmarked.
+    const wide: ContextScope = {
+        ...scope,
+        contexts: [
+            { path: "api/AGENTS.md", reasons: ["ancestor of api/user.ts"] },
+            { path: "web/AGENTS.md", reasons: ["ancestor of web/app.ts"] },
+        ],
+    };
+    const result = await runReview({ ...config, limits: { ...config.limits, maxCandidates: 5 } }, wide, {
+        ...base,
+        // A tiny context budget forces one batch per file, i.e. a second finder session.
+        diff: "d",
+        run: fake(calls),
+        onSpend: async () => {
+            throw new Error("POST /spend failed with 409");
+        },
+    });
+    assert.equal(calls.length, 0, "a session started after the spend marker was refused");
+    assert.equal(result.complete, false);
+    assert.match(result.errors[0], /could not mark the budget claim as spending/);
+});
+
+test("a spend marker that never answers is aborted instead of stalling the review", async () => {
+    const calls: AgentRequest[] = [];
+    let sawAbort = false;
+    // The review deadline is what bounds the marker, and it is derived from the job start time the
+    // workflow exports. Pretend the job is almost out of time so the bound is a couple of seconds here
+    // instead of SPEND_MARK_TIMEOUT_MS, keeping the test fast without weakening what it proves.
+    const previous = process.env.HX_CTX_STARTED_AT;
+    process.env.HX_CTX_STARTED_AT = new Date(Date.now() - 28 * 60 * 1000 + 2000).toISOString();
+    const started = Date.now();
+    try {
+        const result = await runReview(config, scope, {
+            ...base,
+            run: fake(calls),
+            // A /spend that connects and never answers: without a bound the review would wait until the
+            // job timeout, and publish, which needs its own reserve, would never run.
+            onSpend: (signal) =>
+                new Promise<void>((_resolve, reject) => {
+                    signal.addEventListener(
+                        "abort",
+                        () => {
+                            sawAbort = true;
+                            reject(new Error("aborted"));
+                        },
+                        { once: true },
+                    );
+                }),
+        });
+        assert.equal(calls.length, 0, "a session started although the marker never answered");
+        assert.equal(result.complete, false);
+        assert.match(result.errors[0], /could not mark the budget claim as spending/);
+    } finally {
+        if (previous === undefined) {
+            delete process.env.HX_CTX_STARTED_AT;
+        } else {
+            process.env.HX_CTX_STARTED_AT = previous;
+        }
+    }
+    assert.ok(sawAbort, "the marker request was never aborted");
+    assert.ok(Date.now() - started < 20_000, "the marker wait was not bounded");
 });
 
 test("a window too small for any prompt is a configuration error, not an unreadable session", async () => {

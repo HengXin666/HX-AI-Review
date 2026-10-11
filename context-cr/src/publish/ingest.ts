@@ -60,11 +60,17 @@ export function sessionsToJsonl(transcripts: { role: string; index: number; mess
  * still believes is unspent, and if this run were then cancelled the takeover would hand the same
  * remainder out again. The caller fails the review closed, which only costs a re-review of this range.
  */
-export async function postSpend(endpoint: string, token: string, budgetClaim: string): Promise<void> {
+export async function postSpend(
+    endpoint: string,
+    token: string,
+    budgetClaim: string,
+    signal?: AbortSignal,
+): Promise<void> {
     const response = await fetch(new URL("/spend", endpoint), {
         method: "POST",
         headers: { authorization: "Bearer " + token, "content-type": "application/json" },
         body: JSON.stringify({ budgetClaim }),
+        signal,
     });
     if (!response.ok) {
         throw new Error(`POST /spend failed with ${response.status}`);

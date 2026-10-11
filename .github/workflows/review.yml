@@ -86,6 +86,10 @@ jobs:
             - name: 5 pi finder -> verifier (reads and deletes the key file)
               id: review
               if: steps.scope.outputs.empty != 'true' && steps.init.outputs.l0_only != 'true'
+              # The token is needed to POST /spend before the first model session: only a claim marked as
+              # spending is settled when a newer run takes it over. Fork PRs never reach this step (job if).
+              env:
+                  HX_CTX_TOKEN: ${{ secrets.HX_CTX_TOKEN }}
               run: node "$TOOL/context-cr/src/cli.ts" review
             # Not on cancel. After a scope or review failure it still publishes L0, marked incomplete so last_sha stays.
             - name: 6 ingest + write-back (POST /runs, patch branch, comment)

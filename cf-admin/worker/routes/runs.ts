@@ -208,6 +208,8 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
     }
     const sha = field(body, "sha");
     const list = findings(body.findings);
+    // Validated before any write: a malformed claim must not fail after the run row already exists.
+    const budgetClaim = text(body.budgetClaim, "budgetClaim") ?? "";
     const fixes = patches(body.patches);
     const usage = body.usage === undefined ? {} : object(body.usage, "usage");
     const { counts, status, incomplete } = derive(body, list);
@@ -282,7 +284,7 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
     }
     // The claim id from /init: charge records spend always, but frees only this run's own claim, so a
     // run that was refused the budget and published L0 results cannot release the holder's claim.
-    await deps.store.charge(repo.id, costUsd, month(now), text(body.budgetClaim, "budgetClaim") ?? "");
+    await deps.store.charge(repo.id, costUsd, month(now), budgetClaim);
     // last_sha tracks the pushed history only, and only once the AI stage really finished for this range.
     if (run.event === "push" && prNumber === null && !incomplete) {
         await deps.store.setLastSha(repo.id, sha);

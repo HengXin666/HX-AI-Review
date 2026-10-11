@@ -38,7 +38,7 @@ scope (确定性)            哪些上下文文件可能受影响; 为空则 0 �
 
 分批与 diff 预算都是名义值, 文件标题, 围栏与固定说明不占其中额度, 所以提示词按渲染后的实际字节测量并逐次收缩到真正放得下为止; verifier 的提示词同理 (候选声明, 补丁与摘录本身没有上限, 按固定一半切 diff 会让小窗口溢出, 每个 verifier 会话都失败).
 
-收缩只能作用于 diff 与上下文正文: 变更路径列表, 抑制表与每文件标题不受预算约束, 超长时仍会撑破窗口. 此时不发送提示词, 而是记为未审并让运行 incomplete (报告里说明原因), 因为发出去只会让会话因上下文超限失败, 把真正的原因埋掉. verifier 侧候选声明过大时同样不发送, 该候选按 rejected 处理.
+收缩只能作用于 diff 与上下文正文: 变更路径列表, 抑制表与每文件标题不受预算约束, 超长时仍会撑破窗口. 此时不发送提示词, 而是记为未审并让运行 incomplete (报告里说明原因), 因为发出去只会让会话因上下文超限失败, 把真正的原因埋掉. verifier 侧候选声明过大时同样不发送, 该候选按 rejected 处理, 但代码同样调用 `review.fail(...)`: 整个运行记为 incomplete, last_sha 不推进, 而不是只丢掉这一条候选.
 
 只读工具区分"git 失败"与"空结果": `find` 与 `ls` 解析的是 `git ls-tree` 输出, 失败时不再把错误文本当文件名解析 (否则会回答 "No files." / "Empty or not a directory.", 让模型以为仓库里没有这些文件), 而是回 `git error: ...`; `grep` 无匹配仍返回 "No matches.". 只有单个文件自身超过预算时才独占一批并截断显示, 模型可用 read 工具读剩余部分. 正文用 `git show HEAD:<path>` 从被审提交读取; 符号链接或读不到的文件不审, 记入 not reviewed. 这样大仓库不会把几十个文件塞进一个会话, 导致模型只看前面几个.
 
@@ -62,7 +62,7 @@ finder 的候选在花钱请 verifier 之前先过代码检查 (`context-cr/src/
 | 指纹 (路径 + 完整标题) 不在抑制表 | 驳回 "suppressed by earlier feedback" |
 | 指纹不与本次已排队候选重复 | 驳回 "duplicate of another candidate" |
 
-闸门在 `report_finding` 工具内即时执行: 被驳回的候选立刻把理由回给 finder, 不进入队列, 也不占用候选名额, 因此 finder 反复报已抑制或重复的项不会挤掉本批的真实问题. 工具另有 `REPORT_CALL_LIMIT` (40) 次调用上限, 防止在反复被驳回时空转. 被驳回的候选 (包括 verifier 驳回的) 连同理由写入报告 JSON 的 `rejections`, Markdown 报告列出驳回数, 便于调提示词.
+闸门在 `report_finding` 工具内即时执行: 被驳回的候选立刻把理由回给 finder, 不进入队列, 也不占用候选名额, 因此 finder 反复报已抑制或重复的项不会挤掉本批的真实问题. 工具另有 `REPORT_CALL_LIMIT` (40) 次调用上限: 超过后的调用只被拒绝并回一句 "stop and summarize", 模型仍可继续调用, 照样消耗会话时长与费用, 真正的兜底是每会话轮数上限与运行时限. 被驳回的候选 (包括 verifier 驳回的) 连同理由写入报告 JSON 的 `rejections`, Markdown 报告列出驳回数, 便于调提示词.
 
 ### 5. verifier: 尝试反驳
 
@@ -96,8 +96,8 @@ finder 的候选在花钱请 verifier 之前先过代码检查 (`context-cr/src/
 | 每会话轮数 | 40 | `SESSION_MAX_TURNS` | 仅当第 40 轮后仍需继续时才中止; 正常结束的最终回答不算超限, 运行记为 incomplete |
 | 每会话时长 | 8 分钟, 且不超过运行剩余时间 | `SESSION_TIMEOUT_MS` | 中止会话, 运行记为 incomplete |
 | 整个 AI 审查时长 | min(20 分钟, job 剩余时间 - 发布预留) | `RUN_DEADLINE_MS`, `JOB_TIMEOUT_MS`, `PUBLISH_RESERVE_MS` | 不再开新会话, 运行记为 incomplete; 截止时间按 job 剩余时间 (workflow 传入的 `HX_CTX_STARTED_AT`) 扣除 checkout/install/init/L0/scope 的耗时和 2 分钟发布预留, 保证在 job 的 30 分钟超时前进入 publish, 花费照常计入预算 |
-| 每次运行花费 | 本次运行可用额度 | `/init` 的 `limits.maxRunUsd` (无上限时为 null) | 不再开新会话, 运行记为 incomplete |
-| 预留开始花费 | 第一次会话前上报一次 | `POST /spend` (`ReviewDeps.onSpend`) | 上报失败或预留已被接管 (409) 都中止审查, 不再开会话; 该预留被接管时按额度结算, 未上报则按 0 结算 |
+| 每次运行花费 | 本次运行可用额度 | `/init` 的 `limits.maxRunUsd` (无上限时为 null) | 不再开新会话, 运行记为 incomplete; 只在开会话前检查已累计花费, 所以单个会话仍可能使本次花费略超该值 |
+| 预留开始花费 | 第一次会话前上报一次 | `POST /spend` (`ReviewDeps.onSpend`), 上限 min(30 秒, 运行剩余时间) | 上报失败, 超时 (abort) 或预留已被接管 (409) 都中止审查, 且之后每个 finder 批次与 verifier 会话都不再启动 (状态而非会话序号决定), 运行记为 incomplete; 该预留被接管时按额度结算, 未上报则按 0 结算. 上报后重新读取时限, 等待标记的时间不会让会话越过时限 |
 | 月预算 | 仓库配置 | Worker | 用完后 `/init` 只下发 L0 配置, 不给 key |
 
 费用按 provider 的输入, 输出, 缓存读, 缓存写单价由 pi 计算并上报; Worker 用 token 数重算, 取两者较大值计入月预算.

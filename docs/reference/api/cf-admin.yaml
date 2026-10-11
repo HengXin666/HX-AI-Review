@@ -244,12 +244,16 @@ paths:
                                 budgetClaim: { type: string }
             responses:
                 "200": { description: Recorded }
-                "400": { description: budgetClaim is missing }
+                "400":
+                    description: >-
+                        Invalid JSON, a body that is not a JSON object, or a budgetClaim that is missing,
+                        empty or not a string
                 "401": { description: Missing or unknown token }
                 "409":
                     description: >-
-                        The claim is no longer held by this run: a newer run has taken it over and will settle
-                        it. This run must not spend, or the month would be charged twice.
+                        The claim is no longer held by this run: it is unknown, a newer run has taken it over,
+                        or this run already released it in its own POST /runs report. This run must not spend,
+                        or the month would be charged twice.
     /runs:
         post:
             operationId: postRun

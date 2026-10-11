@@ -14,9 +14,13 @@ runner 侧 CLI. 入口 [context-cr/src/cli.ts](../../context-cr/src/cli.ts), 步
 | `context-cr/src/review/` | `InitConfig`, `ContextScope`, diff, `AgentRunner` | 确认后的 Warning, 补丁, 用量, 会话记录 |
 | `context-cr/src/publish/` | 汇总报告 | POST /runs, 补丁分支, 评论 |
 
-`context-cr/src/init/client.ts` 对可能让运行被误判为完整的字段失败关闭: `l0Only` 时缺失或未知的 `l0Cause` 按 `config` 处理 (不能与主动选择混淆, 否则该区间会被当成已审并推进 last_sha); 非 L0 响应缺少 `limits.maxRunUsd` 时报错, 只有显式 `null` 才表示无上限, 避免单次运行超出月预算.
+`context-cr/src/init/client.ts` 对可能让运行被误判为完整的字段失败关闭: `l0Only` 时缺失或未知的 `l0Cause` 按 `config` 处理 (不能与主动选择混淆, 否则该区间会被当成已审并推进 last_sha); 非 L0 响应缺少 `limits.maxRunUsd` 时报错, 只有显式 `null` 才表示无上限. `Review.session()` 只在开会话前检查已累计花费, 会话结束后才加上本次会话的花费, 所以达到 `maxRunUsd` 后不再启动新会话, 但单个会话仍可能使本次花费超过该值.
 
 `/init` 的 `budgetClaim` 是本次运行的预算预留 id, 原样带回 `POST /runs`: 计费时只有持有者能释放该预留, 被拒绝预算而仍上报 L0 结果的运行不会解开别人的预留. 第一次模型会话前还会 `POST /spend` 标记该预留已开始花费: 只有标记过的预留被接管时才结算额度, 在安装/L0/scope 阶段就被取消的运行按 0 结算, 不会让同一分支的连续 push 各自烧掉整月预算. 标记失败会中止审查 (fail closed), 因为继续花一份 Worker 仍认为未花掉的预算, 一旦本运行被取消, 接管就会把同一份余额再发一次; 预留已被别的运行抢走时同样会拿到 409, 避免同一次运行被记两次账. 请求 `/init` 时带上 workflow 的 concurrency group (`HX_CTX_GROUP`), 同组中已被 GitHub 取消的旧运行的预留可被接管, 否则快速连续 push 时幸存的运行会被自己前一次运行的预留挡住而只跑 L0.
+
+标记用 `Review` 上的 `spendMarked` / `spendRefused` 状态而不是会话序号: finder 批次失败时循环只 `continue`, 所以按 "第 0 个会话" 判断会让第二个批次和之后的 verifier 会话绕过标记直接花预算. 一旦标记失败, 之后每个会话都被拒绝, 整次运行记为 incomplete. 标记本身是有界的网络调用: 上限为 `min(SPEND_MARK_TIMEOUT_MS, 剩余审查时限)`, 超时即 abort 并按 fail closed 处理, 不会让一个连上却不返回的 `/spend` 把运行拖到 job 超时、连 publish 都跑不到; 标记返回后重新读取时限再算本次会话的时长上限, 否则等待标记的时间会让会话越过在等待前算好的时限.
+
+因此 `review.yml` 的 review 步骤也要拿到 `HX_CTX_TOKEN` (之前只有 init 与 publish 步骤有): 少了它 `steps.ts` 不会注册 `onSpend`, 有预算的运行就从不发 `POST /spend`, 接管时按 0 结算, 连续取消的运行可以反复拿到整份月余额. fork 的 PR 依然进不到这一步 (job 级条件). 同理, `steps.ts` 在 `maxRunUsd` 非 null 却缺少 `budgetClaim`, `HX_CTX_ENDPOINT` 或 `HX_CTX_TOKEN` 时按配置错误失败关闭, `context-cr/src/init/client.ts` 也会拒绝这种 /init 响应, 而不是开始一次没有标记的模型会话.
 
 快照只看 git 跟踪的文件, 所以 runner 在工作区里 checkout 的工具目录不会被当成被审内容. 运行状态 (init, l0, scope, ai, 会话) 放在 `RUNNER_TEMP` 下而不是被审仓库里, init 每次清空并生成 nonce; publish 只采用带同一 nonce 的 AI 结果, PR 无法通过提交文件伪造发现或补丁.
 

@@ -26,10 +26,19 @@ function d1(db: DatabaseSync) {
     };
     return {
         prepare: statement,
+        // D1Store.insertRun relies on batch being atomic, so this must be a real transaction: a later
+        // statement failing rolls the earlier writes back instead of leaving them in the database.
         batch: async (items: { run: () => Promise<unknown> }[]) => {
-            for (const item of items) {
-                await item.run();
+            db.exec("BEGIN");
+            try {
+                for (const item of items) {
+                    await item.run();
+                }
+            } catch (error) {
+                db.exec("ROLLBACK");
+                throw error;
             }
+            db.exec("COMMIT");
             return [];
         },
     } as unknown as D1Database;

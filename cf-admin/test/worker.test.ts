@@ -141,7 +141,9 @@ test("patches with invalid fields are a 400; only a valid non-applying patch is 
     assert.equal((await post([{ applies: true, diff: "d" }])).status, 400);
     // A well-formed patch that does not apply is skipped on purpose, not an error.
     assert.equal((await post([{ fingerprint: "fp", applies: false, diff: "d" }])).status, 201);
-    assert.equal(blobs.data.size > 0, true);
+    // The mandatory report blob only proves the run wrote something; the dropped patch must have no object.
+    assert.equal(blobs.data.has(`runs/o/r/${store.runs[0].id}/report.md`), true);
+    assert.equal(blobs.data.has(`runs/o/r/${store.runs[0].id}/patches/fp.diff`), false);
     assert.equal(store.runs[0].status, "passed");
 });
 

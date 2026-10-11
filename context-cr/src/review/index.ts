@@ -13,6 +13,7 @@ import {
     RULE,
     RUN_DEADLINE_MS,
     SESSION_TIMEOUT_MS,
+    SPEND_MARK_TIMEOUT_MS,
     WARNING,
 } from "../constants.ts";
 import { isPlainEdit } from "../git.ts";
@@ -37,8 +38,12 @@ export type ReviewDeps = {
     readFile(path: string): string | undefined;
     /** Clock for the run deadline; tests inject one. */
     now?: () => number;
-    /** Called before the first model session: marks the budget claim as spending on the Worker. */
-    onSpend?: () => Promise<void>;
+    /**
+     * Called before the first model session: marks the budget claim as spending on the Worker. The signal
+     * aborts the request when it outlives the review deadline or the marker timeout, so a /spend that
+     * connects and never answers cannot stall the run past the time publish needs.
+     */
+    onSpend?: (signal: AbortSignal) => Promise<void>;
 };
 
 export type Rejection = { path: string; title: string; reason: string };
@@ -89,6 +94,26 @@ function promptBudgets(config: InitConfig): Budgets | undefined {
     return { doc, diff, prompt: available };
 }
 
+/**
+ * Bounds the spend marker. The request gets `budgetMs` to answer: the abort signal cancels the fetch, and
+ * the race rejects even if a caller ignores the signal, so the review can never wait here indefinitely.
+ */
+async function markSpend(onSpend: (signal: AbortSignal) => Promise<void>, budgetMs: number): Promise<void> {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error(`no answer within ${Math.round(budgetMs / 1000)}s`));
+        }, budgetMs);
+    });
+    try {
+        await Promise.race([onSpend(controller.signal), expired]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 /** When the job started: epoch milliseconds or an ISO timestamp, as set by the reusable workflow. */
 function jobStartedAt(now: () => number): number {
     const raw = process.env.HX_CTX_STARTED_AT;
@@ -113,6 +138,10 @@ class Review {
         notReviewed: [],
     };
     private sessions = 0;
+    /** Set once the Worker accepted the spend marker; the marker is sent at most once per run. */
+    private spendMarked = false;
+    /** Set when the marker could not be recorded: no further model session may start for this run. */
+    private spendRefused = false;
     private readonly config: InitConfig;
     private readonly deps: ReviewDeps;
     private readonly now: () => number;
@@ -148,6 +177,35 @@ class Review {
             this.fail(`run budget of ${cap.toFixed(4)} USD reached before a ${request.role} session`);
             return false;
         }
+        // A marker that could not be recorded stops every later session too, not just the first: the finder
+        // loop only `continue`s past a failed batch, so keying this off the session index would let the
+        // second batch and every verifier start a model session the Worker still believes is unspent.
+        if (this.spendRefused) {
+            return false;
+        }
+        // First session that will really open: tell the Worker the claim is being spent, so if this run is
+        // cancelled before POST /runs its allowance is settled instead of looking free. A marker that
+        // cannot be recorded must stop the review: spending budget the Worker still thinks is unspent
+        // could hand the same remainder to the next run. Failing here only costs a re-review of this range.
+        if (this.deps.onSpend && !this.spendMarked) {
+            // Never wait longer than the review itself has left: publish still needs its reserve.
+            const markerBudget = Math.min(SPEND_MARK_TIMEOUT_MS, this.deadline - this.now());
+            if (markerBudget <= 0) {
+                this.fail(`run deadline reached before marking the budget claim as spending`);
+                return false;
+            }
+            try {
+                await markSpend(this.deps.onSpend, markerBudget);
+                this.spendMarked = true;
+            } catch (error) {
+                this.spendRefused = true;
+                const why = error instanceof Error ? error.message : String(error);
+                this.fail(`could not mark the budget claim as spending: ${why}`);
+                return false;
+            }
+        }
+        // The marker is a network call: re-read the deadline after it, or a slow /spend would let this
+        // session run past the deadline that was computed before the wait.
         const left = this.deadline - this.now();
         if (left <= 0) {
             this.fail(`run deadline of ${RUN_DEADLINE_MS / 60000} minutes reached before a ${request.role} session`);
@@ -155,19 +213,6 @@ class Review {
         }
         const index = this.sessions++;
         const timeoutMs = Math.min(SESSION_TIMEOUT_MS, left);
-        // First real session of the run: tell the Worker the claim is being spent, so if this run is
-        // cancelled before POST /runs its allowance is settled instead of looking free. A marker that
-        // cannot be recorded must stop the review: spending budget the Worker still thinks is unspent
-        // could hand the same remainder to the next run. Failing here only costs a re-review of this range.
-        if (index === 0 && this.deps.onSpend) {
-            try {
-                await this.deps.onSpend();
-            } catch (error) {
-                const why = error instanceof Error ? error.message : String(error);
-                this.fail(`could not mark the budget claim as spending: ${why}`);
-                return false;
-            }
-        }
         try {
             this.record(request.role, index, await this.deps.run({ ...request, timeoutMs }));
             return true;

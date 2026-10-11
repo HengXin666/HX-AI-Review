@@ -49,6 +49,12 @@ export const MIN_PROMPT_BYTES = MIN_BATCH_BYTES + MIN_DIFF_BYTES;
 export const REPORT_CALL_LIMIT = 40;
 /** Read-only git tools run async under this timeout, so a hung git cannot outlive the session timer. */
 export const GIT_TOOL_TIMEOUT_MS = 30000;
+/**
+ * The /spend marker runs before the first model session and outside the session timer. A /spend that
+ * connects and never answers must not stall the review until the job timeout, so it is aborted and the
+ * run fails closed (see Review.session); this bound is also clipped by the review deadline.
+ */
+export const SPEND_MARK_TIMEOUT_MS = 30000;
 /** Per model session: a session that loops or hangs is aborted and the run reported incomplete. */
 export const SESSION_MAX_TURNS = 40;
 export const SESSION_TIMEOUT_MS = 8 * 60 * 1000;

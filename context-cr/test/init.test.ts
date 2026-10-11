@@ -11,6 +11,8 @@ const ok = {
     models: { finder: "a", verifier: "b" },
     limits: { contextWindow: 1000, maxTokens: 100, maxCandidates: 5, maxRunUsd: 0.5 },
     pricing: { input: 1, output: 2 },
+    // A capped non-L0 response always carries the reservation the runner must mark as spending.
+    budgetClaim: "claim-1",
 };
 
 test("init keeps a valid config and its run budget", () => {
@@ -31,6 +33,16 @@ test("a missing run budget fails closed; only an explicit null means no cap", ()
     assert.throws(() => parseInit({ ...ok, limits }), /maxRunUsd is required/);
     // L0-only runs never open a session, so there the missing field is harmless.
     assert.equal(parseInit({ ...ok, l0Only: true, limits }).limits.maxRunUsd, null);
+});
+
+test("a capped run without a budget claim fails closed instead of spending unmarked", () => {
+    const { budgetClaim: _drop, ...noClaim } = ok;
+    // Without the claim the runner cannot POST /spend, so a takeover would settle this run as free and
+    // hand the same remainder out again. Refusing to parse keeps the range unreviewed instead.
+    assert.throws(() => parseInit(noClaim), /budgetClaim is required/);
+    // No cap means nothing to reserve, and an L0-only run never opens a session.
+    assert.equal(parseInit({ ...ok, limits: { ...ok.limits, maxRunUsd: null } }).budgetClaim, "claim-1");
+    assert.equal(parseInit({ ...noClaim, l0Only: true }).budgetClaim, undefined);
 });
 
 test("an unknown or missing l0Cause fails closed as config, so the range is not marked reviewed", () => {

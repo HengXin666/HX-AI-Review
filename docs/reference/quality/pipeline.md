@@ -79,10 +79,12 @@ workflow_call (业务仓库调用, 本仓库自身不跑)
 
 配置在根目录 `.hx-context-review.json` (技能根, 排除路径, 孤儿检查根, 基线), 基线 `scripts/quality/context-baseline.json`. 每条规则独立运行, 某条崩溃记为工具错误而不是空通过.
 
+`exclude` 里的路径从不注入, 因此既不计入 HC-BUDGET 的祖先 AGENTS.md 字节数, 也不计入技能注入上界: 被排除的 AGENTS.md 或 SKILL.md 不会因为体积大而把 CI 卡住. 这与 HC-CONTEXT, HC-DOCNAME, CX-SKILL 已有的排除行为一致.
+
 | 规则 | 等级 | 验证内容 |
 |---|---|---|
 | HC-CONTEXT | Error | 含 README.md 或 AGENTS.md 的目录两者成对, AGENTS.md 少于 150 行 |
-| HC-BUDGET | Error | 任一目录的祖先 AGENTS 链加技能注入上界不超过 65536 字节 (被 exclude 的文件仍会注入, 照样计入) |
+| HC-BUDGET | Error | 任一目录的祖先 AGENTS 链加技能注入上界不超过 65536 字节 (被 exclude 的路径从不注入, 不计入) |
 | HC-DOCNAME | Error | `docs/` 下目录与文件名小写 kebab, 无 v2 或日期副本 (decisions 除外); README/AGENTS 等固定名只豁免文件名 |
 | CX-DEADREF | Error / Warning | 上下文文件里的 Markdown 链接失效为 Error, 反引号路径失效为 Warning; 围栏代码块内不算 |
 | CX-SKILL | Error | SKILL.md front matter 的 name 与目录名一致且有 description (兼容 CRLF) |

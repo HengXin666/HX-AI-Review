@@ -92,8 +92,9 @@ export interface Store {
      * taken over, because GitHub already cancelled the older run in that group and it will never report.
      *
      * Taking over settles the old claim's allowance into the month's spend first, so repeated cancellations
-     * on one branch cannot each start from the full remaining budget. Returns the spend for the month after
-     * any settlement, which the caller must use for the new allowance.
+     * on one branch cannot each start from the full remaining budget. remainingUsd is the allowance still
+     * available after any such settlement, i.e. what the caller may grant this claim, not the amount the
+     * month has already spent.
      */
     reserveBudget(
         repoId: number,

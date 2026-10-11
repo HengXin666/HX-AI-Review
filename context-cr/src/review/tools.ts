@@ -176,9 +176,10 @@ export function repoTools(root: string): ToolSpec[] {
                 try {
                     text = await gitAsync(root, ["show", "HEAD:" + path], GIT_TOOL_TIMEOUT_MS, signal);
                 } catch (error) {
-                    // Only a path absent from the revision means "not found"; a timeout, a cancellation or
-                    // any other git failure is reported as such instead of hiding a real file.
-                    return isMissingPath(error)
+                    // Only a path confirmed absent from the revision means "not found"; a timeout, a
+                    // cancellation, an unusable revision or any other git failure is reported as such
+                    // instead of hiding a real git error behind "No tracked file".
+                    return (await isMissingPath(root, "HEAD", path, error, GIT_TOOL_TIMEOUT_MS, signal))
                         ? `No tracked file ${path} at the reviewed commit.`
                         : "git error: " + describeGitError(error);
                 }

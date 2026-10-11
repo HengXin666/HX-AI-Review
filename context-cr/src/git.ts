@@ -30,12 +30,29 @@ export function isNoMatch(error: unknown): boolean {
 }
 
 /**
- * A path absent from the revision makes git exit 128, without a kill or an abort. Classifying on those
- * signals rather than on git's message keeps this correct under any locale; a timeout or cancellation
- * is never mistaken for a missing file.
+ * True only when `git show <rev>:<path>` failed because that path is absent from the revision. Exit 128 is
+ * ambiguous: git uses it both for a path missing from the revision and for a revision that does not resolve,
+ * and its message is localized, so it is never parsed. Instead the revision is re-checked independently with
+ * `git ls-tree <rev> -- <path>`: a successful empty listing means the revision resolves and holds no such
+ * path. Any other outcome, including a failure of that second call, is a real git error. A killed or aborted
+ * call is never a missing path, so a cancellation still reports as cancelled.
  */
-export function isMissingPath(error: unknown): boolean {
-    return (error as { code?: unknown }).code === 128 && !wasKilled(error);
+export async function isMissingPath(
+    root: string,
+    rev: string,
+    path: string,
+    error: unknown,
+    timeoutMs: number,
+    signal?: AbortSignal,
+): Promise<boolean> {
+    if (wasKilled(error) || (error as { code?: unknown }).code !== 128) {
+        return false;
+    }
+    try {
+        return (await gitAsync(root, ["ls-tree", rev, "--", path], timeoutMs, signal)).trim() === "";
+    } catch {
+        return false;
+    }
 }
 
 /** True when the subprocess was killed by its own timeout or by the caller's abort signal. */

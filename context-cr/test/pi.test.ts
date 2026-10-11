@@ -11,6 +11,24 @@ import { createPiRunner, failureOf } from "../src/review/pi.ts";
 import { repoTools, reportFindingTool } from "../src/review/tools.ts";
 import type { Candidate } from "../src/review/tools.ts";
 
+/**
+ * Bounds a promise so a regression fails the test instead of hanging the CI job until its own timeout.
+ * The timer is always cleared, so a passing test leaves no pending handle behind.
+ */
+async function within<T>(promise: Promise<T>, label: string, ms = 5000): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise<never>((_resolve, reject) => {
+                timer = setTimeout(() => reject(new Error(`${label} did not finish within ${ms}ms`)), ms);
+            }),
+        ]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 function chunk(delta: Record<string, unknown>, finish: string | null = null): string {
     const body = {
         id: "c",
@@ -190,15 +208,18 @@ test("a session timeout aborts an in-flight tool instead of waiting out the git 
                 }),
         };
         const started = Date.now();
-        await assert.rejects(
-            run({ role: "finder", model: "m", system: "s", prompt: "p", tools: [slow], timeoutMs: 500 }),
-            (error: unknown) => {
-                assert.ok(error instanceof SessionError);
-                assert.match(error.message, /timed out/);
-                return true;
-            },
+        await within(
+            assert.rejects(
+                run({ role: "finder", model: "m", system: "s", prompt: "p", tools: [slow], timeoutMs: 500 }),
+                (error: unknown) => {
+                    assert.ok(error instanceof SessionError);
+                    assert.match(error.message, /timed out/);
+                    return true;
+                },
+            ),
+            "the session to time out",
         );
-        await reached;
+        await within(reached, "the in-flight tool to see the session abort");
         assert.ok(sawAbort, "the tool never saw the session abort");
         assert.ok(Date.now() - started < 5000, "the session waited past its own timeout");
     } finally {

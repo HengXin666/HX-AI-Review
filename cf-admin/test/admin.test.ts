@@ -149,8 +149,16 @@ test("a run that never got the budget cannot release the holder's claim", async 
     assert.ok(claim);
     const refused = await read();
     assert.equal(refused.l0Cause, "budget");
-    // The refused run publishes its L0 result and charges 0; it must not free the holder's claim.
-    await store.charge(repo.id, 0, "2026-10", String(refused.budgetClaim ?? ""));
+    // The refused run publishes its L0 result through the real route, so a route that drops or mis-passes
+    // budgetClaim is caught here; charging directly would not exercise it. An L0 refusal has no claim, so
+    // the body echoes undefined and the run must still not free the holder's claim.
+    const published = await call(
+        "POST",
+        "/runs",
+        { repo: "o/r", sha: "l0", event: "push", findings: [], budgetClaim: refused.budgetClaim },
+        token,
+    );
+    assert.equal(published.status, 201);
     assert.equal(store.claims.get(repo.id)?.claim, claim);
     assert.equal((await read()).l0Cause, "budget");
 });
@@ -192,6 +200,8 @@ test("a run cancelled before its first session does not burn the budget of the r
     // allowance would let two rapid pushes consume the whole month.
     const second = await init("g");
     assert.equal(limitsOf(second), 1);
+    // maxRunUsd alone cannot prove a takeover: an L0 refusal reports the same remaining figure.
+    assert.equal(second.l0Only, false);
 });
 
 test("taking over a run that had started spending charges its allowance, so it cannot be re-spent", async () => {
@@ -208,8 +218,12 @@ test("taking over a run that had started spending charges its allowance, so it c
     const second = await init("g");
     assert.equal(limitsOf(second), 0);
     assert.equal(store.repos.find((item) => item.id === repo.id)!.spentUsd, 1);
+    // The month is fully spent now, so the next /init is L0-only with no credentials: only the takeover
+    // itself may still hold the (zero) allowance.
     const third = await init("g");
     assert.equal(third.l0Cause, "budget");
+    assert.equal(third.l0Only, true);
+    assert.equal(third.apiKey, undefined);
 });
 
 test("a superseded run cannot mark its claim as spending, so it cannot spend unaccounted", async () => {
@@ -270,6 +284,8 @@ test("a claim taken over in a later month does not consume the new month's budge
     row.spentUsd = 0.5;
     const next = await init("g");
     assert.equal((next.limits as { maxRunUsd: number }).maxRunUsd, 1);
+    // As above: the figure alone could also come from an L0 refusal, so require the real claim.
+    assert.equal(next.l0Only, false);
 });
 
 test("init: a spent budget and invalid stored limits are machine-readable L0 causes", async () => {

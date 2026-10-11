@@ -118,6 +118,15 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
     const endpoint = process.env[ENV.endpoint];
     const token = process.env[ENV.token];
     const claim = state.config.budgetClaim;
+    // A capped run must be able to mark its claim as spending before the first session. Without the marker
+    // the Worker settles a taken-over claim as 0 and hands the same remainder out again, so a missing
+    // claim or a missing endpoint/token is a configuration error rather than an unmarked spending run.
+    if (state.config.limits.maxRunUsd !== null && !(claim && endpoint && token)) {
+        throw new Error(
+            "a budgeted run needs limits.maxRunUsd, budgetClaim, HX_CTX_ENDPOINT and HX_CTX_TOKEN " +
+                "to mark the claim as spending before the first model session",
+        );
+    }
     const result = await runReview(state.config, scope, {
         run,
         diff,
@@ -125,7 +134,7 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
         readFile: (path) => readTracked(root, path),
         // The Worker settles a taken-over claim only if it was marked as spending, so a run cancelled
         // before its first session is charged nothing. Only meaningful for a budgeted repo with a claim.
-        onSpend: endpoint && token && claim ? () => postSpend(endpoint, token, claim) : undefined,
+        onSpend: endpoint && token && claim ? (signal) => postSpend(endpoint, token, claim, signal) : undefined,
     });
     writeFileSync(stateFile(root, SESSION_FILE), sessionsToJsonl(result.transcripts), UTF8);
     const { findings, patches, usage, rejected, complete, errors, notReviewed, rejections } = result;
