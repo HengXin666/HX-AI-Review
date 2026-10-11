@@ -14,9 +14,14 @@
 -- will never be reported, while a run cancelled before its first session is charged nothing, so rapid
 -- pushes on one branch do not each burn the month. A claim from an earlier month settles into its own
 -- month and never reduces this month's budget.
+--
+-- settled_claims records those settlements as JSON [{"c": claim, "u": usd, "m": month}]. A settled run is
+-- only presumed lost: it may still report POST /runs afterwards, and charge then replaces its settled
+-- allowance with the real cost instead of counting both.
 ALTER TABLE repos ADD COLUMN budget_claim TEXT NOT NULL DEFAULT '';
 ALTER TABLE repos ADD COLUMN claim_group TEXT NOT NULL DEFAULT '';
 ALTER TABLE repos ADD COLUMN claim_usd REAL NOT NULL DEFAULT 0;
 ALTER TABLE repos ADD COLUMN claim_month TEXT NOT NULL DEFAULT '';
 ALTER TABLE repos ADD COLUMN claim_started INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE repos ADD COLUMN claim_expires_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE repos ADD COLUMN settled_claims TEXT NOT NULL DEFAULT '[]';

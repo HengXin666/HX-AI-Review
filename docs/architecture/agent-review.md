@@ -97,7 +97,7 @@ finder 的候选在花钱请 verifier 之前先过代码检查 (`context-cr/src/
 | 每会话时长 | 8 分钟, 且不超过运行剩余时间 | `SESSION_TIMEOUT_MS` | 中止会话, 运行记为 incomplete |
 | 整个 AI 审查时长 | min(20 分钟, job 剩余时间 - 发布预留) | `RUN_DEADLINE_MS`, `JOB_TIMEOUT_MS`, `PUBLISH_RESERVE_MS` | 不再开新会话, 运行记为 incomplete; 截止时间按 job 剩余时间 (workflow 传入的 `HX_CTX_STARTED_AT`) 扣除 checkout/install/init/L0/scope 的耗时和 2 分钟发布预留, 保证在 job 的 30 分钟超时前进入 publish, 花费照常计入预算 |
 | 每次运行花费 | 本次运行可用额度 | `/init` 的 `limits.maxRunUsd` (无上限时为 null) | 不再开新会话, 运行记为 incomplete |
-| 预留开始花费 | 第一次会话前上报一次 | `POST /spend` (`ReviewDeps.onSpend`) | 该预留被接管时按额度结算; 未上报则按 0 结算 |
+| 预留开始花费 | 第一次会话前上报一次 | `POST /spend` (`ReviewDeps.onSpend`) | 上报失败或预留已被接管 (409) 都中止审查, 不再开会话; 该预留被接管时按额度结算, 未上报则按 0 结算 |
 | 月预算 | 仓库配置 | Worker | 用完后 `/init` 只下发 L0 配置, 不给 key |
 
 费用按 provider 的输入, 输出, 缓存读, 缓存写单价由 pi 计算并上报; Worker 用 token 数重算, 取两者较大值计入月预算.

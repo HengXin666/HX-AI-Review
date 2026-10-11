@@ -16,7 +16,7 @@ runner 侧 CLI. 入口 [context-cr/src/cli.ts](../../context-cr/src/cli.ts), 步
 
 `context-cr/src/init/client.ts` 对可能让运行被误判为完整的字段失败关闭: `l0Only` 时缺失或未知的 `l0Cause` 按 `config` 处理 (不能与主动选择混淆, 否则该区间会被当成已审并推进 last_sha); 非 L0 响应缺少 `limits.maxRunUsd` 时报错, 只有显式 `null` 才表示无上限, 避免单次运行超出月预算.
 
-`/init` 的 `budgetClaim` 是本次运行的预算预留 id, 原样带回 `POST /runs`: 计费时只有持有者能释放该预留, 被拒绝预算而仍上报 L0 结果的运行不会解开别人的预留. 第一次模型会话前还会 `POST /spend` 标记该预留已开始花费 (best effort, 失败不阻断审查): 只有标记过的预留被接管时才结算额度, 在安装/L0/scope 阶段就被取消的运行按 0 结算, 不会让同一分支的连续 push 各自烧掉整月预算. 请求 `/init` 时带上 workflow 的 concurrency group (`HX_CTX_GROUP`), 同组中已被 GitHub 取消的旧运行的预留可被接管, 否则快速连续 push 时幸存的运行会被自己前一次运行的预留挡住而只跑 L0.
+`/init` 的 `budgetClaim` 是本次运行的预算预留 id, 原样带回 `POST /runs`: 计费时只有持有者能释放该预留, 被拒绝预算而仍上报 L0 结果的运行不会解开别人的预留. 第一次模型会话前还会 `POST /spend` 标记该预留已开始花费: 只有标记过的预留被接管时才结算额度, 在安装/L0/scope 阶段就被取消的运行按 0 结算, 不会让同一分支的连续 push 各自烧掉整月预算. 标记失败会中止审查 (fail closed), 因为继续花一份 Worker 仍认为未花掉的预算, 一旦本运行被取消, 接管就会把同一份余额再发一次; 预留已被别的运行抢走时同样会拿到 409, 避免同一次运行被记两次账. 请求 `/init` 时带上 workflow 的 concurrency group (`HX_CTX_GROUP`), 同组中已被 GitHub 取消的旧运行的预留可被接管, 否则快速连续 push 时幸存的运行会被自己前一次运行的预留挡住而只跑 L0.
 
 快照只看 git 跟踪的文件, 所以 runner 在工作区里 checkout 的工具目录不会被当成被审内容. 运行状态 (init, l0, scope, ai, 会话) 放在 `RUNNER_TEMP` 下而不是被审仓库里, init 每次清空并生成 nonce; publish 只采用带同一 nonce 的 AI 结果, PR 无法通过提交文件伪造发现或补丁.
 

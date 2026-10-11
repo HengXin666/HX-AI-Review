@@ -55,17 +55,19 @@ export function sessionsToJsonl(transcripts: { role: string; index: number; mess
 /**
  * Tells the Worker that this run is about to open its first model session. The budget claim is only
  * settled if it was marked as started, so a run cancelled during install or scope is charged nothing.
- * Best effort: a failure here must not stop the review, it only risks settling an unused allowance.
+ *
+ * Throws when the marker cannot be recorded: starting the session anyway would spend budget the Worker
+ * still believes is unspent, and if this run were then cancelled the takeover would hand the same
+ * remainder out again. The caller fails the review closed, which only costs a re-review of this range.
  */
 export async function postSpend(endpoint: string, token: string, budgetClaim: string): Promise<void> {
-    try {
-        await fetch(new URL("/spend", endpoint), {
-            method: "POST",
-            headers: { authorization: "Bearer " + token, "content-type": "application/json" },
-            body: JSON.stringify({ budgetClaim }),
-        });
-    } catch {
-        // The review is more valuable than the reservation accounting; see the doc for the trade-off.
+    const response = await fetch(new URL("/spend", endpoint), {
+        method: "POST",
+        headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+        body: JSON.stringify({ budgetClaim }),
+    });
+    if (!response.ok) {
+        throw new Error(`POST /spend failed with ${response.status}`);
     }
 }
 

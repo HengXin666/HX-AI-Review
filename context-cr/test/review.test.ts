@@ -288,6 +288,22 @@ test("a small context window shrinks the finder and verifier prompts instead of 
     }
 });
 
+test("a spend marker that cannot be recorded stops the review instead of spending unmarked", async () => {
+    const calls: AgentRequest[] = [];
+    const result = await runReview(config, scope, {
+        ...base,
+        run: fake(calls),
+        onSpend: async () => {
+            throw new Error("POST /spend failed with 500");
+        },
+    });
+    // Spending here would leave the Worker believing the budget is unspent; a takeover could then hand
+    // the same remainder to the next run. No session may start, and the range must be re-reviewed.
+    assert.equal(calls.length, 0);
+    assert.equal(result.complete, false);
+    assert.match(result.errors[0], /could not mark the budget claim as spending/);
+});
+
 test("the first session marks the budget claim as spending; later ones do not repeat it", async () => {
     const calls: AgentRequest[] = [];
     let spends = 0;

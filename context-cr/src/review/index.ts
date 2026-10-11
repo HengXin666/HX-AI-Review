@@ -156,9 +156,17 @@ class Review {
         const index = this.sessions++;
         const timeoutMs = Math.min(SESSION_TIMEOUT_MS, left);
         // First real session of the run: tell the Worker the claim is being spent, so if this run is
-        // cancelled before POST /runs its allowance is settled instead of looking free.
-        if (index === 0) {
-            await this.deps.onSpend?.();
+        // cancelled before POST /runs its allowance is settled instead of looking free. A marker that
+        // cannot be recorded must stop the review: spending budget the Worker still thinks is unspent
+        // could hand the same remainder to the next run. Failing here only costs a re-review of this range.
+        if (index === 0 && this.deps.onSpend) {
+            try {
+                await this.deps.onSpend();
+            } catch (error) {
+                const why = error instanceof Error ? error.message : String(error);
+                this.fail(`could not mark the budget claim as spending: ${why}`);
+                return false;
+            }
         }
         try {
             this.record(request.role, index, await this.deps.run({ ...request, timeoutMs }));

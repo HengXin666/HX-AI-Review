@@ -231,7 +231,8 @@ paths:
             description: >-
                 Marks the run's budget claim as having opened a model session. A claim taken over by a newer
                 run is settled (charged its allowance) only when it was marked this way, so a run cancelled
-                before its first session does not burn the month. Idempotent; an unknown claim is a no-op.
+                before its first session does not burn the month. Repeating it for the claim this run
+                still holds is a no-op.
             requestBody:
                 required: true
                 content:
@@ -243,7 +244,12 @@ paths:
                                 budgetClaim: { type: string }
             responses:
                 "200": { description: Recorded }
+                "400": { description: budgetClaim is missing }
                 "401": { description: Missing or unknown token }
+                "409":
+                    description: >-
+                        The claim is no longer held by this run: a newer run has taken it over and will settle
+                        it. This run must not spend, or the month would be charged twice.
     /runs:
         post:
             operationId: postRun

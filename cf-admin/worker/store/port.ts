@@ -104,8 +104,11 @@ export interface Store {
         now: string,
         expiresAt: string,
     ): Promise<{ claimed: false } | { claimed: true; remainingUsd: number }>;
-    /** Record that the claim's run opened a model session, so a later takeover settles its allowance. */
-    startSpend(repoId: number, claim: string): Promise<void>;
+    /**
+     * Record that the claim's run opened a model session, so a later takeover settles its allowance.
+     * False when the claim is no longer current, i.e. a newer run has taken it over.
+     */
+    startSpend(repoId: number, claim: string): Promise<boolean>;
     /** Release the claim only when `claim` is the one held; another run's claim is left untouched. */
     releaseBudget(repoId: number, claim: string): Promise<void>;
     /** Add to the month's spend; releases the run's own claim, never another run's. Every run is charged. */

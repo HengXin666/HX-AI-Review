@@ -64,7 +64,7 @@ R2 键: `runs/<owner>/<repo>/<runId>/report.md`, `report.json`, `sessions.jsonl`
 
 provider 名只允许字母, 数字, `.`, `_`, `-`; 新建 provider 必须显式给出输入/输出单价 (免费填 0), 更新时省略的字段 (包括 API 协议) 保留原值; 未知协议, 负数或非整数的 token 上限返回 400. 仓库的 enabled, mode, provider, 模型名, budgetUsd 同理: 省略不改, 出现但类型或取值不对返回 400, 不会被静默忽略. `POST /runs` 同样严格: complete, l0Only 必须是布尔, usage 各项与 durationMs 必须是非负数且为整数 (usage.cost 例外, 单价按百万 token 计, 允许小数), prNumber 与 finding 行号必须是正整数, 字符串字段必须是字符串, 否则 400. 显式 `null` 一律按非法值处理而不是省略: 只有字段缺失才表示不提供. patches 里缺字段或类型不对的条目同样 400, 只有字段合法且 `applies: false` 的补丁才被跳过. status 一律由服务端推导 (failed, incomplete, warned, passed), runner 只能在没有发现时标 skipped; runner 发 incomplete 时同样不推进 last_sha.
 
-`POST /spend` 只接受 `budgetClaim`, 把该预留标记为已开始花费 (幂等, 未知预留是 no-op), 供接管时判断是否结算. `/init` 的 `limits.maxRunUsd` 是本次运行的可用额度 (无上限时为 null), runner 达到它就不再开新的模型会话; 有上限的仓库同时按上节的预留规则独占本次额度. 只下发 L0 时附带 `l0Cause`: disabled, mode (主动选择), budget, config (区间未审, runner 报 incomplete). 旧数据里 contextWindow 或 maxTokens 不是正整数的 provider 也按 config 降级, 不会把非法上限发给模型. 同名仓库 (大小写不敏感) 重复登记返回 409, 并发创建撞唯一约束同样映射为 409.
+`POST /spend` 只接受 `budgetClaim`, 把该预留标记为已开始花费, 供接管时判断是否结算. 重复标记本运行仍持有的预留是 no-op; 预留已被更新的运行接管时返回 409, 该运行必须停止而不是继续花费, 否则同一次运行会被结算一次, 又按真实花费记一次. 迟到的 `/runs` 上报真实花费时, `settled_claims` 里该预留的额度会被真实花费替换而不是叠加, 所以被接管后仍然跑完的运行不会让当月预算被重复扣减. `/init` 的 `limits.maxRunUsd` 是本次运行的可用额度 (无上限时为 null), runner 达到它就不再开新的模型会话; 有上限的仓库同时按上节的预留规则独占本次额度. 只下发 L0 时附带 `l0Cause`: disabled, mode (主动选择), budget, config (区间未审, runner 报 incomplete). 旧数据里 contextWindow 或 maxTokens 不是正整数的 provider 也按 config 降级, 不会把非法上限发给模型. 同名仓库 (大小写不敏感) 重复登记返回 409, 并发创建撞唯一约束同样映射为 409.
 
 ## 分层
 

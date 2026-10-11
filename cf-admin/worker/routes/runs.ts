@@ -189,8 +189,13 @@ export async function handleSpend(request: Request, deps: Deps): Promise<Respons
     const repo = await repoFromToken(request, deps);
     const body = await readJson(request);
     const claim = text(body.budgetClaim, "budgetClaim");
-    if (claim) {
-        await deps.store.startSpend(repo.id, claim);
+    if (!claim) {
+        throw new HttpError(400, "budgetClaim is required");
+    }
+    // Refusing a superseded claim is what makes this marker load-bearing: the run that took the claim
+    // over will settle it, and letting the older run spend on top would charge the month twice.
+    if (!(await deps.store.startSpend(repo.id, claim))) {
+        throw new HttpError(409, "budget claim is no longer held by this run");
     }
     return json({ ok: true });
 }

@@ -212,6 +212,48 @@ test("taking over a run that had started spending charges its allowance, so it c
     assert.equal(third.l0Cause, "budget");
 });
 
+test("a superseded run cannot mark its claim as spending, so it cannot spend unaccounted", async () => {
+    const { call, token } = await registered();
+    const init = async (group: string) =>
+        (await (await call("GET", `/init?group=${group}`, undefined, token)).json()) as Record<string, unknown>;
+    await call("PATCH", "/api/repos/o/r", { budgetUsd: 1 });
+    const first = await init("g");
+    // A newer push takes the claim over. The older run is still alive and tries to start a session, but
+    // its claim is settled by the takeover already: letting it spend would charge the month twice.
+    await init("g");
+    const spent = await call("POST", "/spend", { budgetClaim: first.budgetClaim }, token);
+    assert.equal(spent.status, 409);
+});
+
+test("a late report from a taken-over run replaces its settled allowance instead of adding to it", async () => {
+    const { call, token, store } = await registered();
+    const repo = (await store.repoByName("o/r"))!;
+    const init = async (group: string) =>
+        (await (await call("GET", `/init?group=${group}`, undefined, token)).json()) as Record<string, unknown>;
+    await call("PATCH", "/api/repos/o/r", { budgetUsd: 1 });
+    const first = await init("g");
+    await call("POST", "/spend", { budgetClaim: first.budgetClaim }, token);
+    // Taken over while spending: its whole allowance is charged, since its real cost is unknown.
+    await init("g");
+    assert.equal(store.repos.find((item) => item.id === repo.id)!.spentUsd, 1);
+    // The old run finishes after all and reports what it really cost. Counting both would double-charge
+    // the month and push later runs to L0.
+    await call(
+        "POST",
+        "/runs",
+        {
+            repo: "o/r",
+            sha: "late",
+            event: "push",
+            findings: [],
+            budgetClaim: first.budgetClaim,
+            usage: { cost: 0.25 },
+        },
+        token,
+    );
+    assert.equal(store.repos.find((item) => item.id === repo.id)!.spentUsd, 0.25);
+});
+
 test("a claim taken over in a later month does not consume the new month's budget", async () => {
     const { call, token, store } = await registered();
     const repo = (await store.repoByName("o/r"))!;

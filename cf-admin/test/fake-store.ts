@@ -23,6 +23,8 @@ export class FakeStore implements Store {
         number,
         { claim: string; group: string; usd: number; month: string; started: boolean; expiresAt: string }
     >();
+    /** Claims already settled by a takeover, by claim id: their allowance is charged but may be replaced. */
+    settled = new Map<string, { usd: number; month: string }>();
 
     private strip(row?: RepoRow & { tokenHash: string }): RepoRow | null {
         if (!row) {
@@ -112,6 +114,8 @@ export class FakeStore implements Store {
         if (held?.started && held.month === month) {
             row.spentUsd = row.budgetMonth === month ? row.spentUsd + held.usd : held.usd;
             row.budgetMonth = month;
+            // Settled, not spent for certain: a late /runs replaces this allowance with the real cost.
+            this.settled.set(held.claim, { usd: held.usd, month: held.month });
         }
         if (row.budgetMonth !== month) {
             row.spentUsd = 0;
@@ -123,9 +127,11 @@ export class FakeStore implements Store {
     }
     async startSpend(repoId: number, claim: string) {
         const held = this.claims.get(repoId);
-        if (held?.claim === claim) {
-            held.started = true;
+        if (held?.claim !== claim) {
+            return false;
         }
+        held.started = true;
+        return true;
     }
     async releaseBudget(repoId: number, claim: string) {
         if (this.claims.get(repoId)?.claim === claim) {
@@ -134,8 +140,13 @@ export class FakeStore implements Store {
     }
     async charge(repoId: number, costUsd: number, month: string, claim: string) {
         const row = this.repos.find((item) => item.id === repoId)!;
-        row.spentUsd = row.budgetMonth === month ? row.spentUsd + costUsd : costUsd;
+        // A takeover already charged this claim its allowance; the real cost replaces it rather than
+        // being added on top, so one run is never counted twice.
+        const prior = this.settled.get(claim);
+        const replacement = prior && prior.month === month ? prior.usd : 0;
+        row.spentUsd = row.budgetMonth === month ? row.spentUsd + costUsd - replacement : costUsd;
         row.budgetMonth = month;
+        this.settled.delete(claim);
         // Only the holder releases; a refused run publishing L0 results must not free someone else's claim.
         if (this.claims.get(repoId)?.claim === claim) {
             this.claims.delete(repoId);
