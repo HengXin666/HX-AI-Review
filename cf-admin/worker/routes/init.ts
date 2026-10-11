@@ -6,6 +6,7 @@ import type { ProviderRow, RepoRow } from "../store/port.ts";
 const MAX_CANDIDATES = 12;
 /** A claim older than this is treated as abandoned (job timeout is 30 minutes), so a crashed run cannot block. */
 const RESERVE_TTL_MS = 60 * 60 * 1000;
+const BUSY = "another run is using this month's budget";
 
 function spentThisMonth(repo: RepoRow, now: Date): number {
     return repo.budgetMonth === month(now) ? repo.spentUsd : 0;
@@ -15,10 +16,12 @@ type L0 = { cause: "disabled" | "mode" | "budget" | "config"; reason: string };
 
 const positiveInt = (value: number) => Number.isSafeInteger(value) && value >= 1;
 
-/** True when this request owns the repo's budget until the claim expires or POST /runs releases it. */
-async function claimBudget(deps: Deps, repoId: number, now: Date): Promise<boolean> {
-    const stale = new Date(now.getTime() - RESERVE_TTL_MS).toISOString();
-    return deps.store.reserveBudget(repoId, now.toISOString(), stale);
+/** This request's budget claim id, echoed back by POST /runs so only the holder can release it. */
+async function claimBudget(deps: Deps, repoId: number, now: Date, group: string): Promise<string | null> {
+    const claim = deps.id();
+    const expiresAt = new Date(now.getTime() + RESERVE_TTL_MS).toISOString();
+    const claimed = await deps.store.reserveBudget(repoId, claim, group, now.toISOString(), expiresAt);
+    return claimed ? claim : null;
 }
 
 /**
@@ -64,12 +67,12 @@ export async function handleInit(request: Request, deps: Deps): Promise<Response
     const provider = await deps.store.provider(repo.provider);
     const apiKey = provider ? deps.secret(provider.keySecret) : undefined;
     const now = deps.now();
-    // Only a capped repo needs a claim; an uncapped one is handed no budget at all.
-    const l0 =
-        l0Reason(repo, now, provider, Boolean(apiKey)) ??
-        (repo.budgetUsd > 0 && !(await claimBudget(deps, repo.id, now))
-            ? { cause: "budget" as const, reason: "another run is using this month's budget" }
-            : null);
+    const reason = l0Reason(repo, now, provider, Boolean(apiKey));
+    // Only a capped repo that would otherwise get a model run needs a claim; the concurrency group lets
+    // a run take over the claim of the run GitHub just cancelled to start it.
+    const group = new URL(request.url).searchParams.get("group") ?? "";
+    const claim = !reason && repo.budgetUsd > 0 ? await claimBudget(deps, repo.id, now, group) : null;
+    const l0 = reason ?? (repo.budgetUsd > 0 && !claim ? { cause: "budget" as const, reason: BUSY } : null);
     const base = {
         repo: repo.name,
         enabled: repo.enabled,
@@ -93,6 +96,8 @@ export async function handleInit(request: Request, deps: Deps): Promise<Response
         },
         lastSha: repo.lastSha ?? undefined,
         suppressions: await deps.store.suppressions(repo.id),
+        // The runner sends this back on POST /runs; it is what lets that call release this claim.
+        budgetClaim: claim ?? undefined,
     };
     if (l0 !== null || !provider || !apiKey) {
         return json(base);

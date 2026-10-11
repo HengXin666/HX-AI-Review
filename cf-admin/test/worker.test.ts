@@ -21,7 +21,7 @@ test("disabled or over-budget repos get L0 config without a key", async () => {
     assert.equal(body.l0Only, true);
     assert.equal(body.apiKey, undefined);
     await call("PATCH", "/api/repos/o/r", { enabled: true });
-    await store.charge(1, 1.5, "2026-10");
+    await store.charge(1, 1.5, "2026-10", "");
     body = (await (await call("GET", "/init", undefined, token)).json()) as Record<string, unknown>;
     assert.equal(body.l0Only, true);
     assert.match(String(body.reason), /budget/);

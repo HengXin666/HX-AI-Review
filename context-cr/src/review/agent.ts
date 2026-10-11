@@ -9,8 +9,11 @@ export type ToolSpec = {
     label: string;
     description: string;
     parameters: TSchema;
-    /** Returns the text sent back to the model. Async so a slow git call cannot block the session timer. */
-    execute(params: Record<string, unknown>): string | Promise<string>;
+    /**
+     * Returns the text sent back to the model. Async so a slow git call cannot block the session timer,
+     * and given the session's abort signal so a cancelled session also kills an in-flight git command.
+     */
+    execute(params: Record<string, unknown>, signal?: AbortSignal): string | Promise<string>;
 };
 
 export type AgentRequest = {

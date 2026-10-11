@@ -133,22 +133,45 @@ test("concurrent /init calls cannot both be handed the same unspent budget", asy
     const blocked = first.l0Only ? first : second;
     assert.equal(blocked.l0Cause, "budget");
     assert.equal(blocked.apiKey, undefined);
-    // Charging the finished run releases the claim, so the next run may claim the remainder again.
-    await store.charge(repo.id, 0.25, "2026-10");
+    // The holder releasing its own claim lets the next run claim the remainder.
+    await store.releaseBudget(repo.id, String((first.l0Only ? second : first).budgetClaim));
     const next = await read();
     assert.equal(next.l0Only, false);
-    assert.equal((next.limits as { maxRunUsd: number }).maxRunUsd, 0.75);
+    assert.equal((next.limits as { maxRunUsd: number }).maxRunUsd, 1);
 });
 
-test("an abandoned claim expires so a crashed run cannot block the month forever", async () => {
+test("a run that never got the budget cannot release the holder's claim", async () => {
     const { call, token, store } = await registered();
     const read = async () => (await (await call("GET", "/init", undefined, token)).json()) as Record<string, unknown>;
     const repo = (await store.repoByName("o/r"))!;
-    assert.equal((await read()).l0Only, false);
+    const holder = await read();
+    const claim = String(holder.budgetClaim);
+    assert.ok(claim);
+    const refused = await read();
+    assert.equal(refused.l0Cause, "budget");
+    // The refused run publishes its L0 result and charges 0; it must not free the holder's claim.
+    await store.charge(repo.id, 0, "2026-10", String(refused.budgetClaim ?? ""));
+    assert.equal(store.claims.get(repo.id)?.claim, claim);
     assert.equal((await read()).l0Cause, "budget");
-    // Older than the TTL: the claim is treated as abandoned and may be taken over.
-    store.reservedAt.set(repo.id, "2000-01-01T00:00:00.000Z");
-    assert.equal((await read()).l0Only, false);
+});
+
+test("a cancelled run's claim is taken over by the run that superseded it in the same group", async () => {
+    const { call, token, store } = await registered();
+    const repo = (await store.repoByName("o/r"))!;
+    const init = (group: string) =>
+        call("GET", `/init?group=${encodeURIComponent(group)}`, undefined, token).then((r) => r.json());
+    // Same concurrency group: GitHub cancelled the older run, so the newer one takes over its claim.
+    const first = (await init("g")) as Record<string, unknown>;
+    assert.equal(first.l0Only, false);
+    const second = (await init("g")) as Record<string, unknown>;
+    assert.equal(second.l0Only, false);
+    assert.notEqual(second.budgetClaim, first.budgetClaim);
+    // A different group is genuinely concurrent and must still be refused.
+    const other = (await init("h")) as Record<string, unknown>;
+    assert.equal(other.l0Cause, "budget");
+    // An expired claim is abandoned and may be taken over by anyone.
+    store.claims.set(repo.id, { claim: "old", group: "h", expiresAt: "2000-01-01T00:00:00.000Z" });
+    assert.equal(((await init("i")) as Record<string, unknown>).l0Only, false);
 });
 
 test("init: a spent budget and invalid stored limits are machine-readable L0 causes", async () => {
@@ -159,7 +182,7 @@ test("init: a spent budget and invalid stored limits are machine-readable L0 cau
     assert.equal((await read()).l0Cause, "config");
     await store.upsertProvider(provider);
     // The harness clock is fixed; the real system month would land in a different budgetMonth and be ignored.
-    await store.charge((await store.repoByName("o/r"))!.id, 5, "2026-10");
+    await store.charge((await store.repoByName("o/r"))!.id, 5, "2026-10", "");
     const init = await read();
     assert.equal(init.l0Cause, "budget");
     assert.equal(init.apiKey, undefined);

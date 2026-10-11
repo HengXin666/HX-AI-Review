@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { GIT_TOOL_TIMEOUT_MS, REPORT_CALL_LIMIT, REPORT_FINDING_TOOL, REPORT_VERDICT_TOOL } from "../constants.ts";
-import { gitAsync, tryGitAsync } from "../git.ts";
+import { describeGitError, gitAsync, isMissingPath, isNoMatch } from "../git.ts";
 import type { ToolSpec } from "./agent.ts";
 
 export type Candidate = {
@@ -140,16 +140,13 @@ const REFUSED = "Refused: use a repository-relative path without '..' or '.git'.
  * A tracked symlink reads as its target path, never as the target's content.
  */
 export function repoTools(root: string): ToolSpec[] {
-    const run = async (args: string[]): Promise<string> => {
+    // execFile reports the exit code as `code` (`status` only exists on execFileSync errors), so the
+    // previous `status === 1` check never matched and "no matches" was reported as a git failure.
+    const run = async (args: string[], signal?: AbortSignal): Promise<string> => {
         try {
-            return await gitAsync(root, args, GIT_TOOL_TIMEOUT_MS);
+            return await gitAsync(root, args, GIT_TOOL_TIMEOUT_MS, signal);
         } catch (error) {
-            const status = (error as { status?: number }).status;
-            if (status === 1) {
-                return "";
-            }
-            const why = error instanceof Error ? error.message.split("\n")[0] : String(error);
-            return "git error: " + why;
+            return isNoMatch(error) ? "" : "git error: " + describeGitError(error);
         }
     };
     return [
@@ -162,14 +159,20 @@ export function repoTools(root: string): ToolSpec[] {
                 offset: Type.Optional(Type.Integer({ minimum: 1, description: "First line, default 1" })),
                 limit: Type.Optional(Type.Integer({ minimum: 1, description: `Lines, default ${READ_DEFAULT_LINES}` })),
             }),
-            async execute(params) {
+            async execute(params, signal) {
                 const path = safePath(params.path);
                 if (!path) {
                     return REFUSED;
                 }
-                const text = await tryGitAsync(root, ["show", "HEAD:" + path], GIT_TOOL_TIMEOUT_MS);
-                if (text === undefined) {
-                    return `No tracked file ${path} at the reviewed commit.`;
+                let text: string;
+                try {
+                    text = await gitAsync(root, ["show", "HEAD:" + path], GIT_TOOL_TIMEOUT_MS, signal);
+                } catch (error) {
+                    // Only a path absent from the revision means "not found"; a timeout, a cancellation or
+                    // any other git failure is reported as such instead of hiding a real file.
+                    return isMissingPath(error)
+                        ? `No tracked file ${path} at the reviewed commit.`
+                        : "git error: " + describeGitError(error);
                 }
                 const lines = text.split("\n");
                 const from = Math.max(1, Number(params.offset) || 1);
@@ -186,13 +189,13 @@ export function repoTools(root: string): ToolSpec[] {
                 pattern: Type.String(),
                 path: Type.Optional(Type.String({ description: "Limit to this file or directory" })),
             }),
-            async execute(params) {
+            async execute(params, signal) {
                 const path = params.path === undefined ? "" : safePath(params.path);
                 if (path === undefined) {
                     return REFUSED;
                 }
                 const args = ["grep", "-n", "-I", "-E", "-e", String(params.pattern), "HEAD", "--"];
-                const out = await run(path ? [...args, path] : args);
+                const out = await run(path ? [...args, path] : args, signal);
                 // git grep prefixes each line with "HEAD:"; only that revision prefix is stripped, so a
                 // result line that itself contains "HEAD:" (e.g. a refspec) keeps its own text intact.
                 return (
@@ -210,13 +213,13 @@ export function repoTools(root: string): ToolSpec[] {
             label: "Find files",
             description: "List tracked files matching a glob such as 'docs/**/*.md' or '**/AGENTS.md'.",
             parameters: Type.Object({ pattern: Type.String() }),
-            async execute(params) {
+            async execute(params, signal) {
                 const pattern = safePath(params.pattern);
                 if (!pattern) {
                     return REFUSED;
                 }
                 const match = globRegex(pattern);
-                const files = (await run(["ls-tree", "-r", "--name-only", "-z", "HEAD"])).split("\0");
+                const files = (await run(["ls-tree", "-r", "--name-only", "-z", "HEAD"], signal)).split("\0");
                 return clip(files.filter((file) => file && match.test(file)).join("\n")) || "No files.";
             },
         },
@@ -225,12 +228,12 @@ export function repoTools(root: string): ToolSpec[] {
             label: "List directory",
             description: "List a directory of the reviewed commit; directories end with '/'.",
             parameters: Type.Object({ path: Type.Optional(Type.String()) }),
-            async execute(params) {
+            async execute(params, signal) {
                 const path = params.path === undefined ? "" : safePath(params.path);
                 if (path === undefined) {
                     return REFUSED;
                 }
-                const out = await run(["ls-tree", "HEAD", "--", path ? path + "/" : "."]);
+                const out = await run(["ls-tree", "HEAD", "--", path ? path + "/" : "."], signal);
                 const names = out
                     .split("\n")
                     .filter(Boolean)

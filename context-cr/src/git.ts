@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { GIT_MAX_BUFFER, UTF8, ZERO_SHA } from "./constants.ts";
+import { GIT_MAX_BUFFER, GIT_TOOL_TIMEOUT_MS, UTF8, ZERO_SHA } from "./constants.ts";
 
 export type Change = { status: string; path: string; oldPath?: string };
 
@@ -13,15 +13,47 @@ export function git(root: string, args: string[], input?: string, env?: Record<s
  * Async git with a kill timer. The model tools run through this: execFileSync would block the event loop,
  * so the session timer could not fire until a hung git returned and a slow tool could outlive its deadline.
  */
-export function gitAsync(root: string, args: string[], timeoutMs: number): Promise<string> {
+export function gitAsync(root: string, args: string[], timeoutMs: number, signal?: AbortSignal): Promise<string> {
     return new Promise((resolve, reject) => {
         execFile(
             "git",
             args,
-            { cwd: root, encoding: UTF8 as BufferEncoding, maxBuffer: GIT_MAX_BUFFER, timeout: timeoutMs },
+            { cwd: root, encoding: UTF8 as BufferEncoding, maxBuffer: GIT_MAX_BUFFER, timeout: timeoutMs, signal },
             (error, stdout) => (error ? reject(error) : resolve(stdout)),
         );
     });
+}
+
+/** git exits 1 when a search simply found nothing; that is an empty result, not a failure. */
+export function isNoMatch(error: unknown): boolean {
+    return (error as { code?: unknown }).code === 1;
+}
+
+/**
+ * A path absent from the revision makes git exit 128, without a kill or an abort. Classifying on those
+ * signals rather than on git's message keeps this correct under any locale; a timeout or cancellation
+ * is never mistaken for a missing file.
+ */
+export function isMissingPath(error: unknown): boolean {
+    return (error as { code?: unknown }).code === 128 && !wasKilled(error);
+}
+
+/** True when the subprocess was killed by its own timeout or by the caller's abort signal. */
+export function wasKilled(error: unknown): boolean {
+    return Boolean((error as { killed?: unknown }).killed) || (error as { code?: unknown }).code === "ABORT_ERR";
+}
+
+/** One-line reason for a failed git call, saying whether it timed out or was cancelled. */
+export function describeGitError(error: unknown): string {
+    if ((error as { code?: unknown }).code === "ABORT_ERR") {
+        return "git call cancelled";
+    }
+    if ((error as { killed?: unknown }).killed) {
+        return `git call timed out after ${GIT_TOOL_TIMEOUT_MS / 1000}s`;
+    }
+    const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim();
+    const first = stderr.split("\n")[0] || (error instanceof Error ? error.message.split("\n")[0] : String(error));
+    return first;
 }
 
 /** Async `tryGit`: undefined when git fails (missing path, no matches), so callers can tell it from "". */

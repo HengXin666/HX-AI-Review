@@ -16,7 +16,8 @@ const config: InitConfig = {
     apiUrl: "http://model.invalid",
     api: "openai-completions",
     models: { finder: "small", verifier: "large" },
-    limits: { contextWindow: 1000, maxTokens: 100, maxCandidates: 5, maxRunUsd: null },
+    // A realistic window: the prompt budget is derived from it, so a tiny value here would fail closed.
+    limits: { contextWindow: 128000, maxTokens: 8192, maxCandidates: 5, maxRunUsd: null },
     pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     suppressions: [],
 };
@@ -254,22 +255,47 @@ test("diff truncation respects the UTF-8 byte budget", () => {
     assert.ok(!out.includes("\uFFFD"));
 });
 
-test("a small context window shrinks the finder prompt instead of overflowing it", async () => {
+test("a small context window shrinks the finder and verifier prompts instead of overflowing them", async () => {
     const calls: AgentRequest[] = [];
-    const big = "x".repeat(30000);
+    // Many long lines, so the file is large but line 3 exists and can carry a candidate.
+    const big = Array.from({ length: 400 }, (_, index) => `line ${index + 1} ${"x".repeat(200)}`).join("\n");
     const many: ContextScope = {
         ...scope,
         contexts: ["a", "b", "c"].map((name) => ({ path: `${name}/AGENTS.md`, reasons: ["r"] })),
     };
     // 8000 tokens * 4 bytes is far below one batch, so the batch must split to fit the window.
     const small = { ...config, limits: { ...config.limits, contextWindow: 8000, maxTokens: 1000 } };
-    await runReview(small, many, { ...base, readFile: () => big, run: fake(calls, { finder: [] }) });
+    // The candidate must name a context file of its own batch to survive the deterministic gate.
+    const finder = [{ path: "a/AGENTS.md", line: 3, title: "real stale path" }];
+    await runReview(small, many, {
+        ...base,
+        diff: "d".repeat(200000),
+        readFile: () => big,
+        run: fake(calls, { finder }),
+    });
+    // 8000 tokens * 4 - 1000 * 4 output - 8000 reserve = 20000 bytes for the whole prompt.
+    const budget = 20000;
     const finders = calls.filter((item) => item.role === "finder");
     assert.ok(finders.length > 1, `expected several batches, got ${finders.length}`);
-    for (const call of finders) {
-        // 8000 tokens * 4 - 1000 * 4 output - 8000 reserve = 20000 bytes for the whole prompt.
-        assert.ok(Buffer.byteLength(call.prompt, "utf8") < 20000, `prompt ${Buffer.byteLength(call.prompt)} bytes`);
+    const verifiers = calls.filter((item) => item.role === "verifier");
+    assert.ok(verifiers.length > 0, "expected the finder candidate to reach a verifier");
+    // A long diff must not push either role past the window: the verifier prompt is bounded too.
+    for (const call of [...finders, ...verifiers]) {
+        assert.ok(
+            Buffer.byteLength(call.prompt, "utf8") <= budget,
+            `${call.role} prompt ${Buffer.byteLength(call.prompt)} bytes > ${budget}`,
+        );
     }
+});
+
+test("a window too small for any prompt is a configuration error, not an unreadable session", async () => {
+    const calls: AgentRequest[] = [];
+    // 2048 tokens * 4 = 8192 bytes, minus 1024 * 4 output and the 8000 reserve: nothing usable is left.
+    const tiny = { ...config, limits: { ...config.limits, contextWindow: 2048, maxTokens: 1024 } };
+    const result = await runReview(tiny, scope, { ...base, run: fake(calls) });
+    assert.equal(result.complete, false);
+    assert.equal(calls.length, 0);
+    assert.match(result.errors[0], /context window/);
 });
 
 test("repository text cannot close its own fence and escape the data boundary", async () => {

@@ -40,8 +40,8 @@ function toPiTool(spec: ToolSpec): ToolDefinition {
         label: spec.label,
         description: spec.description,
         parameters: spec.parameters,
-        execute: async (_id, params) => ({
-            content: [{ type: "text", text: await spec.execute(params as Record<string, unknown>) }],
+        execute: async (_id, params, signal) => ({
+            content: [{ type: "text", text: await spec.execute(params as Record<string, unknown>, signal) }],
             details: {},
         }),
     }) as unknown as ToolDefinition;

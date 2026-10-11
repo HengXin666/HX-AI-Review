@@ -72,6 +72,8 @@ export const RULE = {
 export const ENV = {
     endpoint: "HX_CTX_ENDPOINT",
     token: "HX_CTX_TOKEN",
+    /** The workflow's concurrency group, so /init can hand over a claim cancelled by a newer run. */
+    group: "HX_CTX_GROUP",
     apiKey: "HX_CTX_API_KEY",
     githubToken: "GITHUB_TOKEN",
     githubOutput: "GITHUB_OUTPUT",

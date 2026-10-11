@@ -259,7 +259,9 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
         await deps.blobs.delete(written).catch(() => undefined);
         throw error;
     }
-    await deps.store.charge(repo.id, costUsd, month(now));
+    // The claim id from /init: charge records spend always, but frees only this run's own claim, so a
+    // run that was refused the budget and published L0 results cannot release the holder's claim.
+    await deps.store.charge(repo.id, costUsd, month(now), text(body.budgetClaim, "budgetClaim") ?? "");
     // last_sha tracks the pushed history only, and only once the AI stage really finished for this range.
     if (run.event === "push" && prNumber === null && !incomplete) {
         await deps.store.setLastSha(repo.id, sha);

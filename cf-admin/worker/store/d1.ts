@@ -172,20 +172,33 @@ export class D1Store implements Store {
         ]);
     }
 
-    async reserveBudget(repoId: number, now: string, staleBefore: string) {
-        // One conditional UPDATE: the row is only claimed when no live claim holds it, so two
-        // concurrent /init requests cannot both succeed.
-        const sql = `UPDATE repos SET reserved_at = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE id = ? AND (reserved_at = '' OR reserved_at < ?)`;
-        const result = await this.db.prepare(sql).bind(now, repoId, staleBefore).run();
+    async reserveBudget(repoId: number, claim: string, group: string, now: string, expiresAt: string) {
+        // One conditional UPDATE, so two concurrent /init requests cannot both succeed. A claim from the
+        // same concurrency group is stale by construction: GitHub cancelled that run to start this one.
+        // An empty group means "unknown" and never matches: only a real, equal group may take over.
+        const sql = `UPDATE repos SET budget_claim = ?, claim_group = ?, claim_expires_at = ?,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = ? AND (claim_expires_at = '' OR claim_expires_at < ? OR (? != '' AND claim_group = ?))`;
+        const result = await this.db.prepare(sql).bind(claim, group, expiresAt, repoId, now, group, group).run();
         return result.meta.changes > 0;
     }
 
-    async charge(repoId: number, costUsd: number, month: string) {
-        // Charging also releases the claim, so the next run may claim the remainder right away.
+    async releaseBudget(repoId: number, claim: string) {
+        // Only the holder may release: a run that was refused the budget must not free someone else's.
+        const sql = `UPDATE repos SET budget_claim = '', claim_group = '', claim_expires_at = '',
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND budget_claim = ?`;
+        await this.db.prepare(sql).bind(repoId, claim).run();
+    }
+
+    async charge(repoId: number, costUsd: number, month: string, claim: string) {
+        // Spend is always recorded, but the claim is released only when this run holds it.
         const sql = `UPDATE repos SET spent_usd = CASE WHEN budget_month = ? THEN spent_usd + ? ELSE ? END,
-            budget_month = ?, reserved_at = '', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`;
-        await this.db.prepare(sql).bind(month, costUsd, costUsd, month, repoId).run();
+            budget_month = ?,
+            budget_claim = CASE WHEN budget_claim = ? THEN '' ELSE budget_claim END,
+            claim_group = CASE WHEN budget_claim = ? THEN '' ELSE claim_group END,
+            claim_expires_at = CASE WHEN budget_claim = ? THEN '' ELSE claim_expires_at END,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`;
+        await this.db.prepare(sql).bind(month, costUsd, costUsd, month, claim, claim, claim, repoId).run();
     }
 
     async setLastSha(repoId: number, sha: string) {

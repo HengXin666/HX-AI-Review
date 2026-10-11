@@ -18,8 +18,8 @@ export class FakeStore implements Store {
     findings: FindingRow[] = [];
     supp = new Map<string, Suppression>();
     feedbackLog: FeedbackInput[] = [];
-    /** ISO timestamp of the live budget claim per repo id, "" when none (see reserveBudget). */
-    reservedAt = new Map<number, string>();
+    /** Live budget claim per repo id (see reserveBudget). */
+    claims = new Map<number, { claim: string; group: string; expiresAt: string }>();
 
     private strip(row?: RepoRow & { tokenHash: string }): RepoRow | null {
         if (!row) {
@@ -85,20 +85,31 @@ export class FakeStore implements Store {
     async listProviders() {
         return [...this.providers.values()];
     }
-    async reserveBudget(repoId: number, now: string, staleBefore: string) {
-        // Mirrors the conditional UPDATE: only claim when no live claim holds the row.
-        const held = this.reservedAt.get(repoId);
-        if (held && held >= staleBefore) {
+    async reserveBudget(repoId: number, claim: string, group: string, now: string, expiresAt: string) {
+        // Mirrors the conditional UPDATE: claim only when the slot is free, expired, or held by the same
+        // concurrency group (whose older run GitHub already cancelled).
+        // An empty group means "unknown" and never matches: only a real, equal group may take over.
+        const held = this.claims.get(repoId);
+        const sameGroup = group !== "" && held?.group === group;
+        if (held && held.expiresAt >= now && !sameGroup) {
             return false;
         }
-        this.reservedAt.set(repoId, now);
+        this.claims.set(repoId, { claim, group, expiresAt });
         return true;
     }
-    async charge(repoId: number, costUsd: number, month: string) {
+    async releaseBudget(repoId: number, claim: string) {
+        if (this.claims.get(repoId)?.claim === claim) {
+            this.claims.delete(repoId);
+        }
+    }
+    async charge(repoId: number, costUsd: number, month: string, claim: string) {
         const row = this.repos.find((item) => item.id === repoId)!;
         row.spentUsd = row.budgetMonth === month ? row.spentUsd + costUsd : costUsd;
         row.budgetMonth = month;
-        this.reservedAt.delete(repoId);
+        // Only the holder releases; a refused run publishing L0 results must not free someone else's claim.
+        if (this.claims.get(repoId)?.claim === claim) {
+            this.claims.delete(repoId);
+        }
     }
     async setLastSha(repoId: number, sha: string) {
         this.repos.find((item) => item.id === repoId)!.lastSha = sha;

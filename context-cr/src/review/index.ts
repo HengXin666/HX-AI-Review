@@ -65,18 +65,26 @@ function toFinding(candidate: Candidate, reason: string): Finding {
 
 type Queued = { candidate: Candidate; doc: ContextDoc; fingerprint: string };
 
+type Budgets = { doc: number; diff: number; prompt: number };
+
 /**
- * Byte budgets for one finder prompt. The whole prompt must fit the model's context window, so the
- * window (minus the output reservation and the prompt reserve) is split between the diff and the
- * context files, each also capped by its own fixed budget. Without this a model with a small window
- * would be sent a prompt larger than it can read, and the session would fail.
+ * Byte budgets for one model prompt. The whole prompt must fit the model's context window, so the window
+ * minus the output reservation and the prompt reserve is the total available; it is split between the
+ * diff and the context files, each also capped by its own fixed budget.
+ *
+ * Returns undefined when the window cannot hold even a minimum prompt. Raising the budget to a floor
+ * larger than the window would only make the session fail on context overflow, so the caller reports a
+ * configuration error instead: the range stays unreviewed and last_sha does not advance.
  */
-function finderBudgets(config: InitConfig): { doc: number; diff: number } {
+function promptBudgets(config: InitConfig): Budgets | undefined {
     const window = config.limits.contextWindow * BYTES_PER_TOKEN;
-    const total = Math.max(MIN_PROMPT_BYTES, window - config.limits.maxTokens * BYTES_PER_TOKEN - PROMPT_RESERVE_BYTES);
-    const diff = Math.max(MIN_DIFF_BYTES, Math.min(DIFF_MAX_BYTES, Math.floor(total / 2)));
-    const doc = Math.max(MIN_BATCH_BYTES, Math.min(CONTEXT_BATCH_BYTES, total - diff));
-    return { doc, diff };
+    const available = window - config.limits.maxTokens * BYTES_PER_TOKEN - PROMPT_RESERVE_BYTES;
+    if (available < MIN_PROMPT_BYTES) {
+        return undefined;
+    }
+    const diff = Math.max(MIN_DIFF_BYTES, Math.min(DIFF_MAX_BYTES, Math.floor(available / 2)));
+    const doc = Math.max(MIN_BATCH_BYTES, Math.min(CONTEXT_BATCH_BYTES, available - diff));
+    return { doc, diff, prompt: available };
 }
 
 /** When the job started: epoch milliseconds or an ISO timestamp, as set by the reusable workflow. */
@@ -190,14 +198,20 @@ function gate(review: Review, candidate: Candidate, batch: ContextDoc[], seen: S
     return { item: { candidate, doc: doc as ContextDoc, fingerprint: id } } satisfies GateResult;
 }
 
-async function verify(review: Review, config: InitConfig, deps: ReviewDeps, item: Queued): Promise<void> {
+async function verify(
+    review: Review,
+    config: InitConfig,
+    deps: ReviewDeps,
+    item: Queued,
+    promptBudget: number,
+): Promise<void> {
     const { candidate, doc } = item;
     const verdicts: Verdict[] = [];
     const ran = await review.session({
         role: "verifier",
         model: config.models.verifier,
         system: VERIFIER_SYSTEM,
-        prompt: verifierPrompt(candidate, doc, deps.diff),
+        prompt: verifierPrompt(candidate, doc, deps.diff, promptBudget),
         tools: [reportVerdictTool(verdicts)],
     });
     if (!ran) {
@@ -232,7 +246,15 @@ export async function runReview(config: InitConfig, scope: ContextScope, deps: R
     const queue: Queued[] = [];
     const { docs, unreadable } = loadDocs(scope.contexts, deps.readFile);
     review.result.notReviewed.push(...unreadable.map((path) => path + " (unreadable or a symlink)"));
-    const budgets = finderBudgets(config);
+    const budgets = promptBudgets(config);
+    if (!budgets) {
+        // A prompt this small cannot carry a review; fail closed rather than send an unreadable one.
+        review.fail(
+            `model context window of ${config.limits.contextWindow} tokens leaves no room for a review prompt ` +
+                `(maxTokens ${config.limits.maxTokens}); raise the provider contextWindow or lower maxTokens`,
+        );
+        return review.result;
+    }
     for (const batch of batchDocs(docs, budgets.doc)) {
         // Only candidates that pass the gate use the cap, so re-reported suppressed items cannot exhaust it.
         const left = config.limits.maxCandidates - queue.length;
@@ -257,6 +279,7 @@ export async function runReview(config: InitConfig, scope: ContextScope, deps: R
             model: config.models.finder,
             system: FINDER_SYSTEM,
             prompt: finderPrompt(scope, batch, deps.diff, config.suppressions, budgets),
+
             tools: [reportFindingTool(sink, left, accept)],
         });
         if (!ran) {
@@ -264,7 +287,7 @@ export async function runReview(config: InitConfig, scope: ContextScope, deps: R
         }
     }
     for (const item of queue) {
-        await verify(review, config, deps, item);
+        await verify(review, config, deps, item, budgets.prompt);
     }
     return review.result;
 }

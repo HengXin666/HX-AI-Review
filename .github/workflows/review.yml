@@ -33,10 +33,13 @@ jobs:
         concurrency:
             group: hx-context-review-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
             cancel-in-progress: true
+        # The /init budget claim is tied to this group: cancelling an older run in the same group lets the
+        # newer one take over its claim, while runs in other groups still contend for the budget.
         # Credentials are scoped to the CLI steps that need them, never to the whole job.
         env:
             HX_CTX_ENDPOINT: ${{ inputs.endpoint || vars.HX_CTX_ENDPOINT }}
             TOOL: ${{ github.workspace }}/.hx-context-review-tool
+            HX_CTX_GROUP: hx-context-review-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
         steps:
             # The AI stage bounds itself by the time left in this job, so it needs the job's own start
             # time: the 20-minute deadline covers only step 5, while checkout, install, init, L0 and

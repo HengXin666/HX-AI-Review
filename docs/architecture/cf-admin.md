@@ -29,7 +29,11 @@ Cloudflare 侧. Worker 入口 [cf-admin/worker/index.ts](../../cf-admin/worker/i
 5. provider 指向的 Worker secret 不存在.
 6. 月预算大于 0, 但已有一次并发运行持有本次预算的预留 (见下).
 
-预算大于 0 的仓库在通过以上检查后, `/init` 会先原子预留本次运行的预算 (D1 条件 UPDATE, `repos.reserved_at`), 再下发 key. 运行结束后 `POST /runs` 计费时释放预留; 预留超过 1 小时视为已放弃, 可由下一次运行接管. 没有这一步, 两个并发 PR/ref 会各自拿到同一份未花费余额, 在几分钟后上报成本时一起超支.
+预算大于 0 的仓库在通过以上检查后, `/init` 会先原子预留本次运行的预算 (D1 条件 UPDATE, `repos.budget_claim` / `claim_group` / `claim_expires_at`), 再下发 key, 并把预留 id 作为 `budgetClaim` 返回. 没有这一步, 两个并发 PR/ref 会各自拿到同一份未花费余额, 在几分钟后上报成本时一起超支.
+
+预留用 id 而不是布尔标记: runner 在 `POST /runs` 回传 `budgetClaim`, 计费时只释放自己的预留. 否则一次被拒绝预算、随后仍以 L0 结果上报的运行会把持有者的预留清掉, 让第三次运行拿到同一份余额. 计费永远记录花费, 只对预留做归属判断.
+
+`claim_group` 是调用方的并发组 (`/init` 的 `group` 参数, 来自 workflow 的 concurrency group). GitHub 取消同组中较旧的那次运行, 而取消的运行永远不会走到 `POST /runs`, 所以同组的旧预留可被接管, 否则它会挡住正是取代它的那次运行; 空 group 表示未知, 永不匹配. 不同组之间是真正的并发, 仍然互斥. 预留超过 1 小时视为已放弃, 可由任何一次运行接管.
 
 ## 数据
 

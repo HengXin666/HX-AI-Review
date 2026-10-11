@@ -87,12 +87,15 @@ export interface Store {
     insertRun(run: RunRow, findings: FindingRow[]): Promise<void>;
     listProviders(): Promise<ProviderRow[]>;
     /**
-     * Atomically claim the repo's run budget until `staleBefore`, so concurrent runs cannot both be
-     * handed the same remainder. False means another live claim holds it. Released by charge.
+     * Atomically claim the repo's run budget under `claim` until `expiresAt`. False means a live claim
+     * from a different concurrency group holds it. A claim from the same group may be taken over, because
+     * GitHub already cancelled the older run in that group and it will never report.
      */
-    reserveBudget(repoId: number, now: string, staleBefore: string): Promise<boolean>;
-    /** Add to the month's spend and release the run-budget claim; every run is charged, PRs included. */
-    charge(repoId: number, costUsd: number, month: string): Promise<void>;
+    reserveBudget(repoId: number, claim: string, group: string, now: string, expiresAt: string): Promise<boolean>;
+    /** Release the claim only when `claim` is the one held; another run's claim is left untouched. */
+    releaseBudget(repoId: number, claim: string): Promise<void>;
+    /** Add to the month's spend; releases the run's own claim, never another run's. Every run is charged. */
+    charge(repoId: number, costUsd: number, month: string, claim: string): Promise<void>;
     /** Move the push cursor; only complete push runs call this, so cancelled ranges are re-reviewed. */
     setLastSha(repoId: number, sha: string): Promise<void>;
     recentRuns(limit: number): Promise<(RunRow & { repo: string })[]>;

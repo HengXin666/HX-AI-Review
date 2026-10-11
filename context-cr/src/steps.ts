@@ -51,7 +51,7 @@ const LOCAL_CONFIG: InitConfig = {
 
 export async function stepInit(root: string): Promise<InitState> {
     const repo = required(ENV.githubRepository);
-    const response = await fetchInit(required(ENV.endpoint), required(ENV.token), repo);
+    const response = await fetchInit(required(ENV.endpoint), required(ENV.token), repo, process.env[ENV.group]);
     const nonce = resetState(root);
     const { config, apiKey } = splitSecret(response);
     if (apiKey) {
@@ -234,6 +234,7 @@ export async function stepPublish(root: string): Promise<number> {
             findings: report.findings,
             patches: report.patches,
             patchBranch,
+            budgetClaim: state.config.budgetClaim,
             reportMarkdown: renderMarkdown(report),
             reportJson: JSON.stringify(report),
             sessionsJsonl: ai && existsSync(sessionsPath) ? readFileSync(sessionsPath, UTF8) : "",

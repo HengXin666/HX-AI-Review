@@ -73,6 +73,9 @@ components:
                         cacheRead: { type: number }
                         cacheWrite: { type: number }
                 lastSha: { type: string }
+                budgetClaim:
+                    type: string
+                    description: Opaque budget reservation id; echo it on POST /runs so only this run releases it
                 suppressions:
                     type: array
                     items:
@@ -119,6 +122,11 @@ components:
                 findings: { type: array, maxItems: 500, items: { $ref: "#/components/schemas/Finding" } }
                 patches: { type: array, items: { $ref: "#/components/schemas/Patch" } }
                 patchBranch: { type: string }
+                budgetClaim:
+                    type: string
+                    description: >-
+                        The budgetClaim from GET /init. Spend is always recorded; the reservation is released only
+                        when this matches the live claim, so a run that was refused the budget cannot free another's.
                 reportMarkdown: { type: string }
                 reportJson: { type: string }
                 sessionsJsonl: { type: string }

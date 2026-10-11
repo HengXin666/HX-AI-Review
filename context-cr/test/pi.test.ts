@@ -1,6 +1,7 @@
 // Integration: the real pi SDK adapter talks to a local OpenAI-compatible endpoint and calls our tool.
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { Type } from "typebox";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import type { InitConfig } from "../src/init/client.ts";
@@ -133,6 +134,78 @@ test("a provider error ends the session with a SessionError that keeps the trans
     }
 });
 
+test("a session timeout aborts an in-flight tool instead of waiting out the git timeout", async () => {
+    // The model asks for a slow tool; the session timer fires while it is running. If the abort signal did
+    // not reach the tool, the review would sit here for the full git timeout after the session was over.
+    let sawAbort = false;
+    let aborted: () => void = () => {};
+    const reached = new Promise<void>((resolve) => (aborted = resolve));
+    const server = createServer((req, res) => {
+        req.resume();
+        req.on("end", () => {
+            res.writeHead(200, { "content-type": "text/event-stream" });
+            const call = {
+                index: 0,
+                id: "call_1",
+                type: "function",
+                function: { name: "slow_tool", arguments: "{}" },
+            };
+            res.write(chunk({ role: "assistant", tool_calls: [call] }));
+            res.write(chunk({}, "tool_calls"));
+            res.end("data: [DONE]\n\n");
+        });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const config: InitConfig = {
+        repo: "o/r",
+        enabled: true,
+        l0Only: false,
+        apiUrl: `http://127.0.0.1:${port}/v1`,
+        api: "openai-completions",
+        models: { finder: "m", verifier: "m" },
+        limits: { contextWindow: 32000, maxTokens: 1024, maxCandidates: 3, maxRunUsd: null },
+        pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        suppressions: [],
+    };
+    try {
+        const run = await createPiRunner(process.cwd(), config, "sk-test");
+        const slow = {
+            name: "slow_tool",
+            label: "Slow",
+            description: "waits until the session is aborted",
+            parameters: Type.Object({}),
+            execute: (_params: Record<string, unknown>, signal?: AbortSignal) =>
+                new Promise<string>((resolve) => {
+                    const done = () => {
+                        sawAbort = true;
+                        aborted();
+                        resolve("aborted");
+                    };
+                    if (signal?.aborted) {
+                        done();
+                    } else {
+                        signal?.addEventListener("abort", done, { once: true });
+                    }
+                }),
+        };
+        const started = Date.now();
+        await assert.rejects(
+            run({ role: "finder", model: "m", system: "s", prompt: "p", tools: [slow], timeoutMs: 500 }),
+            (error: unknown) => {
+                assert.ok(error instanceof SessionError);
+                assert.match(error.message, /timed out/);
+                return true;
+            },
+        );
+        await reached;
+        assert.ok(sawAbort, "the tool never saw the session abort");
+        assert.ok(Date.now() - started < 5000, "the session waited past its own timeout");
+    } finally {
+        server.close();
+    }
+});
+
 test("failureOf: only a normal stop counts as success", () => {
     assert.equal(failureOf([{ role: "assistant", stopReason: "stop" }]), "");
     assert.match(failureOf([{ role: "assistant", stopReason: "length" }]), /token limit/);
@@ -148,6 +221,26 @@ test("repository tools see only tracked files at HEAD, never .git or paths outsi
     assert.ok((await tools.find.execute({ pattern: "**/AGENTS.md" })).includes("context-cr/AGENTS.md"));
     assert.ok((await tools.ls.execute({})).includes("context-cr/"));
     assert.ok((await tools.grep.execute({ pattern: "hx-context-review", path: "README.md" })).startsWith("README.md:"));
+});
+
+test("a grep with no matches is empty, not a git failure", async () => {
+    const tools = Object.fromEntries(repoTools(join(process.cwd(), "..")).map((tool) => [tool.name, tool]));
+    // git grep exits 1 when nothing matched; execFile reports that as error.code, and treating it as a
+    // failure would answer the model with "git error: Command failed" instead of "no matches".
+    const out = await tools.grep.execute({ pattern: "zzz-no-such-symbol-anywhere", path: "context-cr/src" });
+    assert.equal(out, "No matches.");
+});
+
+test("a read of a path outside the commit says so, but a git failure is not a missing file", async () => {
+    const tools = Object.fromEntries(repoTools(join(process.cwd(), "..")).map((tool) => [tool.name, tool]));
+    // git exits 128 with no kill: genuinely absent from the revision.
+    assert.match(await tools.read.execute({ path: "context-cr/no-such-file.md" }), /No tracked file/);
+    // A cancellation is a tool failure: reporting it as "No tracked file" would hide a real file.
+    const controller = new AbortController();
+    controller.abort();
+    const out = await tools.read.execute({ path: "AGENTS.md" }, controller.signal);
+    assert.doesNotMatch(out, /No tracked file/);
+    assert.match(out, /cancelled|git error/);
 });
 
 test("grep keeps a HEAD: that is part of the matched line, stripping only git's revision prefix", async () => {

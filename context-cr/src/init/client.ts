@@ -19,6 +19,8 @@ export type InitConfig = {
     pricing: { input: number; output: number; cacheRead: number; cacheWrite: number };
     lastSha?: string;
     suppressions: Suppression[];
+    /** Opaque budget claim from /init; POST /runs echoes it so only the holder releases the reservation. */
+    budgetClaim?: string;
 };
 
 export type InitResponse = InitConfig & { apiKey?: string };
@@ -138,6 +140,7 @@ export function parseInit(raw: unknown): InitResponse {
         },
         lastSha: typeof data.lastSha === "string" ? data.lastSha : undefined,
         suppressions: suppressionsOf(data.suppressions),
+        budgetClaim: typeof data.budgetClaim === "string" ? data.budgetClaim : undefined,
     };
     if (!l0Only) {
         result.apiUrl = text(data.apiUrl, "apiUrl");
@@ -146,9 +149,13 @@ export function parseInit(raw: unknown): InitResponse {
     return result;
 }
 
-export async function fetchInit(endpoint: string, token: string, repo: string): Promise<InitResponse> {
+export async function fetchInit(endpoint: string, token: string, repo: string, group?: string): Promise<InitResponse> {
     const url = new URL("/init", endpoint);
     url.searchParams.set("repo", repo);
+    if (group) {
+        // Identifies the runs GitHub may have cancelled to start this one; see the Worker's reservation.
+        url.searchParams.set("group", group);
+    }
     const response = await fetch(url, { headers: { authorization: "Bearer " + token } });
     if (!response.ok) {
         throw new Error(`GET /init failed with ${response.status}: ${(await response.text()).slice(0, 200)}`);

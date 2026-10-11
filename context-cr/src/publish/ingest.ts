@@ -19,6 +19,8 @@ export type RunPayload = {
     findings: Finding[];
     patches: Patch[];
     patchBranch?: string;
+    /** The /init budget claim, so the Worker releases this run's reservation and not another's. */
+    budgetClaim?: string;
     reportMarkdown: string;
     reportJson: string;
     sessionsJsonl: string;
