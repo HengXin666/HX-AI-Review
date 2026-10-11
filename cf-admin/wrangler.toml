@@ -1,0 +1,25 @@
+# hx-context-review config / ingest Worker. Fill the ids after `wrangler d1 create` and `wrangler r2 bucket create`.
+name = "hx-context-review"
+main = "worker/index.ts"
+compatibility_date = "2026-10-01"
+
+# /init, /runs, /feedback are token-authenticated (bypass Access); /api/* sits behind Access.
+# routes = [{ pattern = "review.example.com/init", zone_name = "example.com" }, ...]
+
+[vars]
+OVERVIEW_URL = ""
+ACCESS_TEAM_DOMAIN = ""
+ACCESS_AUD = ""
+
+[[d1_databases]]
+binding = "DB"
+database_name = "hx-context-review"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "BLOBS"
+bucket_name = "hx-context-review"
+
+# Provider api keys are Worker secrets, named in D1 providers.key_secret:
+#   wrangler secret put PROVIDER_DEFAULT_KEY
