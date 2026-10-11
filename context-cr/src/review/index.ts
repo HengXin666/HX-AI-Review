@@ -206,12 +206,20 @@ async function verify(
     promptBudget: number,
 ): Promise<void> {
     const { candidate, doc } = item;
+    const prompt = verifierPrompt(candidate, doc, deps.diff, promptBudget);
+    if (prompt === undefined) {
+        // The claim and its patch are model-written and unbounded: a long enough one cannot fit the window
+        // however small the diff becomes. Mark it unverified rather than fail the session on overflow.
+        review.fail(`verifier prompt for ${candidate.path}:${candidate.line} exceeds the context window`);
+        review.reject(candidate, "candidate too large for the context window");
+        return;
+    }
     const verdicts: Verdict[] = [];
     const ran = await review.session({
         role: "verifier",
         model: config.models.verifier,
         system: VERIFIER_SYSTEM,
-        prompt: verifierPrompt(candidate, doc, deps.diff, promptBudget),
+        prompt,
         tools: [reportVerdictTool(verdicts)],
     });
     if (!ran) {
@@ -274,12 +282,20 @@ export async function runReview(config: InitConfig, scope: ContextScope, deps: R
             queue.push(outcome.item);
             return undefined;
         };
+        const prompt = finderPrompt(scope, batch, deps.diff, config.suppressions, budgets);
+        if (prompt === undefined) {
+            // The changed-path list and the suppression table are not budgeted, so a large enough diff or a
+            // long suppression history can overflow the window on its own. Report it instead of sending a
+            // prompt the model cannot read: this batch stays not reviewed and the run is incomplete.
+            review.fail(`finder prompt for ${batch.map((doc) => doc.path).join(", ")} exceeds the context window`);
+            review.result.notReviewed.push(...batch.map((doc) => doc.path + " (prompt exceeds context window)"));
+            continue;
+        }
         const ran = await review.session({
             role: "finder",
             model: config.models.finder,
             system: FINDER_SYSTEM,
-            prompt: finderPrompt(scope, batch, deps.diff, config.suppressions, budgets),
-
+            prompt,
             tools: [reportFindingTool(sink, left, accept)],
         });
         if (!ran) {

@@ -172,20 +172,55 @@ export class D1Store implements Store {
         ]);
     }
 
-    async reserveBudget(repoId: number, claim: string, group: string, now: string, expiresAt: string) {
+    async reserveBudget(
+        repoId: number,
+        claim: string,
+        group: string,
+        allowanceUsd: number,
+        month: string,
+        now: string,
+        expiresAt: string,
+    ) {
         // One conditional UPDATE, so two concurrent /init requests cannot both succeed. A claim from the
         // same concurrency group is stale by construction: GitHub cancelled that run to start this one.
         // An empty group means "unknown" and never matches: only a real, equal group may take over.
-        const sql = `UPDATE repos SET budget_claim = ?, claim_group = ?, claim_expires_at = ?,
+        //
+        // Taking over settles the previous claim's allowance into this month's spend first. A cancelled or
+        // crashed run never reaches POST /runs, so its real cost is unknown; charging the allowance in full
+        // is the only safe bound, and without it every rapid push on one branch would be handed the whole
+        // remaining budget again while none of the spending was ever recorded. The new allowance is what is
+        // left after that settlement, computed here because only the row knows the settled amount.
+        // Settlement and claim in one statement; claim_usd is left at 0 and set once the remainder is known.
+        const sql = `UPDATE repos SET
+            spent_usd = CASE WHEN budget_month = ? THEN spent_usd + claim_usd ELSE claim_usd END,
+            budget_month = ?, budget_claim = ?, claim_group = ?, claim_expires_at = ?, claim_usd = 0,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             WHERE id = ? AND (claim_expires_at = '' OR claim_expires_at < ? OR (? != '' AND claim_group = ?))`;
-        const result = await this.db.prepare(sql).bind(claim, group, expiresAt, repoId, now, group, group).run();
-        return result.meta.changes > 0;
+        const result = await this.db
+            .prepare(sql)
+            .bind(month, month, claim, group, expiresAt, repoId, now, group, group)
+            .run();
+        if (result.meta.changes === 0) {
+            return { claimed: false } as const;
+        }
+        const row = await this.db
+            .prepare(
+                `SELECT budget_usd - (CASE WHEN budget_month = ? THEN spent_usd ELSE 0 END) AS left FROM repos WHERE id = ?`,
+            )
+            .bind(month, repoId)
+            .first<{ left: number }>();
+        // Record the allowance actually handed out, so a later takeover of this claim settles this much.
+        const allowance = Math.max(0, Math.min(allowanceUsd, row?.left ?? 0));
+        await this.db
+            .prepare("UPDATE repos SET claim_usd = ? WHERE id = ? AND budget_claim = ?")
+            .bind(allowance, repoId, claim)
+            .run();
+        return { claimed: true, remainingUsd: allowance } as const;
     }
 
     async releaseBudget(repoId: number, claim: string) {
         // Only the holder may release: a run that was refused the budget must not free someone else's.
-        const sql = `UPDATE repos SET budget_claim = '', claim_group = '', claim_expires_at = '',
+        const sql = `UPDATE repos SET budget_claim = '', claim_group = '', claim_usd = 0, claim_expires_at = '',
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND budget_claim = ?`;
         await this.db.prepare(sql).bind(repoId, claim).run();
     }
@@ -196,9 +231,11 @@ export class D1Store implements Store {
             budget_month = ?,
             budget_claim = CASE WHEN budget_claim = ? THEN '' ELSE budget_claim END,
             claim_group = CASE WHEN budget_claim = ? THEN '' ELSE claim_group END,
+            claim_usd = CASE WHEN budget_claim = ? THEN 0 ELSE claim_usd END,
             claim_expires_at = CASE WHEN budget_claim = ? THEN '' ELSE claim_expires_at END,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`;
-        await this.db.prepare(sql).bind(month, costUsd, costUsd, month, claim, claim, claim, repoId).run();
+        // Real cost replaces the allowance the holder reserved: only a takeover settles the allowance itself.
+        await this.db.prepare(sql).bind(month, costUsd, costUsd, month, claim, claim, claim, claim, repoId).run();
     }
 
     async setLastSha(repoId: number, sha: string) {

@@ -140,15 +140,23 @@ const REFUSED = "Refused: use a repository-relative path without '..' or '.git'.
  * A tracked symlink reads as its target path, never as the target's content.
  */
 export function repoTools(root: string): ToolSpec[] {
+    // A failure is returned as a discriminated result, never as text: callers that parse file lists would
+    // otherwise read "git error: ..." as a filename and answer "No files." instead of reporting the failure.
     // execFile reports the exit code as `code` (`status` only exists on execFileSync errors), so the
     // previous `status === 1` check never matched and "no matches" was reported as a git failure.
-    const run = async (args: string[], signal?: AbortSignal): Promise<string> => {
+    const run = async (
+        args: string[],
+        signal?: AbortSignal,
+    ): Promise<{ ok: true; out: string } | { ok: false; error: string }> => {
         try {
-            return await gitAsync(root, args, GIT_TOOL_TIMEOUT_MS, signal);
+            return { ok: true, out: await gitAsync(root, args, GIT_TOOL_TIMEOUT_MS, signal) };
         } catch (error) {
-            return isNoMatch(error) ? "" : "git error: " + describeGitError(error);
+            // git exits 1 when a search found nothing; that is an empty result, not a failure.
+            return isNoMatch(error) ? { ok: true, out: "" } : { ok: false, error: describeGitError(error) };
         }
     };
+    /** Shared by the tools that only render git output; the reason is shown, never parsed as data. */
+    const fail = (error: string) => "git error: " + error;
     return [
         {
             name: "read",
@@ -195,12 +203,15 @@ export function repoTools(root: string): ToolSpec[] {
                     return REFUSED;
                 }
                 const args = ["grep", "-n", "-I", "-E", "-e", String(params.pattern), "HEAD", "--"];
-                const out = await run(path ? [...args, path] : args, signal);
+                const found = await run(path ? [...args, path] : args, signal);
+                if (!found.ok) {
+                    return fail(found.error);
+                }
                 // git grep prefixes each line with "HEAD:"; only that revision prefix is stripped, so a
                 // result line that itself contains "HEAD:" (e.g. a refspec) keeps its own text intact.
                 return (
                     clip(
-                        out
+                        found.out
                             .split("\n")
                             .map((line) => line.replace(/^HEAD:/, ""))
                             .join("\n"),
@@ -219,7 +230,11 @@ export function repoTools(root: string): ToolSpec[] {
                     return REFUSED;
                 }
                 const match = globRegex(pattern);
-                const files = (await run(["ls-tree", "-r", "--name-only", "-z", "HEAD"], signal)).split("\0");
+                const listed = await run(["ls-tree", "-r", "--name-only", "-z", "HEAD"], signal);
+                if (!listed.ok) {
+                    return fail(listed.error);
+                }
+                const files = listed.out.split("\0");
                 return clip(files.filter((file) => file && match.test(file)).join("\n")) || "No files.";
             },
         },
@@ -233,8 +248,11 @@ export function repoTools(root: string): ToolSpec[] {
                 if (path === undefined) {
                     return REFUSED;
                 }
-                const out = await run(["ls-tree", "HEAD", "--", path ? path + "/" : "."], signal);
-                const names = out
+                const listed = await run(["ls-tree", "HEAD", "--", path ? path + "/" : "."], signal);
+                if (!listed.ok) {
+                    return fail(listed.error);
+                }
+                const names = listed.out
                     .split("\n")
                     .filter(Boolean)
                     .map((line) => {

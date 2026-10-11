@@ -16,12 +16,30 @@ type L0 = { cause: "disabled" | "mode" | "budget" | "config"; reason: string };
 
 const positiveInt = (value: number) => Number.isSafeInteger(value) && value >= 1;
 
-/** This request's budget claim id, echoed back by POST /runs so only the holder can release it. */
-async function claimBudget(deps: Deps, repoId: number, now: Date, group: string): Promise<string | null> {
+/**
+ * This request's budget claim, echoed back by POST /runs so only the holder can release it. The allowance
+ * is the remaining budget, recorded on the claim so a later takeover settles it instead of handing the
+ * same remainder out again to a run whose predecessor was cancelled before it could report.
+ */
+async function claimBudget(
+    deps: Deps,
+    repoId: number,
+    now: Date,
+    group: string,
+    allowanceUsd: number,
+): Promise<{ claim: string; allowanceUsd: number } | null> {
     const claim = deps.id();
     const expiresAt = new Date(now.getTime() + RESERVE_TTL_MS).toISOString();
-    const claimed = await deps.store.reserveBudget(repoId, claim, group, now.toISOString(), expiresAt);
-    return claimed ? claim : null;
+    const outcome = await deps.store.reserveBudget(
+        repoId,
+        claim,
+        group,
+        allowanceUsd,
+        month(now),
+        now.toISOString(),
+        expiresAt,
+    );
+    return outcome.claimed ? { claim, allowanceUsd: outcome.remainingUsd } : null;
 }
 
 /**
@@ -71,8 +89,9 @@ export async function handleInit(request: Request, deps: Deps): Promise<Response
     // Only a capped repo that would otherwise get a model run needs a claim; the concurrency group lets
     // a run take over the claim of the run GitHub just cancelled to start it.
     const group = new URL(request.url).searchParams.get("group") ?? "";
-    const claim = !reason && repo.budgetUsd > 0 ? await claimBudget(deps, repo.id, now, group) : null;
-    const l0 = reason ?? (repo.budgetUsd > 0 && !claim ? { cause: "budget" as const, reason: BUSY } : null);
+    const remaining = Math.max(0, repo.budgetUsd - spentThisMonth(repo, now));
+    const held = !reason && repo.budgetUsd > 0 ? await claimBudget(deps, repo.id, now, group, remaining) : null;
+    const l0 = reason ?? (repo.budgetUsd > 0 && !held ? { cause: "budget" as const, reason: BUSY } : null);
     const base = {
         repo: repo.name,
         enabled: repo.enabled,
@@ -86,7 +105,9 @@ export async function handleInit(request: Request, deps: Deps): Promise<Response
             maxTokens: provider?.maxTokens ?? 0,
             maxCandidates: MAX_CANDIDATES,
             // Remaining monthly budget; the runner stops opening model sessions once a run reaches it.
-            maxRunUsd: repo.budgetUsd > 0 ? Math.max(0, repo.budgetUsd - spentThisMonth(repo, now)) : null,
+            // The claim's settled allowance is the authoritative figure: taking over a cancelled run's
+            // claim charges that allowance first, and the raw row is only re-read for uncapped repos.
+            maxRunUsd: repo.budgetUsd > 0 ? (held ? held.allowanceUsd : remaining) : null,
         },
         pricing: {
             input: provider?.priceInput ?? 0,
@@ -97,7 +118,7 @@ export async function handleInit(request: Request, deps: Deps): Promise<Response
         lastSha: repo.lastSha ?? undefined,
         suppressions: await deps.store.suppressions(repo.id),
         // The runner sends this back on POST /runs; it is what lets that call release this claim.
-        budgetClaim: claim ?? undefined,
+        budgetClaim: held?.claim,
     };
     if (l0 !== null || !provider || !apiKey) {
         return json(base);

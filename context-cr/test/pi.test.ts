@@ -231,6 +231,19 @@ test("a grep with no matches is empty, not a git failure", async () => {
     assert.equal(out, "No matches.");
 });
 
+test("a failing git call is reported, never parsed as an empty file list", async () => {
+    const tools = Object.fromEntries(repoTools(join(process.cwd(), "..")).map((tool) => [tool.name, tool]));
+    const controller = new AbortController();
+    controller.abort();
+    // find and ls parse git output as a file list. A cancelled call must surface as an error: parsing the
+    // message would answer "No files." or "Empty or not a directory.", i.e. claim the repo has no files.
+    for (const name of ["find", "ls"]) {
+        const out = await tools[name].execute(name === "find" ? { pattern: "**/*" } : {}, controller.signal);
+        assert.doesNotMatch(out, /No files\.|Empty or not a directory/, `${name} hid the failure: ${out}`);
+        assert.match(out, /git error/, `${name} did not report the failure: ${out}`);
+    }
+});
+
 test("a read of a path outside the commit says so, but a git failure is not a missing file", async () => {
     const tools = Object.fromEntries(repoTools(join(process.cwd(), "..")).map((tool) => [tool.name, tool]));
     // git exits 128 with no kill: genuinely absent from the revision.

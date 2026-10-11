@@ -35,9 +35,11 @@ Cloudflare 侧. Worker 入口 [cf-admin/worker/index.ts](../../cf-admin/worker/i
 
 `claim_group` 是调用方的并发组 (`/init` 的 `group` 参数, 来自 workflow 的 concurrency group). GitHub 取消同组中较旧的那次运行, 而取消的运行永远不会走到 `POST /runs`, 所以同组的旧预留可被接管, 否则它会挡住正是取代它的那次运行; 空 group 表示未知, 永不匹配. 不同组之间是真正的并发, 仍然互斥. 预留超过 1 小时视为已放弃, 可由任何一次运行接管.
 
+接管时先把旧预留的额度 (`repos.claim_usd`, 即那次运行当时拿到的 `maxRunUsd`) 全额计入本月花费, 再按剩余额发新的预留. 被取消的运行不会上报真实花费, 不这样记账的话, 同一分支上连续快速 push 每次都能拿到完整的剩余预算, 而之前的开销一笔都没入账. 代价是取消的运行按其额度上限计入 (保守), 持有者正常上报时以真实花费覆盖.
+
 ## 数据
 
-D1 结构见 [0001_init.sql](../../cf-admin/migrations/0001_init.sql).
+D1 结构见 [0001_init.sql](../../cf-admin/migrations/0001_init.sql), 预算预留列见 [0002_budget_reservation.sql](../../cf-admin/migrations/0002_budget_reservation.sql).
 
 | 表 | 内容 |
 |---|---|

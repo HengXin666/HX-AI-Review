@@ -18,8 +18,8 @@ export class FakeStore implements Store {
     findings: FindingRow[] = [];
     supp = new Map<string, Suppression>();
     feedbackLog: FeedbackInput[] = [];
-    /** Live budget claim per repo id (see reserveBudget). */
-    claims = new Map<number, { claim: string; group: string; expiresAt: string }>();
+    /** Live budget claim per repo id (see reserveBudget); usd is the allowance handed to its run. */
+    claims = new Map<number, { claim: string; group: string; usd: number; expiresAt: string }>();
 
     private strip(row?: RepoRow & { tokenHash: string }): RepoRow | null {
         if (!row) {
@@ -85,17 +85,33 @@ export class FakeStore implements Store {
     async listProviders() {
         return [...this.providers.values()];
     }
-    async reserveBudget(repoId: number, claim: string, group: string, now: string, expiresAt: string) {
+    async reserveBudget(
+        repoId: number,
+        claim: string,
+        group: string,
+        allowanceUsd: number,
+        month: string,
+        now: string,
+        expiresAt: string,
+    ) {
         // Mirrors the conditional UPDATE: claim only when the slot is free, expired, or held by the same
         // concurrency group (whose older run GitHub already cancelled).
         // An empty group means "unknown" and never matches: only a real, equal group may take over.
         const held = this.claims.get(repoId);
         const sameGroup = group !== "" && held?.group === group;
         if (held && held.expiresAt >= now && !sameGroup) {
-            return false;
+            return { claimed: false } as const;
         }
-        this.claims.set(repoId, { claim, group, expiresAt });
-        return true;
+        const row = this.repos.find((item) => item.id === repoId)!;
+        if (held) {
+            // Taking over settles the old allowance in full: a cancelled run never reports its real cost.
+            row.spentUsd = row.budgetMonth === month ? row.spentUsd + held.usd : held.usd;
+            row.budgetMonth = month;
+        }
+        const spent = row.budgetMonth === month ? row.spentUsd : 0;
+        const remaining = Math.max(0, Math.min(allowanceUsd, row.budgetUsd - spent));
+        this.claims.set(repoId, { claim, group, usd: remaining, expiresAt });
+        return { claimed: true, remainingUsd: remaining } as const;
     }
     async releaseBudget(repoId: number, claim: string) {
         if (this.claims.get(repoId)?.claim === claim) {

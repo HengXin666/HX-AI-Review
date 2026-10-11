@@ -298,6 +298,22 @@ test("a window too small for any prompt is a configuration error, not an unreada
     assert.match(result.errors[0], /context window/);
 });
 
+test("a suppression table or patch too large for the window fails the batch instead of overflowing", async () => {
+    const calls: AgentRequest[] = [];
+    // A window with room for a minimal prompt but not for this many suppression lines.
+    const small = { ...config, limits: { ...config.limits, contextWindow: 8000, maxTokens: 1000 } };
+    const suppressions = Array.from({ length: 400 }, (_, index) => ({
+        fingerprint: "fp-" + index + "-" + "x".repeat(60),
+        reason: "r".repeat(60),
+    }));
+    const result = await runReview({ ...small, suppressions }, scope, { ...base, run: fake(calls) });
+    // Nothing was sent: an oversized prompt would fail the session and hide the real reason.
+    assert.equal(calls.length, 0);
+    assert.equal(result.complete, false);
+    assert.match(result.errors[0], /exceeds the context window/);
+    assert.ok(result.notReviewed.some((item) => item.includes("prompt exceeds context window")));
+});
+
 test("repository text cannot close its own fence and escape the data boundary", async () => {
     const calls: AgentRequest[] = [];
     // The context file tries to end the fence and issue an instruction to the model.

@@ -87,11 +87,23 @@ export interface Store {
     insertRun(run: RunRow, findings: FindingRow[]): Promise<void>;
     listProviders(): Promise<ProviderRow[]>;
     /**
-     * Atomically claim the repo's run budget under `claim` until `expiresAt`. False means a live claim
-     * from a different concurrency group holds it. A claim from the same group may be taken over, because
-     * GitHub already cancelled the older run in that group and it will never report.
+     * Atomically claim the repo's run budget under `claim` for `allowanceUsd`, until `expiresAt`. False
+     * means a live claim from a different concurrency group holds it. A claim from the same group may be
+     * taken over, because GitHub already cancelled the older run in that group and it will never report.
+     *
+     * Taking over settles the old claim's allowance into the month's spend first, so repeated cancellations
+     * on one branch cannot each start from the full remaining budget. Returns the spend for the month after
+     * any settlement, which the caller must use for the new allowance.
      */
-    reserveBudget(repoId: number, claim: string, group: string, now: string, expiresAt: string): Promise<boolean>;
+    reserveBudget(
+        repoId: number,
+        claim: string,
+        group: string,
+        allowanceUsd: number,
+        month: string,
+        now: string,
+        expiresAt: string,
+    ): Promise<{ claimed: false } | { claimed: true; remainingUsd: number }>;
     /** Release the claim only when `claim` is the one held; another run's claim is left untouched. */
     releaseBudget(repoId: number, claim: string): Promise<void>;
     /** Add to the month's spend; releases the run's own claim, never another run's. Every run is charged. */

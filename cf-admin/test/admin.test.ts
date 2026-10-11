@@ -160,18 +160,37 @@ test("a cancelled run's claim is taken over by the run that superseded it in the
     const repo = (await store.repoByName("o/r"))!;
     const init = (group: string) =>
         call("GET", `/init?group=${encodeURIComponent(group)}`, undefined, token).then((r) => r.json());
-    // Same concurrency group: GitHub cancelled the older run, so the newer one takes over its claim.
     const first = (await init("g")) as Record<string, unknown>;
     assert.equal(first.l0Only, false);
-    const second = (await init("g")) as Record<string, unknown>;
+    // A different group is genuinely concurrent and must still be refused while the claim is live.
+    assert.equal(((await init("h")) as Record<string, unknown>).l0Cause, "budget");
+    // An expired claim is abandoned and may be taken over by anyone; its allowance is settled first.
+    store.claims.set(repo.id, { claim: "old", group: "h", usd: 0, expiresAt: "2000-01-01T00:00:00.000Z" });
+    assert.equal(((await init("i")) as Record<string, unknown>).l0Only, false);
+    // Same concurrency group: GitHub cancelled the older run, so the newer one takes over its claim.
+    const second = (await init("i")) as Record<string, unknown>;
     assert.equal(second.l0Only, false);
     assert.notEqual(second.budgetClaim, first.budgetClaim);
-    // A different group is genuinely concurrent and must still be refused.
-    const other = (await init("h")) as Record<string, unknown>;
-    assert.equal(other.l0Cause, "budget");
-    // An expired claim is abandoned and may be taken over by anyone.
-    store.claims.set(repo.id, { claim: "old", group: "h", expiresAt: "2000-01-01T00:00:00.000Z" });
-    assert.equal(((await init("i")) as Record<string, unknown>).l0Only, false);
+});
+
+test("taking over a cancelled run's claim charges its allowance, so rapid pushes cannot re-spend it", async () => {
+    const { call, token, store } = await registered();
+    const repo = (await store.repoByName("o/r"))!;
+    const init = async (group: string) =>
+        (await (await call("GET", `/init?group=${group}`, undefined, token)).json()) as Record<string, unknown>;
+    const limitsOf = (body: Record<string, unknown>) => (body.limits as { maxRunUsd: number }).maxRunUsd;
+    // A capped repo hands the whole remainder to the first run.
+    await call("PATCH", "/api/repos/o/r", { budgetUsd: 1 });
+    const first = await init("g");
+    assert.equal(limitsOf(first), 1);
+    // That run is cancelled by a newer push in the same group and never POSTs /runs, so its cost is
+    // unknown. Taking over must charge its allowance in full rather than hand out the same dollar again.
+    const second = await init("g");
+    assert.equal(limitsOf(second), 0);
+    assert.equal(store.repos.find((item) => item.id === repo.id)!.spentUsd, 1);
+    // The month is now spent, so the next run is refused rather than given a third dollar.
+    const third = await init("g");
+    assert.equal(third.l0Cause, "budget");
 });
 
 test("init: a spent budget and invalid stored limits are machine-readable L0 causes", async () => {

@@ -86,7 +86,7 @@ export function finderPrompt(
     diff: string,
     suppressions: Suppression[],
     budgets: { doc: number; diff: number; prompt: number },
-): string {
+): string | undefined {
     const suppressed = suppressions.length
         ? suppressions.map((item) => `- ${item.fingerprint}: ${item.reason}`).join("\n")
         : "- none";
@@ -126,7 +126,10 @@ export function finderPrompt(
         }
         out = render(docLimit, diffCap);
     }
-    return out;
+    // Shrinking the diff and the docs cannot bound the changed-path list, the suppression table or the
+    // per-file headings. A huge diff or a long suppression history can still overflow the window, so this
+    // returns undefined instead: sending an oversized prompt fails the session and hides the reason.
+    return Buffer.byteLength(out, "utf8") <= budgets.prompt ? out : undefined;
 }
 
 /**
@@ -135,7 +138,12 @@ export function finderPrompt(
  * otherwise a long diff plus a long claim would overflow a small model's context and fail every
  * verifier session, leaving the candidates unconfirmed and the run incomplete.
  */
-export function verifierPrompt(candidate: Candidate, doc: ContextDoc, diff: string, promptBudget: number): string {
+export function verifierPrompt(
+    candidate: Candidate,
+    doc: ContextDoc,
+    diff: string,
+    promptBudget: number,
+): string | undefined {
     // The candidate was written by another model that read untrusted files: fenced, and labelled as a claim.
     const claim = {
         file: `${candidate.path}:${candidate.line}`,
@@ -164,5 +172,7 @@ export function verifierPrompt(candidate: Candidate, doc: ContextDoc, diff: stri
         cap = Math.max(0, cap - (Buffer.byteLength(out, "utf8") - promptBudget) - 1);
         out = render(cap);
     }
-    return out;
+    // The claim, its message and its patch are model-written and unbounded, so a small window can still be
+    // exceeded once the diff is empty. Undefined tells the caller to mark the candidate unverified instead.
+    return Buffer.byteLength(out, "utf8") <= promptBudget ? out : undefined;
 }
