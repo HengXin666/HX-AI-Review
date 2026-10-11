@@ -165,7 +165,14 @@ test("a cancelled run's claim is taken over by the run that superseded it in the
     // A different group is genuinely concurrent and must still be refused while the claim is live.
     assert.equal(((await init("h")) as Record<string, unknown>).l0Cause, "budget");
     // An expired claim is abandoned and may be taken over by anyone; its allowance is settled first.
-    store.claims.set(repo.id, { claim: "old", group: "h", usd: 0, expiresAt: "2000-01-01T00:00:00.000Z" });
+    store.claims.set(repo.id, {
+        claim: "old",
+        group: "h",
+        usd: 0,
+        month: "2026-10",
+        started: true,
+        expiresAt: "2000-01-01T00:00:00.000Z",
+    });
     assert.equal(((await init("i")) as Record<string, unknown>).l0Only, false);
     // Same concurrency group: GitHub cancelled the older run, so the newer one takes over its claim.
     const second = (await init("i")) as Record<string, unknown>;
@@ -173,24 +180,54 @@ test("a cancelled run's claim is taken over by the run that superseded it in the
     assert.notEqual(second.budgetClaim, first.budgetClaim);
 });
 
-test("taking over a cancelled run's claim charges its allowance, so rapid pushes cannot re-spend it", async () => {
+test("a run cancelled before its first session does not burn the budget of the run replacing it", async () => {
+    const { call, token } = await registered();
+    const init = async (group: string) =>
+        (await (await call("GET", `/init?group=${group}`, undefined, token)).json()) as Record<string, unknown>;
+    const limitsOf = (body: Record<string, unknown>) => (body.limits as { maxRunUsd: number }).maxRunUsd;
+    await call("PATCH", "/api/repos/o/r", { budgetUsd: 1 });
+    const first = await init("g");
+    assert.equal(limitsOf(first), 1);
+    // Cancelled during install or scope: no model session ever opened, so it spent nothing. Charging its
+    // allowance would let two rapid pushes consume the whole month.
+    const second = await init("g");
+    assert.equal(limitsOf(second), 1);
+});
+
+test("taking over a run that had started spending charges its allowance, so it cannot be re-spent", async () => {
     const { call, token, store } = await registered();
     const repo = (await store.repoByName("o/r"))!;
     const init = async (group: string) =>
         (await (await call("GET", `/init?group=${group}`, undefined, token)).json()) as Record<string, unknown>;
     const limitsOf = (body: Record<string, unknown>) => (body.limits as { maxRunUsd: number }).maxRunUsd;
-    // A capped repo hands the whole remainder to the first run.
     await call("PATCH", "/api/repos/o/r", { budgetUsd: 1 });
     const first = await init("g");
-    assert.equal(limitsOf(first), 1);
-    // That run is cancelled by a newer push in the same group and never POSTs /runs, so its cost is
-    // unknown. Taking over must charge its allowance in full rather than hand out the same dollar again.
+    // The run opens a model session, is then cancelled by a newer push and never POSTs /runs, so its real
+    // cost is unknown: its allowance is the only safe bound and must be charged before granting more.
+    await call("POST", "/spend", { budgetClaim: first.budgetClaim }, token);
     const second = await init("g");
     assert.equal(limitsOf(second), 0);
     assert.equal(store.repos.find((item) => item.id === repo.id)!.spentUsd, 1);
-    // The month is now spent, so the next run is refused rather than given a third dollar.
     const third = await init("g");
     assert.equal(third.l0Cause, "budget");
+});
+
+test("a claim taken over in a later month does not consume the new month's budget", async () => {
+    const { call, token, store } = await registered();
+    const repo = (await store.repoByName("o/r"))!;
+    await call("PATCH", "/api/repos/o/r", { budgetUsd: 1 });
+    const init = async (group: string) =>
+        (await (await call("GET", `/init?group=${group}`, undefined, token)).json()) as Record<string, unknown>;
+    const first = await init("g");
+    await call("POST", "/spend", { budgetClaim: first.budgetClaim }, token);
+    // The claim belongs to the previous month: its allowance must settle into that month and never
+    // reduce this month's budget, whatever the new run is granted.
+    store.claims.get(repo.id)!.month = "2026-09";
+    const row = store.repos.find((item) => item.id === repo.id)!;
+    row.budgetMonth = "2026-09";
+    row.spentUsd = 0.5;
+    const next = await init("g");
+    assert.equal((next.limits as { maxRunUsd: number }).maxRunUsd, 1);
 });
 
 test("init: a spent budget and invalid stored limits are machine-readable L0 causes", async () => {

@@ -52,6 +52,23 @@ export function sessionsToJsonl(transcripts: { role: string; index: number; mess
     return lines.length ? lines.join("\n") + "\n" : "";
 }
 
+/**
+ * Tells the Worker that this run is about to open its first model session. The budget claim is only
+ * settled if it was marked as started, so a run cancelled during install or scope is charged nothing.
+ * Best effort: a failure here must not stop the review, it only risks settling an unused allowance.
+ */
+export async function postSpend(endpoint: string, token: string, budgetClaim: string): Promise<void> {
+    try {
+        await fetch(new URL("/spend", endpoint), {
+            method: "POST",
+            headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+            body: JSON.stringify({ budgetClaim }),
+        });
+    } catch {
+        // The review is more valuable than the reservation accounting; see the doc for the trade-off.
+    }
+}
+
 export async function postRun(endpoint: string, token: string, payload: RunPayload): Promise<IngestResult> {
     const response = await fetch(new URL("/runs", endpoint), {
         method: "POST",

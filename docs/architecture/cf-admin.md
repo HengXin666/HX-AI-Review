@@ -35,7 +35,11 @@ Cloudflare 侧. Worker 入口 [cf-admin/worker/index.ts](../../cf-admin/worker/i
 
 `claim_group` 是调用方的并发组 (`/init` 的 `group` 参数, 来自 workflow 的 concurrency group). GitHub 取消同组中较旧的那次运行, 而取消的运行永远不会走到 `POST /runs`, 所以同组的旧预留可被接管, 否则它会挡住正是取代它的那次运行; 空 group 表示未知, 永不匹配. 不同组之间是真正的并发, 仍然互斥. 预留超过 1 小时视为已放弃, 可由任何一次运行接管.
 
-接管时先把旧预留的额度 (`repos.claim_usd`, 即那次运行当时拿到的 `maxRunUsd`) 全额计入本月花费, 再按剩余额发新的预留. 被取消的运行不会上报真实花费, 不这样记账的话, 同一分支上连续快速 push 每次都能拿到完整的剩余预算, 而之前的开销一笔都没入账. 代价是取消的运行按其额度上限计入 (保守), 持有者正常上报时以真实花费覆盖.
+接管与结算在同一条 UPDATE 中完成 (`RETURNING claim_usd`), 所以预留一旦可见就带着自己的额度: 两个交错的 `/init` 不可能读到同一份余额而各自拿到额度. 接管旧预留时按其是否真正开始花费结算:
+
+- 已经开过模型会话的预留 (`claim_started = 1`, 由 runner 在第一次会话前 `POST /spend` 标记): 把它的额度 (`claim_usd`) 全额计入花费. 被取消的运行不会上报真实花费, 不这样记账的话同一分支连续快速 push 每次都能拿到完整剩余预算, 而之前的开销一笔都没入账; 代价是按额度上限计入 (保守), 持有者正常上报时以真实花费覆盖.
+- 在第一次会话前就被取消的预留 (安装, L0, scope 阶段): 实际花费为 0, 按 0 结算. 否则两次快速 push 就会各记一次整月剩余额, 当月预算直接清零.
+- 预留记有自己所属的月份 (`claim_month`): 上月发放的额度结算进上月, 不会占用本月的预算.
 
 ## 数据
 
@@ -60,7 +64,7 @@ R2 键: `runs/<owner>/<repo>/<runId>/report.md`, `report.json`, `sessions.jsonl`
 
 provider 名只允许字母, 数字, `.`, `_`, `-`; 新建 provider 必须显式给出输入/输出单价 (免费填 0), 更新时省略的字段 (包括 API 协议) 保留原值; 未知协议, 负数或非整数的 token 上限返回 400. 仓库的 enabled, mode, provider, 模型名, budgetUsd 同理: 省略不改, 出现但类型或取值不对返回 400, 不会被静默忽略. `POST /runs` 同样严格: complete, l0Only 必须是布尔, usage 各项与 durationMs 必须是非负数且为整数 (usage.cost 例外, 单价按百万 token 计, 允许小数), prNumber 与 finding 行号必须是正整数, 字符串字段必须是字符串, 否则 400. 显式 `null` 一律按非法值处理而不是省略: 只有字段缺失才表示不提供. patches 里缺字段或类型不对的条目同样 400, 只有字段合法且 `applies: false` 的补丁才被跳过. status 一律由服务端推导 (failed, incomplete, warned, passed), runner 只能在没有发现时标 skipped; runner 发 incomplete 时同样不推进 last_sha.
 
-`/init` 的 `limits.maxRunUsd` 是本月剩余预算 (无上限时为 null), runner 达到它就不再开新的模型会话; 有上限的仓库同时按上节的预留规则独占本次额度. 只下发 L0 时附带 `l0Cause`: disabled, mode (主动选择), budget, config (区间未审, runner 报 incomplete). 旧数据里 contextWindow 或 maxTokens 不是正整数的 provider 也按 config 降级, 不会把非法上限发给模型. 同名仓库 (大小写不敏感) 重复登记返回 409, 并发创建撞唯一约束同样映射为 409.
+`POST /spend` 只接受 `budgetClaim`, 把该预留标记为已开始花费 (幂等, 未知预留是 no-op), 供接管时判断是否结算. `/init` 的 `limits.maxRunUsd` 是本次运行的可用额度 (无上限时为 null), runner 达到它就不再开新的模型会话; 有上限的仓库同时按上节的预留规则独占本次额度. 只下发 L0 时附带 `l0Cause`: disabled, mode (主动选择), budget, config (区间未审, runner 报 incomplete). 旧数据里 contextWindow 或 maxTokens 不是正整数的 provider 也按 config 降级, 不会把非法上限发给模型. 同名仓库 (大小写不敏感) 重复登记返回 409, 并发创建撞唯一约束同样映射为 409.
 
 ## 分层
 

@@ -5,7 +5,7 @@ import type { Deps, Env } from "./http.ts";
 import { handleAdmin } from "./routes/admin.ts";
 import { handleFeedback } from "./routes/feedback.ts";
 import { handleInit } from "./routes/init.ts";
-import { handleRuns } from "./routes/runs.ts";
+import { handleRuns, handleSpend } from "./routes/runs.ts";
 import { D1Store, R2Blobs } from "./store/d1.ts";
 
 export function route(request: Request, deps: Deps): Promise<Response> {
@@ -13,6 +13,9 @@ export function route(request: Request, deps: Deps): Promise<Response> {
     const method = request.method;
     if (method === "GET" && pathname === "/init") {
         return handleInit(request, deps);
+    }
+    if (method === "POST" && pathname === "/spend") {
+        return handleSpend(request, deps);
     }
     if (method === "POST" && pathname === "/runs") {
         return handleRuns(request, deps);

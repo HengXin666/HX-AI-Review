@@ -14,7 +14,7 @@ import { worktreeSnapshot } from "./l0/snapshot.ts";
 import { renderComment } from "./publish/comment.ts";
 import { compareUrl, githubTarget, pushPatchBranch, writeBack } from "./publish/github.ts";
 import type { GithubTarget } from "./publish/github.ts";
-import { postRun, sessionsToJsonl, statusOf } from "./publish/ingest.ts";
+import { postRun, postSpend, sessionsToJsonl, statusOf } from "./publish/ingest.ts";
 import { runReview } from "./review/index.ts";
 import type { Rejection } from "./review/index.ts";
 import { createPiRunner } from "./review/pi.ts";
@@ -115,11 +115,17 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
     }
     const run = await createPiRunner(root, state.config, apiKey);
     const diff = diffText(root, scope.base, scope.head);
+    const endpoint = process.env[ENV.endpoint];
+    const token = process.env[ENV.token];
+    const claim = state.config.budgetClaim;
     const result = await runReview(state.config, scope, {
         run,
         diff,
         patchFiles: (patch) => patchFiles(root, patch),
         readFile: (path) => readTracked(root, path),
+        // The Worker settles a taken-over claim only if it was marked as spending, so a run cancelled
+        // before its first session is charged nothing. Only meaningful for a budgeted repo with a claim.
+        onSpend: endpoint && token && claim ? () => postSpend(endpoint, token, claim) : undefined,
     });
     writeFileSync(stateFile(root, SESSION_FILE), sessionsToJsonl(result.transcripts), UTF8);
     const { findings, patches, usage, rejected, complete, errors, notReviewed, rejections } = result;

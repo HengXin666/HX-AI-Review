@@ -288,6 +288,19 @@ test("a small context window shrinks the finder and verifier prompts instead of 
     }
 });
 
+test("the first session marks the budget claim as spending; later ones do not repeat it", async () => {
+    const calls: AgentRequest[] = [];
+    let spends = 0;
+    const finder = [
+        { path: "api/AGENTS.md", line: 3, title: "real stale path" },
+        { path: "api/AGENTS.md", line: 4, title: "real other" },
+    ];
+    await runReview(config, scope, { ...base, run: fake(calls, { finder }), onSpend: async () => void spends++ });
+    // A run cancelled before its first session spent nothing, so the Worker must only be told once the
+    // first session is really about to open, and never again for the verifier sessions.
+    assert.equal(spends, 1);
+});
+
 test("a window too small for any prompt is a configuration error, not an unreadable session", async () => {
     const calls: AgentRequest[] = [];
     // 2048 tokens * 4 = 8192 bytes, minus 1024 * 4 output and the 8000 reserve: nothing usable is left.

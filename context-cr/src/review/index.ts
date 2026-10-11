@@ -37,6 +37,8 @@ export type ReviewDeps = {
     readFile(path: string): string | undefined;
     /** Clock for the run deadline; tests inject one. */
     now?: () => number;
+    /** Called before the first model session: marks the budget claim as spending on the Worker. */
+    onSpend?: () => Promise<void>;
 };
 
 export type Rejection = { path: string; title: string; reason: string };
@@ -153,6 +155,11 @@ class Review {
         }
         const index = this.sessions++;
         const timeoutMs = Math.min(SESSION_TIMEOUT_MS, left);
+        // First real session of the run: tell the Worker the claim is being spent, so if this run is
+        // cancelled before POST /runs its allowance is settled instead of looking free.
+        if (index === 0) {
+            await this.deps.onSpend?.();
+        }
         try {
             this.record(request.role, index, await this.deps.run({ ...request, timeoutMs }));
             return true;

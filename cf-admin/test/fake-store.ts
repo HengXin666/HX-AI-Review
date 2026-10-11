@@ -18,8 +18,11 @@ export class FakeStore implements Store {
     findings: FindingRow[] = [];
     supp = new Map<string, Suppression>();
     feedbackLog: FeedbackInput[] = [];
-    /** Live budget claim per repo id (see reserveBudget); usd is the allowance handed to its run. */
-    claims = new Map<number, { claim: string; group: string; usd: number; expiresAt: string }>();
+    /** Live budget claim per repo id (see reserveBudget); usd is the allowance, started whether it spent. */
+    claims = new Map<
+        number,
+        { claim: string; group: string; usd: number; month: string; started: boolean; expiresAt: string }
+    >();
 
     private strip(row?: RepoRow & { tokenHash: string }): RepoRow | null {
         if (!row) {
@@ -103,15 +106,26 @@ export class FakeStore implements Store {
             return { claimed: false } as const;
         }
         const row = this.repos.find((item) => item.id === repoId)!;
-        if (held) {
-            // Taking over settles the old allowance in full: a cancelled run never reports its real cost.
+        // Taking over settles the old claim first: a run that opened a model session is charged its
+        // allowance (its real cost will never be reported), one cancelled earlier is charged nothing.
+        // A claim from an earlier month settles into that month and never reduces this month's budget.
+        if (held?.started && held.month === month) {
             row.spentUsd = row.budgetMonth === month ? row.spentUsd + held.usd : held.usd;
             row.budgetMonth = month;
         }
-        const spent = row.budgetMonth === month ? row.spentUsd : 0;
-        const remaining = Math.max(0, Math.min(allowanceUsd, row.budgetUsd - spent));
-        this.claims.set(repoId, { claim, group, usd: remaining, expiresAt });
+        if (row.budgetMonth !== month) {
+            row.spentUsd = 0;
+            row.budgetMonth = month;
+        }
+        const remaining = Math.max(0, Math.min(allowanceUsd, row.budgetUsd - row.spentUsd));
+        this.claims.set(repoId, { claim, group, usd: remaining, month, started: false, expiresAt });
         return { claimed: true, remainingUsd: remaining } as const;
+    }
+    async startSpend(repoId: number, claim: string) {
+        const held = this.claims.get(repoId);
+        if (held?.claim === claim) {
+            held.started = true;
+        }
     }
     async releaseBudget(repoId: number, claim: string) {
         if (this.claims.get(repoId)?.claim === claim) {

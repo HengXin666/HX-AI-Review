@@ -179,6 +179,22 @@ function costOf(usage: Record<string, unknown>, provider: ProviderRow | null): n
  * POST /runs: findings, patches, duration and usage from one runner pass. The whole body is validated
  * before anything is written; then R2 blobs, D1 rows, spend, and (complete push runs only) last_sha.
  */
+/**
+ * POST /spend: the runner reports that it is about to open its first model session. The claim is marked
+ * as having started, so if this run is then cancelled before POST /runs its allowance is settled rather
+ * than treated as free. Without this a run cancelled during install or scope would look like it had spent
+ * nothing, and every rapid push on one branch would be handed the whole remaining budget again.
+ */
+export async function handleSpend(request: Request, deps: Deps): Promise<Response> {
+    const repo = await repoFromToken(request, deps);
+    const body = await readJson(request);
+    const claim = text(body.budgetClaim, "budgetClaim");
+    if (claim) {
+        await deps.store.startSpend(repo.id, claim);
+    }
+    return json({ ok: true });
+}
+
 export async function handleRuns(request: Request, deps: Deps): Promise<Response> {
     const repo = await repoFromToken(request, deps);
     const body = await readJson(request);

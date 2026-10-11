@@ -209,6 +209,13 @@ paths:
             security: [{ repoToken: [] }]
             parameters:
                 - { name: repo, in: query, required: false, schema: { type: string } }
+                - name: group
+                  in: query
+                  required: false
+                  schema: { type: string }
+                  description: >-
+                      The caller's concurrency group. A live claim from the same group may be taken over,
+                      because GitHub cancelled that run to start this one. Empty never matches.
             responses:
                 "200":
                     {
@@ -217,6 +224,26 @@ paths:
                     }
                 "401": { description: Missing or unknown token }
                 "403": { description: Token belongs to another repository }
+    /spend:
+        post:
+            operationId: postSpend
+            security: [{ repoToken: [] }]
+            description: >-
+                Marks the run's budget claim as having opened a model session. A claim taken over by a newer
+                run is settled (charged its allowance) only when it was marked this way, so a run cancelled
+                before its first session does not burn the month. Idempotent; an unknown claim is a no-op.
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            required: [budgetClaim]
+                            properties:
+                                budgetClaim: { type: string }
+            responses:
+                "200": { description: Recorded }
+                "401": { description: Missing or unknown token }
     /runs:
         post:
             operationId: postRun
