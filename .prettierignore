@@ -1,0 +1,6 @@
+.agents/
+node_modules/
+dist/
+pnpm-lock.yaml
+scripts/.hx_code_quality/
+*.md
