@@ -3,6 +3,8 @@ import { HttpError, field, json, month, readJson } from "../http.ts";
 import type { Deps } from "../http.ts";
 import type { RepoPatch } from "../store/port.ts";
 import { verdictOf } from "./feedback.ts";
+import { handlePrompts } from "./prompts.ts";
+import { handleSession } from "./session.ts";
 import { PROVIDER_NAME, handleProviderPut } from "./providers.ts";
 
 const LIST_LIMIT = 50;
@@ -71,21 +73,37 @@ async function overview(deps: Deps): Promise<Response> {
         ...repo,
         spentUsd: repo.budgetMonth === current ? repo.spentUsd : 0,
     }));
-    const [runs, findings, providers] = await Promise.all([
+    const [runs, findings, resolved, providers, prompts, notes] = await Promise.all([
         deps.store.recentRuns(LIST_LIMIT),
         deps.store.openFindings(LIST_LIMIT),
+        deps.store.findingsByStatus("resolved", LIST_LIMIT),
         deps.store.listProviders(),
+        deps.store.listPromptVersions(),
+        deps.store.listPromptNotes(LIST_LIMIT),
     ]);
     // Never the key itself: only whether the named Worker secret exists.
     const providerView = providers.map((item) => ({ ...item, keyPresent: Boolean(deps.secret(item.keySecret)) }));
-    return json({ month: current, deployment: deps.deployment, repos, runs, findings, providers: providerView });
+    return json({
+        month: current,
+        deployment: { ...deps.deployment, passwordLogin: Boolean(deps.credentials?.user && deps.credentials.password) },
+        repos,
+        runs,
+        findings,
+        resolved,
+        prompts,
+        notes,
+        providers: providerView,
+    });
 }
 
 /** Admin API behind Cloudflare Access. Path segments after /api/. */
 export async function handleAdmin(request: Request, deps: Deps, parts: string[]): Promise<Response> {
-    const who = await requireAdmin(request, deps);
     const method = request.method;
     const [resource, ...rest] = parts;
+    if (resource === "session") {
+        return handleSession(request, deps);
+    }
+    const who = await requireAdmin(request, deps);
     if (method === "GET" && resource === "overview") {
         return overview(deps);
     }
@@ -117,6 +135,9 @@ export async function handleAdmin(request: Request, deps: Deps, parts: string[])
     }
     if (resource === "providers" && method === "PUT" && rest.length === 1) {
         return handleProviderPut(request, deps, rest[0]);
+    }
+    if (resource === "prompts") {
+        return handlePrompts(request, deps, rest);
     }
     if (resource === "findings" && rest.length === 2) {
         const finding = await deps.store.finding(rest[0]);

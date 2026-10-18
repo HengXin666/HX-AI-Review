@@ -1,6 +1,7 @@
 import { HttpError } from "./http.ts";
 import type { Deps } from "./http.ts";
 import type { RepoRow } from "./store/port.ts";
+import { sessionUser } from "./session.ts";
 
 const encoder = new TextEncoder();
 const TOKEN_PREFIX = "hxctx_";
@@ -120,8 +121,12 @@ export async function verifyAccess(request: Request, aud?: string, domain?: stri
 
 export async function requireAdmin(request: Request, deps: Deps): Promise<string> {
     const who = await deps.admin(request);
-    if (!who) {
-        throw new HttpError(403, "Cloudflare Access identity required");
+    if (who) {
+        return who;
     }
-    return who;
+    const session = await sessionUser(request, deps.credentials, deps.now().getTime());
+    if (session) {
+        return session;
+    }
+    throw new HttpError(403, "admin login required");
 }

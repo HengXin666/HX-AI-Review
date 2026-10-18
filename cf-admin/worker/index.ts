@@ -48,6 +48,10 @@ export default {
             blobs: new R2Blobs(env.BLOBS),
             secret: (name) => (typeof env[name] === "string" ? (env[name] as string) : undefined),
             admin: (req) => verifyAccess(req, env.ACCESS_AUD, env.ACCESS_TEAM_DOMAIN),
+            credentials:
+                env.ADMIN_USER && env.ADMIN_PASSWORD
+                    ? { user: env.ADMIN_USER, password: env.ADMIN_PASSWORD }
+                    : undefined,
             overviewUrl: env.OVERVIEW_URL,
             deployment: {
                 sha: env.DEPLOY_SHA || undefined,

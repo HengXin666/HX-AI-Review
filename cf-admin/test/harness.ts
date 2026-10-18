@@ -5,7 +5,7 @@ import { FakeBlobs, FakeStore } from "./fake-store.ts";
 
 export const ORIGIN = "https://cf.test";
 
-export function setup(admin: string | null = "me@test") {
+export function setup(admin: string | null = "me@test", credentials?: { user: string; password: string }) {
     const store = new FakeStore();
     const blobs = new FakeBlobs();
     let counter = 0;
@@ -14,16 +14,20 @@ export function setup(admin: string | null = "me@test") {
         blobs,
         secret: (name) => (name === "KEY_DEFAULT" ? "sk-live" : undefined),
         admin: async () => admin,
+        credentials,
         overviewUrl: "https://overview.test",
         deployment: { sha: "abc123", accessConfigured: true },
         now: () => new Date("2026-10-11T00:00:00Z"),
         id: () => "run" + ++counter,
     };
-    const call = (method: string, path: string, body?: unknown, token?: string) =>
+    const call = (method: string, path: string, body?: unknown, token?: string, headers?: Record<string, string>) =>
         serve(
             new Request(ORIGIN + path, {
                 method,
-                headers: token ? { authorization: "Bearer " + token } : {},
+                headers: {
+                    ...(token ? { authorization: "Bearer " + token } : {}),
+                    ...headers,
+                },
                 body: body === undefined ? undefined : JSON.stringify(body),
             }),
             deps,

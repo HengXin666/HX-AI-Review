@@ -8,7 +8,7 @@ Cloudflare 侧代码. 设计见 [docs/architecture/cf-admin.md](../docs/architec
 - Worker 永远不代理模型请求. 新增接口前先确认它属于配置, 入库或总览.
 - api_key 不入 D1: providers.key_secret 只存 Worker secret 的名字.
 - HX_CTX_TOKEN 只存 SHA-256; 明文只在创建或轮换时返回一次.
-- /api/* 必须经过 `requireAdmin` (Cloudflare Access JWT 校验), 未配置 Access 时 fail closed.
+- /api/* 除 `POST`/`DELETE /api/session` 外必须经过 `requireAdmin`: Cloudflare Access JWT, 或 Worker 变量 `ADMIN_USER` + `ADMIN_PASSWORD` 签发的会话 cookie. 两者都未配置时 fail closed.
 - 禁用, 模式为 l0 或超预算的仓库, /init 只返回 L0 配置, 不带 api_url 与 api_key.
 - 每次运行 (含 PR) 都计入预算, 缓存 token 按缓存单价计; last_sha 只在 event 为 push 且 `complete` 不为 false 时推进.
 - 新 provider 必须显式给单价; 任何出现但非法的字段 (数字, 协议, 仓库配置, /runs 载荷) 返回 400, 不静默变默认值或被忽略.

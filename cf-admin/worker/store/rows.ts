@@ -1,5 +1,5 @@
 // Row mappers from D1 snake_case columns to the port types.
-import type { FindingRow, ProviderRow, RepoRow, RunRow } from "./port.ts";
+import type { FindingRow, FindingStatus, PromptNote, PromptVersion, ProviderRow, RepoRow, RunRow } from "./port.ts";
 
 export type Row = Record<string, unknown>;
 
@@ -69,7 +69,38 @@ export function finding(row: Row): FindingRow & { repo: string } {
         line: Number(row.line),
         message: String(row.message),
         evidence: String(row.evidence),
-        patchKey: row.patch_key === null ? null : String(row.patch_key),
-        status: row.status === "accepted" || row.status === "rejected" ? row.status : "open",
+        patchKey: row.patch_key === null || row.patch_key === undefined ? null : String(row.patch_key),
+        status: statusOf(row.status),
+        resolvedByRun: row.resolved_by_run ? String(row.resolved_by_run) : null,
+    };
+}
+
+const STATUSES = new Set<FindingStatus>(["open", "accepted", "rejected", "resolved"]);
+
+function statusOf(value: unknown): FindingStatus {
+    const status = String(value);
+    return STATUSES.has(status as FindingStatus) ? (status as FindingStatus) : "open";
+}
+
+export function promptVersion(row: Row): PromptVersion {
+    return {
+        id: Number(row.id),
+        role: row.role === "verifier" ? "verifier" : "finder",
+        version: Number(row.version),
+        body: String(row.body),
+        note: String(row.note ?? ""),
+        active: Number(row.active) === 1,
+        createdAt: String(row.created_at),
+    };
+}
+
+export function promptNote(row: Row): PromptNote {
+    return {
+        id: Number(row.id),
+        repoId: Number(row.repo_id),
+        fingerprint: String(row.fingerprint),
+        reason: String(row.reason),
+        foldedInto: row.folded_into === null || row.folded_into === undefined ? null : Number(row.folded_into),
+        createdAt: String(row.created_at),
     };
 }

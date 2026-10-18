@@ -16,6 +16,15 @@ type L0 = { cause: "disabled" | "mode" | "budget" | "config"; reason: string };
 
 const positiveInt = (value: number) => Number.isSafeInteger(value) && value >= 1;
 
+async function promptPayload(deps: Deps) {
+    const active = await deps.store.activePrompts();
+    const pick = (role: "finder" | "verifier") => {
+        const row = active.find((item) => item.role === role);
+        return row ? { version: row.version, body: row.body } : null;
+    };
+    return { finder: pick("finder"), verifier: pick("verifier") };
+}
+
 /**
  * This request's budget claim, echoed back by POST /runs so only the holder can release it. The allowance
  * is the remaining budget, recorded on the claim so a later takeover settles it instead of handing the
@@ -117,6 +126,7 @@ export async function handleInit(request: Request, deps: Deps): Promise<Response
         },
         lastSha: repo.lastSha ?? undefined,
         suppressions: await deps.store.suppressions(repo.id),
+        prompts: await promptPayload(deps),
         // The runner sends this back on POST /runs; it is what lets that call release this claim.
         budgetClaim: held?.claim,
     };

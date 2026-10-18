@@ -28,18 +28,19 @@ function d1(db: DatabaseSync) {
         prepare: statement,
         // D1Store.insertRun relies on batch being atomic, so this must be a real transaction: a later
         // statement failing rolls the earlier writes back instead of leaving them in the database.
-        batch: async (items: { run: () => Promise<unknown> }[]) => {
+        batch: async (items: { run: () => Promise<{ meta?: { changes?: number } }> }[]) => {
             db.exec("BEGIN");
             try {
+                const results = [];
                 for (const item of items) {
-                    await item.run();
+                    results.push(await item.run());
                 }
+                db.exec("COMMIT");
+                return results;
             } catch (error) {
                 db.exec("ROLLBACK");
                 throw error;
             }
-            db.exec("COMMIT");
-            return [];
         },
     } as unknown as D1Database;
 }
@@ -142,4 +143,72 @@ test("a claim taken over in a later month does not consume the new month's budge
     );
     assert.deepEqual(held, { claimed: true, remainingUsd: 1 });
     assert.equal(await spent(), 0);
+});
+
+test("a later pull request run resolves missing L0 findings but not unchecked CX-AI rows", async () => {
+    const { db, store, repo } = await seeded();
+    const row = (id: string, runId: string, fingerprint: string, ruleId: string) => ({
+        id,
+        runId,
+        repoId: repo.id,
+        fingerprint,
+        ruleId,
+        severity: "warning",
+        path: "AGENTS.md",
+        line: 1,
+        message: "m",
+        evidence: "e",
+        patchKey: null,
+        status: "open" as const,
+    });
+    const run = (id: string) => ({
+        id,
+        repoId: repo.id,
+        sha: id,
+        baseSha: "base",
+        event: "pull_request",
+        prNumber: 9,
+        status: "warned",
+        l0Only: false,
+        errors: 0,
+        warnings: 1,
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0,
+        durationMs: 1,
+        patchBranch: null,
+        createdAt: "2026-10-11T00:00:00.000Z",
+    });
+    await store.insertRun(run("r1"), [
+        row("r1-0", "r1", "keep", "CX-AI"),
+        row("r1-1", "r1", "gone-l0", "HC-CONTEXT"),
+        row("r1-2", "r1", "gone-ai", "CX-AI"),
+    ]);
+    await store.insertRun(run("r2"), [row("r2-0", "r2", "keep", "CX-AI")]);
+    const changed = await store.resolveRound({
+        repoId: repo.id,
+        prNumber: 9,
+        runId: "r2",
+        seen: ["keep"],
+        aiRechecked: false,
+    });
+    assert.equal(changed, 1);
+    const status = (id: string) => (db.prepare("SELECT status FROM findings WHERE id = ?").get(id) as Row).status;
+    assert.equal(status("r1-0"), "open");
+    assert.equal(status("r1-1"), "resolved");
+    assert.equal(status("r1-2"), "open");
+    const published = await store.publishPrompt("finder", "Prefer the code.", "note");
+    assert.equal(published.version, 1);
+    assert.equal(published.active, true);
+    const updated = await store.feedback({
+        repoId: repo.id,
+        fingerprint: "keep",
+        verdict: "rejected",
+        reason: "still true",
+        source: "test",
+    });
+    assert.equal(updated, 2);
+    const notes = db.prepare("SELECT reason FROM prompt_notes").all() as Row[];
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0].reason, "still true");
 });

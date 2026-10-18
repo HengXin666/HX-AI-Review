@@ -265,6 +265,7 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
                 patchKey: patchKeys.get(item.fingerprint) ?? null,
                 status: "open",
             }));
+    let resolved = 0;
     try {
         for (const patch of fixes) {
             const key = `${prefix}patches/${patch.fingerprint}.diff`;
@@ -277,6 +278,16 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
             await put(prefix + "sessions.jsonl", blobs.sessionsJsonl, NDJSON);
         }
         await deps.store.insertRun(run, rows());
+        resolved =
+            prNumber === null
+                ? 0
+                : await deps.store.resolveRound({
+                      repoId: repo.id,
+                      prNumber,
+                      runId,
+                      seen: rows().map((item) => item.fingerprint),
+                      aiRechecked: !run.l0Only && !incomplete,
+                  });
     } catch (error) {
         // Compensate: a failed write must not leave R2 objects that no D1 run points to.
         await deps.blobs.delete(written).catch(() => undefined);
@@ -290,5 +301,5 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
         await deps.store.setLastSha(repo.id, sha);
     }
     const overviewUrl = deps.overviewUrl ? `${deps.overviewUrl.replace(/\/$/, "")}/#/runs/${runId}` : undefined;
-    return json({ runId, overviewUrl }, 201);
+    return json({ runId, overviewUrl, resolved }, 201);
 }

@@ -3,13 +3,19 @@ import type {
     BlobStore,
     FeedbackInput,
     FindingRow,
+    FindingStatus,
+    PromptNote,
+    PromptRole,
+    PromptVersion,
     ProviderRow,
     RepoPatch,
     RepoRow,
+    RoundInput,
     RunRow,
     Store,
     Suppression,
 } from "../worker/store/port.ts";
+import { isStale } from "../worker/store/rounds.ts";
 
 export class FakeStore implements Store {
     repos: (RepoRow & { tokenHash: string })[] = [];
@@ -18,6 +24,8 @@ export class FakeStore implements Store {
     findings: FindingRow[] = [];
     supp = new Map<string, Suppression>();
     feedbackLog: FeedbackInput[] = [];
+    prompts: PromptVersion[] = [];
+    notes: PromptNote[] = [];
     /** Live budget claim per repo id (see reserveBudget); usd is the allowance, started whether it spent. */
     claims = new Map<
         number,
@@ -181,8 +189,70 @@ export class FakeStore implements Store {
                 fingerprint: input.fingerprint,
                 reason: input.reason,
             });
+            this.notes.push({
+                id: this.notes.length + 1,
+                repoId: input.repoId,
+                fingerprint: input.fingerprint,
+                reason: input.reason,
+                foldedInto: null,
+                createdAt: new Date(0).toISOString(),
+            });
         }
         return hits.length;
+    }
+    async resolveRound(input: RoundInput) {
+        let changed = 0;
+        for (const item of this.findings) {
+            const pr = this.runs.find((run) => run.id === item.runId)?.prNumber ?? null;
+            if (!isStale(item, pr, input)) {
+                continue;
+            }
+            item.status = "resolved";
+            item.resolvedByRun = input.runId;
+            changed++;
+        }
+        return changed;
+    }
+    async findingsByStatus(status: FindingStatus, limit: number) {
+        return this.findings
+            .filter((item) => item.status === status)
+            .slice(-limit)
+            .map((item) => ({ ...item, repo: this.repos[item.repoId - 1]?.name ?? "" }));
+    }
+    async activePrompts() {
+        return this.prompts.filter((item) => item.active);
+    }
+    async listPromptVersions() {
+        return [...this.prompts].reverse();
+    }
+    async listPromptNotes(limit: number) {
+        return this.notes.slice(-limit).reverse();
+    }
+    async publishPrompt(role: PromptRole, body: string, note: string) {
+        for (const item of this.prompts) {
+            if (item.role === role) {
+                item.active = false;
+            }
+        }
+        const version = this.prompts.filter((item) => item.role === role).length + 1;
+        const row: PromptVersion = {
+            id: this.prompts.length + 1,
+            role,
+            version,
+            body,
+            note,
+            active: true,
+            createdAt: new Date(0).toISOString(),
+        };
+        this.prompts.push(row);
+        return row;
+    }
+    async foldNotes(ids: number[], versionId: number) {
+        for (const note of this.notes) {
+            if (ids.includes(note.id) && note.foldedInto === null) {
+                note.foldedInto = versionId;
+            }
+        }
     }
 }
 
