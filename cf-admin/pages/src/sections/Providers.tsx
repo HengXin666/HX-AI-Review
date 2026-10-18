@@ -1,7 +1,7 @@
+import { Button, Card, CardContent, CardHeader, CardTitle, Input } from "@hx/ui";
 import { useState } from "react";
 import type { FormEvent } from "react";
 import type { Provider, ProviderInput } from "../api.ts";
-import { box, cell, table } from "./style.ts";
 
 const HEADERS = [
     "Name",
@@ -88,53 +88,66 @@ export function Providers({ providers, onSave }: Props) {
         onSave(parsed.name, parsed.input);
     };
     return (
-        <section style={box}>
-            <h2>Model providers</h2>
-            <table style={table}>
-                <thead>
-                    <tr>
-                        {HEADERS.map((title) => (
-                            <th key={title} style={cell}>
-                                {title}
-                            </th>
-                        ))}
-                    </tr>
-                </thead>
-                <tbody>
-                    {providers.map((item) => (
-                        <tr key={item.name}>
-                            <td style={cell}>{item.name}</td>
-                            <td style={cell}>{item.apiUrl}</td>
-                            <td style={cell}>{item.api}</td>
-                            <td style={cell}>
-                                {item.keySecret} {item.keyPresent ? "(set)" : <strong>(missing)</strong>}
-                            </td>
-                            <td style={cell}>
-                                {item.priceInput} / {item.priceOutput} / {item.priceCacheRead} / {item.priceCacheWrite}
-                            </td>
-                            <td style={cell}>
-                                {item.contextWindow} / {item.maxTokens}
-                            </td>
+        <Card className="my-4">
+            <CardHeader>
+                <CardTitle>Model providers</CardTitle>
+            </CardHeader>
+            <CardContent className="pb-4">
+                <table className="w-full border-collapse text-left text-sm">
+                    <thead>
+                        <tr>
+                            {HEADERS.map((title) => (
+                                <th key={title} className="border-b border-border px-2 py-1">
+                                    {title}
+                                </th>
+                            ))}
                         </tr>
+                    </thead>
+                    <tbody>
+                        {providers.map((item) => (
+                            <tr key={item.name}>
+                                <td className="border-b border-border px-2 py-1">{item.name}</td>
+                                <td className="border-b border-border px-2 py-1">{item.apiUrl}</td>
+                                <td className="border-b border-border px-2 py-1">{item.api}</td>
+                                <td className="border-b border-border px-2 py-1">
+                                    {item.keySecret} {item.keyPresent ? "(set)" : <strong>(missing)</strong>}
+                                </td>
+                                <td className="border-b border-border px-2 py-1">
+                                    {item.priceInput} / {item.priceOutput} / {item.priceCacheRead} /{" "}
+                                    {item.priceCacheWrite}
+                                </td>
+                                <td className="border-b border-border px-2 py-1">
+                                    {item.contextWindow} / {item.maxTokens}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+                <form onSubmit={submit} className="mt-3 flex flex-wrap gap-2">
+                    <Input name="name" placeholder="name, e.g. default" required className="w-40" />
+                    <Input name="apiUrl" placeholder="https://api.example.com/v1" className="w-64" />
+                    <select
+                        name="api"
+                        defaultValue=""
+                        className="h-8 rounded-lg border border-border bg-transparent px-2 text-sm"
+                    >
+                        <option value="">API: keep (new: openai-completions)</option>
+                        <option value="openai-completions">openai-completions</option>
+                        <option value="anthropic-messages">anthropic-messages</option>
+                    </select>
+                    <Input name="keySecret" placeholder="PROVIDER_DEFAULT_KEY" className="w-52" />
+                    {NUMBERS.map(([key, label]) => (
+                        <Input key={key} name={key} placeholder={label} className="w-36" inputMode="decimal" />
                     ))}
-                </tbody>
-            </table>
-            <form onSubmit={submit} style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                <input name="name" placeholder="name, e.g. default" required />
-                <input name="apiUrl" placeholder="https://api.example.com/v1" size={32} />
-                <select name="api" defaultValue="">
-                    <option value="">API: keep (new: openai-completions)</option>
-                    <option value="openai-completions">openai-completions</option>
-                    <option value="anthropic-messages">anthropic-messages</option>
-                </select>
-                <input name="keySecret" placeholder="PROVIDER_DEFAULT_KEY" />
-                {NUMBERS.map(([key, label]) => (
-                    <input key={key} name={key} placeholder={label} size={12} inputMode="decimal" />
-                ))}
-                <button type="submit">save provider</button>
-            </form>
-            <p style={{ color: "#666" }}>Empty optional fields keep the stored value when updating.</p>
-            {error ? <p style={{ color: "crimson" }}>{error}</p> : null}
-        </section>
+                    <Button type="submit" variant="primary">
+                        save provider
+                    </Button>
+                </form>
+                <p className="mt-2 text-xs text-muted-foreground">
+                    Empty optional fields keep the stored value when updating.
+                </p>
+                {error ? <p className="text-sm text-danger-fg">{error}</p> : null}
+            </CardContent>
+        </Card>
     );
 }

@@ -1,7 +1,7 @@
+import { Button, Card, CardContent, CardHeader, CardTitle, Input } from "@hx/ui";
 import { useState } from "react";
 import type { FocusEvent, FormEvent } from "react";
 import type { Repo, RepoInput } from "../api.ts";
-import { box, cell, table } from "./style.ts";
 
 const HEADERS = ["Repo", "Enabled", "Mode", "Finder / verifier", "Budget", "last_sha", "Token"];
 
@@ -62,79 +62,89 @@ export function Repos({ repos, onChange, onCreate, onRotate }: Props) {
         }
     };
     return (
-        <section style={box}>
-            <h2>Repositories</h2>
-            <table style={table}>
-                <thead>
-                    <tr>
-                        {HEADERS.map((title) => (
-                            <th key={title} style={cell}>
-                                {title}
-                            </th>
-                        ))}
-                    </tr>
-                </thead>
-                <tbody>
-                    {repos.map((repo) => {
-                        const change = (patch: Partial<Repo>) => onChange(repo.name, patch);
-                        return (
-                            <tr key={repo.name}>
-                                <td style={cell}>{repo.name}</td>
-                                <td style={cell}>
-                                    <input
-                                        type="checkbox"
-                                        checked={repo.enabled}
-                                        onChange={(event) => change({ enabled: event.target.checked })}
-                                    />
-                                </td>
-                                <td style={cell}>
-                                    <select
-                                        value={repo.mode}
-                                        onChange={(event) => change({ mode: event.target.value as Repo["mode"] })}
-                                    >
-                                        <option value="full">full</option>
-                                        <option value="l0">l0</option>
-                                    </select>
-                                </td>
-                                <td style={cell}>
-                                    {repo.finderModel} / {repo.verifierModel}
-                                </td>
-                                <td style={cell}>
-                                    {repo.spentUsd.toFixed(2)} /{" "}
-                                    <input
-                                        type="number"
-                                        min={0}
-                                        step={1}
-                                        defaultValue={repo.budgetUsd}
-                                        style={{ width: 70 }}
-                                        onBlur={budgetBlur(repo, change)}
-                                    />{" "}
-                                    USD
-                                </td>
-                                <td style={cell}>{repo.lastSha?.slice(0, 10) ?? "-"}</td>
-                                <td style={cell}>
-                                    <button onClick={() => rotate(repo.name)}>rotate</button>
-                                </td>
-                            </tr>
-                        );
-                    })}
-                </tbody>
-            </table>
-            <form onSubmit={create} style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                <input name="name" placeholder="owner/repo" required />
-                <input name="provider" placeholder="provider (default)" />
-                <input name="finderModel" placeholder="finder model" required />
-                <input name="verifierModel" placeholder="verifier model" required />
-                <input name="budgetUsd" placeholder="budget USD (empty = no cap)" size={18} />
-                <button type="submit">register repo</button>
-            </form>
-            {error ? <p style={{ color: "crimson" }}>{error}</p> : null}
-            {token ? (
-                <p>
-                    HX_CTX_TOKEN for {token.repo}, shown once; save it as the repository secret now:{" "}
-                    <code>{token.value}</code>
-                </p>
-            ) : null}
-        </section>
+        <Card className="my-4">
+            <CardHeader>
+                <CardTitle>Repositories</CardTitle>
+            </CardHeader>
+            <CardContent className="pb-4">
+                <table className="w-full border-collapse text-left text-sm">
+                    <thead>
+                        <tr>
+                            {HEADERS.map((title) => (
+                                <th key={title} className="border-b border-border px-2 py-1">
+                                    {title}
+                                </th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {repos.map((repo) => {
+                            const change = (patch: Partial<Repo>) => onChange(repo.name, patch);
+                            return (
+                                <tr key={repo.name}>
+                                    <td className="border-b border-border px-2 py-1">{repo.name}</td>
+                                    <td className="border-b border-border px-2 py-1">
+                                        <input
+                                            type="checkbox"
+                                            checked={repo.enabled}
+                                            onChange={(event) => change({ enabled: event.target.checked })}
+                                        />
+                                    </td>
+                                    <td className="border-b border-border px-2 py-1">
+                                        <select
+                                            value={repo.mode}
+                                            onChange={(event) => change({ mode: event.target.value as Repo["mode"] })}
+                                        >
+                                            <option value="full">full</option>
+                                            <option value="l0">l0</option>
+                                        </select>
+                                    </td>
+                                    <td className="border-b border-border px-2 py-1">
+                                        {repo.finderModel} / {repo.verifierModel}
+                                    </td>
+                                    <td className="border-b border-border px-2 py-1">
+                                        {repo.spentUsd.toFixed(2)} /{" "}
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            step={1}
+                                            defaultValue={repo.budgetUsd}
+                                            className="w-20 rounded-lg border border-border bg-transparent px-2"
+                                            onBlur={budgetBlur(repo, change)}
+                                        />{" "}
+                                        USD
+                                    </td>
+                                    <td className="border-b border-border px-2 py-1">
+                                        {repo.lastSha?.slice(0, 10) ?? "-"}
+                                    </td>
+                                    <td className="border-b border-border px-2 py-1">
+                                        <Button type="button" variant="outline" onClick={() => rotate(repo.name)}>
+                                            rotate
+                                        </Button>
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+                <form onSubmit={create} className="mt-3 flex flex-wrap gap-2">
+                    <Input name="name" placeholder="owner/repo" required className="w-40" />
+                    <Input name="provider" placeholder="provider (default)" className="w-40" />
+                    <Input name="finderModel" placeholder="finder model" required className="w-36" />
+                    <Input name="verifierModel" placeholder="verifier model" required className="w-36" />
+                    <Input name="budgetUsd" placeholder="budget USD (empty = no cap)" className="w-52" />
+                    <Button type="submit" variant="primary">
+                        register repo
+                    </Button>
+                </form>
+                {error ? <p className="mt-2 text-sm text-danger-fg">{error}</p> : null}
+                {token ? (
+                    <p className="mt-2 text-sm">
+                        HX_CTX_TOKEN for {token.repo}, shown once; save it as the repository secret now:{" "}
+                        <code>{token.value}</code>
+                    </p>
+                ) : null}
+            </CardContent>
+        </Card>
     );
 }

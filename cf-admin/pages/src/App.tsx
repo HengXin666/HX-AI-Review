@@ -1,19 +1,30 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "./api.ts";
+import { Button, PageHeader } from "@hx/ui";
+import { ApiError, api } from "./api.ts";
 import type { Overview, ProviderInput, Repo, RepoInput } from "./api.ts";
 import { Activity } from "./sections/Activity.tsx";
 import { Deployment } from "./sections/Deployment.tsx";
+import { Login } from "./sections/Login.tsx";
+import { Prompts } from "./sections/Prompts.tsx";
 import { Providers } from "./sections/Providers.tsx";
 import { Repos } from "./sections/Repos.tsx";
 
 export function App() {
     const [data, setData] = useState<Overview | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const fail = (err: Error) => setError(err.message);
+    const [phase, setPhase] = useState<"loading" | "login" | "ready">("loading");
+    const fail = (err: Error) => {
+        setError(err.message);
+        if (err instanceof ApiError && err.status === 403) {
+            setPhase("login");
+            setData(null);
+        }
+    };
     const reload = useCallback(() => {
         api.overview().then((next) => {
             setError(null);
             setData(next);
+            setPhase("ready");
         }, fail);
     }, []);
     useEffect(reload, [reload]);
@@ -21,7 +32,6 @@ export function App() {
     const updateRepo = (name: string, patch: Partial<Repo>) => {
         api.updateRepo(name, patch).then(reload, fail);
     };
-    // Token calls report failures through the page error and return null so nothing shows as a token.
     const createRepo = async (input: RepoInput) => {
         try {
             const { token } = await api.createRepo(input);
@@ -43,31 +53,50 @@ export function App() {
     const saveProvider = (name: string, input: Partial<ProviderInput>) => {
         api.saveProvider(name, input).then(reload, fail);
     };
-    const verdict = (id: string, value: "accepted" | "rejected") => {
-        // The reason flows back into the suppression table that the next /init sends to the finder.
-        const reason = value === "rejected" ? window.prompt("Reject reason (sent to future reviews)") : "";
-        if (value === "rejected" && !reason) {
+    const verdict = (id: string, value: "accepted" | "rejected", reason: string) => {
+        if (value === "rejected" && !reason.trim()) {
+            setError("a rejection needs a reason");
             return;
         }
-        api.feedback(id, value, reason ?? "").then(reload, fail);
+        api.feedback(id, value, reason).then(reload, fail);
+    };
+    const logout = () => {
+        api.logout().then(() => {
+            setData(null);
+            setPhase("login");
+        }, fail);
     };
 
+    if (phase === "login") {
+        return <Login error={error} onSubmit={(user, password) => api.login(user, password).then(reload, fail)} />;
+    }
     if (!data) {
-        return error ? <p style={{ color: "crimson" }}>Error: {error}</p> : <p>Loading...</p>;
+        return <p className="p-6 text-sm text-muted-foreground">{error ? `Error: ${error}` : "Loading..."}</p>;
     }
     return (
-        <main style={{ fontFamily: "system-ui, sans-serif", padding: 24, maxWidth: 1200 }}>
-            <h1>hx-context-review</h1>
+        <main className="mx-auto max-w-6xl p-6 text-foreground">
+            <PageHeader
+                title="hx-context-review"
+                desc={`Budgets and spend are for ${data.month}; 0 means no monthly cap.`}
+                right={
+                    <Button type="button" variant="outline" onClick={logout}>
+                        log out
+                    </Button>
+                }
+            />
             {error ? (
-                <p style={{ color: "crimson" }}>
-                    Error: {error} <button onClick={reload}>retry</button>
+                <p className="mb-4 text-sm text-danger-fg">
+                    Error: {error}{" "}
+                    <Button type="button" variant="ghost" onClick={reload}>
+                        retry
+                    </Button>
                 </p>
             ) : null}
             <Deployment info={data.deployment} />
             <Repos repos={data.repos} onChange={updateRepo} onCreate={createRepo} onRotate={rotate} />
             <Providers providers={data.providers} onSave={saveProvider} />
-            <Activity findings={data.findings} runs={data.runs} onVerdict={verdict} />
-            <p style={{ color: "#666" }}>Budgets and spend are for {data.month}; 0 means no monthly cap.</p>
+            <Prompts prompts={data.prompts ?? []} notes={data.notes ?? []} onDone={reload} onError={fail} />
+            <Activity findings={data.findings} resolved={data.resolved ?? []} runs={data.runs} onVerdict={verdict} />
         </main>
     );
 }

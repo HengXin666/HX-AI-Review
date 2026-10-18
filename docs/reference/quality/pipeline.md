@@ -104,6 +104,8 @@ workflow_call (业务仓库调用, 本仓库自身不跑)
 
 `constants.ts` 被 agent-review.md 记录 (会话轮数, 会话时长, 运行截止时间, 批次与 diff 预算), 所以改这些上限必须同步该文档.
 
+`cf-admin/pages/tsconfig.json` 在 paths 里把 `@hx/ui` 指到 `pages/src/vendor-ui.ts`, 让 `tsc` 不跟进 `@hx/ui` 整库源码 (erasableSyntaxOnly 与 noUnusedLocals 会扫到库内无关符号). Vite 另用 alias 指向真实组件入口.
+
 新增一类"改了 X 就必须改文档 Y"的约束时, 在 links.json 加一项, 同时更新上表. 确实不需要改文档的特例, 按 hx-agent-code 基线流程把该 finding 写入 `scripts/quality/baseline.json` 并写明原因与批准人.
 
 ## 规则覆盖 (coverage.json)
