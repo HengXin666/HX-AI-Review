@@ -81,7 +81,7 @@ export function renderDiscussions(kind: "pr" | "issue", items: Discussion[]): st
 }
 
 async function search(target: GithubTarget, query: string, limit: number, kind: "pr" | "issue"): Promise<Discussion[]> {
-    const url = new URL("/search/issues", target.apiUrl);
+    const url = new URL(target.apiUrl.replace(/\/$/, "") + "/search/issues");
     url.searchParams.set("q", query);
     url.searchParams.set("sort", "updated");
     url.searchParams.set("per_page", String(limit));
@@ -89,7 +89,7 @@ async function search(target: GithubTarget, query: string, limit: number, kind: 
         headers: { authorization: "Bearer " + target.token, accept: "application/vnd.github+json" },
     });
     if (!response.ok) {
-        return [];
+        throw new Error(`GitHub search failed: ${response.status}`);
     }
     const body = (await response.json()) as { items?: { number?: number; title?: string; updated_at?: string }[] };
     return (body.items ?? []).slice(0, limit).map((item) => ({
@@ -117,19 +117,20 @@ export async function relatedDiscussions(
     if (!target || (limits.prs === 0 && limits.issues === 0)) {
         return { prs: [], issues: [], note: "" };
     }
-    try {
-        const [prs, issues] = await Promise.all([
-            limits.prs > 0 ? search(target, queryFor(target.repo, "pr", paths), limits.prs, "pr") : [],
-            limits.issues > 0 ? search(target, queryFor(target.repo, "issue", paths), limits.issues, "issue") : [],
-        ]);
-        return { prs, issues, note: "" };
-    } catch (error) {
-        return {
-            prs: [],
-            issues: [],
-            note: `recent discussions unavailable: ${error instanceof Error ? error.message : String(error)}`,
-        };
-    }
+    const [prsResult, issuesResult] = await Promise.allSettled([
+        limits.prs > 0 ? search(target, queryFor(target.repo, "pr", paths), limits.prs, "pr") : Promise.resolve([]),
+        limits.issues > 0 ? search(target, queryFor(target.repo, "issue", paths), limits.issues, "issue") : Promise.resolve([]),
+    ]);
+    const prs = prsResult.status === "fulfilled" ? prsResult.value : [];
+    const issues = issuesResult.status === "fulfilled" ? issuesResult.value : [];
+    const failed = [prsResult, issuesResult].filter((result) => result.status === "rejected");
+    return {
+        prs,
+        issues,
+        note: failed.length
+            ? `recent discussions unavailable: ${failed.map((result) => String(result.reason)).join("; ")}`
+            : "",
+    };
 }
 
 /** Bounded text the finder may quote. Empty when there is nothing to add. */
