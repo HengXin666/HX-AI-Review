@@ -25,6 +25,8 @@ Settings -> Secrets and variables -> Actions.
 | `HX_PROVIDER_API_KEY` | secret | 否 | 模型 api_key, 部署时写成 Worker secret |
 | `HX_ACCESS_AUD` | variable | 部署后 | Access 应用的 AUD tag |
 | `HX_ACCESS_TEAM_DOMAIN` | variable | 部署后 | 例如 `myteam.cloudflareaccess.com` |
+| `HX_ADMIN_USER` | variable | 否 | 总览页密码登录用户名, 默认 `admin` |
+| `HX_ADMIN_PASSWORD` | variable | 否 | 总览页密码, 默认 `hx-context-review`. 部署后应改掉 |
 | `HX_WORKER_NAME`, `HX_D1_NAME`, `HX_R2_BUCKET`, `HX_PAGES_PROJECT` | variable | 否 | 资源名, 默认都是 `hx-context-review` |
 | `HX_OVERVIEW_URL` | variable | 否 | 总览页地址 (自定义域名时填). 不填时从 Cloudflare API 读取 Pages 项目的实际域名 (项目名被占用时会带随机后缀) |
 
@@ -43,13 +45,13 @@ Actions -> deploy-cf -> Run workflow:
 2. 把该应用的 AUD tag 与团队域名写进仓库变量 `HX_ACCESS_AUD`, `HX_ACCESS_TEAM_DOMAIN`.
 3. 再运行一次 deploy-cf, `target` 选 `worker`.
 
-Worker 本身 (`*.workers.dev`) 不需要套 Access: `/init`, `/runs`, `/feedback` 用 HX_CTX_TOKEN 鉴权, `/api/*` 自己校验 Access JWT, 未配置时一律 403.
+Worker 本身 (`*.workers.dev`) 不需要套 Access: `/init`, `/runs`, `/feedback` 用 HX_CTX_TOKEN 鉴权. `/api/*` 优先校验 Access JWT; 没有 Access 身份时, 若 Worker 配置了 `ADMIN_USER` 与 `ADMIN_PASSWORD` (部署变量 `HX_ADMIN_USER` / `HX_ADMIN_PASSWORD`, 默认 `admin` / `hx-context-review`), 可用 `POST /api/session` 换取 HttpOnly cookie `hxctx_admin`. 两者都没有时 fail closed, 一律 403. 默认密码写在生成的 Worker vars 里, 生产环境请用上面的变量覆盖.
 
 ## 5. 在总览页完成配置
 
 打开总览页:
 
-- Deployment 区块显示当前运行的 commit, 部署时间, 部署运行日志链接, Access 是否已配置, 以及重新部署的入口.
+- Deployment 区块显示当前运行的 commit, 部署时间, 部署运行日志链接, Access 是否已配置, 密码登录是否开启, 以及重新部署的入口. 未配置 Access 时, 密码登录仍可进入总览页.
 - Model providers 区块登记 provider: 名称 (字母, 数字, `.`, `_`, `-`), api_url, API 类型, key 所在的 Worker secret 名, 每百万 token 的输入/输出 (必填, 免费填 0) 与缓存读/写价格, 上下文窗口与最大输出. 非法数字会被拒绝, 不会存成 0. key 只显示 "已设置/缺失".
 - Repositories 区块登记业务仓库, 页面只显示一次 HX_CTX_TOKEN, 立刻存到业务仓库的 secret.
 

@@ -26,7 +26,7 @@ export type RunPayload = {
     sessionsJsonl: string;
 };
 
-export type IngestResult = { runId: string; overviewUrl?: string };
+export type IngestResult = { runId: string; overviewUrl?: string; resolved?: number };
 
 /** A run whose AI stage did not finish is never "passed": it reports incomplete unless L0 already failed it. */
 export function statusOf(counts: RunPayload["counts"], skipped: boolean, complete = true): RunStatus {
@@ -86,5 +86,7 @@ export async function postRun(endpoint: string, token: string, payload: RunPaylo
     if (!response.ok) {
         throw new Error(`POST /runs failed with ${response.status}: ${(await response.text()).slice(0, 200)}`);
     }
-    return (await response.json()) as IngestResult;
+    const body = (await response.json()) as IngestResult;
+    const resolved = typeof body.resolved === "number" && Number.isFinite(body.resolved) ? body.resolved : 0;
+    return { runId: body.runId, overviewUrl: body.overviewUrl, resolved: resolved < 0 ? 0 : resolved };
 }

@@ -58,7 +58,11 @@ test("runs ingest stores rows, R2 blobs, advances last_sha; rejected feedback be
         token,
     );
     assert.equal(response.status, 201);
-    assert.deepEqual(await response.json(), { runId: "run1", overviewUrl: "https://overview.test/#/runs/run1" });
+    assert.deepEqual(await response.json(), {
+        runId: "run1",
+        overviewUrl: "https://overview.test/#/runs/run1",
+        resolved: 0,
+    });
     assert.equal(store.repos[0].lastSha, "abc");
     assert.equal(store.repos[0].spentUsd, 0.2);
     assert.equal(store.runs[0].status, "warned");

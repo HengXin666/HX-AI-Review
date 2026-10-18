@@ -87,6 +87,21 @@ test("finder sees numbered context content and the untrusted-data rule", async (
     assert.ok(calls[1].prompt.includes("around line 3"));
 });
 
+test("evidence is fenced for the finder and an operator addendum cannot replace the system prompt", async () => {
+    const calls: AgentRequest[] = [];
+    await runReview(
+        { ...config, prompts: { finder: { version: 2, body: "Quote the diff." }, verifier: { version: 1, body: "" } } },
+        scope,
+        { ...base, evidence: "mentioned by src/app.ts", run: fake(calls) },
+    );
+    assert.ok(calls[0].prompt.includes("untrusted repository and GitHub text"));
+    assert.ok(calls[0].prompt.includes("mentioned by src/app.ts"));
+    assert.ok(calls[0].system.startsWith("You review AI context files"));
+    assert.ok(calls[0].system.includes("Operator addendum v2"));
+    assert.ok(calls[1].system.startsWith("You are a skeptical verifier"));
+    assert.ok(!calls[1].system.includes("Operator addendum"));
+});
+
 test("patches touching files other than the reported context file are never applicable", async () => {
     const result = await runReview(config, scope, {
         ...base,

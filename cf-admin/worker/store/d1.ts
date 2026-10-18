@@ -1,12 +1,16 @@
 // Real adapter: D1 for rows, R2 for reports, sessions and patches.
-import { finding, provider, repo, run } from "./rows.ts";
+import { finding, promptNote, promptVersion, provider, repo, run } from "./rows.ts";
 import type { Row } from "./rows.ts";
 import type {
     BlobStore,
     FeedbackInput,
     FindingRow,
+    FindingStatus,
+    PromptRole,
+    PromptVersion,
     ProviderRow,
     RepoPatch,
+    RoundInput,
     RunRow,
     Store,
     Suppression,
@@ -292,10 +296,80 @@ export class D1Store implements Store {
                 ON CONFLICT(repo_id, fingerprint) DO UPDATE SET reason = excluded.reason`,
                     )
                     .bind(input.repoId, input.fingerprint, input.reason),
+                this.db
+                    .prepare("INSERT INTO prompt_notes (repo_id, fingerprint, reason) VALUES (?, ?, ?)")
+                    .bind(input.repoId, input.fingerprint, input.reason),
             );
         }
         const [update] = await this.db.batch(statements);
         return update.meta.changes;
+    }
+
+    async resolveRound(input: RoundInput) {
+        // json_each of an empty array matches nothing, so NOT IN that set keeps every missing fingerprint.
+        const sql = `UPDATE findings SET status = 'resolved', resolved_by_run = ?1
+            WHERE status = 'open' AND repo_id = ?2 AND run_id != ?4
+            AND run_id IN (SELECT id FROM runs WHERE repo_id = ?2 AND pr_number = ?3)
+            AND fingerprint NOT IN (SELECT value FROM json_each(?5))
+            AND (?6 = 1 OR rule_id != 'CX-AI')`;
+        const result = await this.db
+            .prepare(sql)
+            .bind(
+                input.runId,
+                input.repoId,
+                input.prNumber,
+                input.runId,
+                JSON.stringify(input.seen),
+                input.aiRechecked ? 1 : 0,
+            )
+            .run();
+        return result.meta.changes;
+    }
+
+    async findingsByStatus(status: FindingStatus, limit: number) {
+        const sql = `SELECT findings.*, repos.name AS repo FROM findings JOIN repos ON repos.id = findings.repo_id
+            WHERE findings.status = ? ORDER BY findings.rowid DESC LIMIT ?`;
+        return (await this.all(sql, status, limit)).map(finding);
+    }
+
+    async activePrompts() {
+        const rows = await this.all("SELECT * FROM prompt_versions WHERE active = 1 ORDER BY role");
+        return rows.map(promptVersion);
+    }
+
+    async listPromptVersions() {
+        return (await this.all("SELECT * FROM prompt_versions ORDER BY role, version DESC")).map(promptVersion);
+    }
+
+    async listPromptNotes(limit: number) {
+        return (await this.all("SELECT * FROM prompt_notes ORDER BY id DESC LIMIT ?", limit)).map(promptNote);
+    }
+
+    async publishPrompt(role: PromptRole, body: string, note: string): Promise<PromptVersion> {
+        const current = await this.one(
+            "SELECT COALESCE(MAX(version), 0) AS version FROM prompt_versions WHERE role = ?",
+            role,
+        );
+        const version = Number(current?.version ?? 0) + 1;
+        await this.db.batch([
+            this.db.prepare("UPDATE prompt_versions SET active = 0 WHERE role = ?").bind(role),
+            this.db
+                .prepare("INSERT INTO prompt_versions (role, version, body, note, active) VALUES (?, ?, ?, ?, 1)")
+                .bind(role, version, body, note),
+        ]);
+        const row = await this.one("SELECT * FROM prompt_versions WHERE role = ? AND version = ?", role, version);
+        return promptVersion(row!);
+    }
+
+    async foldNotes(ids: number[], versionId: number) {
+        if (!ids.length) {
+            return;
+        }
+        const marks = ids.map(() => "?").join(", ");
+        await this.db
+            .prepare(`UPDATE prompt_notes SET folded_into = ? WHERE folded_into IS NULL AND id IN (${marks})`)
+            .bind(versionId, ...ids)
+            .run();
     }
 }
 

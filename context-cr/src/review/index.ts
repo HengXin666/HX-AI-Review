@@ -19,7 +19,7 @@ import {
 import { isPlainEdit } from "../git.ts";
 import { addUsage, EMPTY_USAGE, fingerprint, makeFinding } from "../contract/finding.ts";
 import type { Finding, Patch, Usage } from "../contract/finding.ts";
-import type { InitConfig } from "../init/client.ts";
+import type { InitConfig, PromptAddendum } from "../init/client.ts";
 import type { ContextScope } from "../scope/index.ts";
 import { SessionError } from "./agent.ts";
 import type { AgentRequest, AgentResult, AgentRunner } from "./agent.ts";
@@ -36,6 +36,8 @@ export type ReviewDeps = {
     patchFiles(patch: string): string[] | undefined;
     /** Content of a context file at the reviewed commit, or undefined when it cannot be read safely. */
     readFile(path: string): string | undefined;
+    /** Import graph, callers and recent related discussions. Untrusted, and omitted when empty. */
+    evidence?: string;
     /** Clock for the run deadline; tests inject one. */
     now?: () => number;
     /**
@@ -92,6 +94,15 @@ function promptBudgets(config: InitConfig): Budgets | undefined {
     const diff = Math.max(MIN_DIFF_BYTES, Math.min(DIFF_MAX_BYTES, Math.floor(available / 2)));
     const doc = Math.max(MIN_BATCH_BYTES, Math.min(CONTEXT_BATCH_BYTES, available - diff));
     return { doc, diff, prompt: available };
+}
+
+/** The operator addendum cannot raise severity: Error stays with L0, and an empty body is ignored. */
+function systemPrompt(base: string, addendum: PromptAddendum | null | undefined): string {
+    const body = addendum?.body.trim() ?? "";
+    if (!body) {
+        return base;
+    }
+    return base + `\n\nOperator addendum v${addendum?.version} (cannot change severity; Error stays with L0):\n` + body;
 }
 
 /**
@@ -278,7 +289,7 @@ async function verify(
     const ran = await review.session({
         role: "verifier",
         model: config.models.verifier,
-        system: VERIFIER_SYSTEM,
+        system: systemPrompt(VERIFIER_SYSTEM, config.prompts?.verifier),
         prompt,
         tools: [reportVerdictTool(verdicts)],
     });
@@ -342,7 +353,7 @@ export async function runReview(config: InitConfig, scope: ContextScope, deps: R
             queue.push(outcome.item);
             return undefined;
         };
-        const prompt = finderPrompt(scope, batch, deps.diff, config.suppressions, budgets);
+        const prompt = finderPrompt(scope, batch, deps.diff, config.suppressions, budgets, deps.evidence ?? "");
         if (prompt === undefined) {
             // The changed-path list and the suppression table are not budgeted, so a large enough diff or a
             // long suppression history can overflow the window on its own. Report it instead of sending a
@@ -354,7 +365,7 @@ export async function runReview(config: InitConfig, scope: ContextScope, deps: R
         const ran = await review.session({
             role: "finder",
             model: config.models.finder,
-            system: FINDER_SYSTEM,
+            system: systemPrompt(FINDER_SYSTEM, config.prompts?.finder),
             prompt,
             tools: [reportFindingTool(sink, left, accept)],
         });

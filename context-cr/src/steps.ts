@@ -16,6 +16,7 @@ import { compareUrl, githubTarget, pushPatchBranch, writeBack } from "./publish/
 import type { GithubTarget } from "./publish/github.ts";
 import { postRun, postSpend, sessionsToJsonl, statusOf } from "./publish/ingest.ts";
 import { runReview } from "./review/index.ts";
+import { buildEvidencePack } from "./review/evidence.ts";
 import type { Rejection } from "./review/index.ts";
 import { createPiRunner } from "./review/pi.ts";
 import { resolveBase } from "./scope/base.ts";
@@ -127,9 +128,25 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
                 "to mark the claim as spending before the first model session",
         );
     }
+    // A failed evidence lookup must not fail the review: the finder still has the diff and the context files.
+    const repoConfig = loadConfig(root);
+    let evidence = "";
+    try {
+        evidence = await buildEvidencePack({
+            root,
+            changed: scope.changed,
+            readFile: (path) => readTracked(root, path),
+            github: githubTarget(),
+            prs: repoConfig.evidencePrs,
+            issues: repoConfig.evidenceIssues,
+        });
+    } catch (error) {
+        process.stderr.write(`evidence pack skipped: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
     const result = await runReview(state.config, scope, {
         run,
         diff,
+        evidence,
         patchFiles: (patch) => patchFiles(root, patch),
         readFile: (path) => readTracked(root, path),
         // The Worker settles a taken-over claim only if it was marked as spending, so a run cancelled
@@ -232,6 +249,7 @@ export async function stepPublish(root: string): Promise<number> {
     const endpoint = process.env[ENV.endpoint];
     const token = process.env[ENV.token];
     let overviewUrl: string | undefined;
+    let resolvedNote: string | undefined;
     if (endpoint && token) {
         const sessionsPath = stateFile(root, SESSION_FILE);
         const ingest = await postRun(endpoint, token, {
@@ -255,10 +273,18 @@ export async function stepPublish(root: string): Promise<number> {
             sessionsJsonl: ai && existsSync(sessionsPath) ? readFileSync(sessionsPath, UTF8) : "",
         });
         overviewUrl = ingest.overviewUrl;
+        if ((ingest.resolved ?? 0) > 0) {
+            resolvedNote = `Marked ${ingest.resolved} earlier finding(s) on this pull request resolved.`;
+        }
     }
     if (target && (report.findings.length || state.event.prNumber !== undefined)) {
         const patchUrl = patchBranch ? compareUrl(target, patchBranch) : undefined;
-        await writeBack(target, state.head, renderComment(report, { patchUrl, overviewUrl }), state.event.prNumber);
+        await writeBack(
+            target,
+            state.head,
+            renderComment(report, { patchUrl, overviewUrl }, resolvedNote),
+            state.event.prNumber,
+        );
     }
     return report.findings.filter(isBlocking).length;
 }

@@ -35,6 +35,8 @@ export type Finding = {
     line: number;
     message: string;
     patchKey: string | null;
+    status?: string;
+    fingerprint?: string;
 };
 
 export type Provider = {
@@ -51,7 +53,29 @@ export type Provider = {
     priceCacheWrite: number;
 };
 
-export type Deployment = { sha?: string; deployedAt?: string; runUrl?: string; accessConfigured: boolean };
+export type Deployment = {
+    sha?: string;
+    deployedAt?: string;
+    runUrl?: string;
+    accessConfigured: boolean;
+    passwordLogin?: boolean;
+};
+
+export type PromptVersion = {
+    id: number;
+    role: "finder" | "verifier";
+    version: number;
+    body: string;
+    note: string;
+    active: boolean;
+};
+
+export type PromptNote = {
+    id: number;
+    fingerprint: string;
+    reason: string;
+    foldedInto: number | null;
+};
 
 export type Overview = {
     month: string;
@@ -59,11 +83,23 @@ export type Overview = {
     repos: Repo[];
     runs: Run[];
     findings: Finding[];
+    resolved?: Finding[];
+    prompts?: PromptVersion[];
+    notes?: PromptNote[];
     providers: Provider[];
 };
 
 export type ProviderInput = Omit<Provider, "name" | "keyPresent">;
 export type RepoInput = Pick<Repo, "name" | "finderModel" | "verifierModel" | "budgetUsd"> & { provider: string };
+
+export class ApiError extends Error {
+    status: number;
+
+    constructor(status: number, message: string) {
+        super(message);
+        this.status = status;
+    }
+}
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
     const response = await fetch("/api/" + path, {
@@ -73,7 +109,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
         body: body === undefined ? undefined : JSON.stringify(body),
     });
     if (!response.ok) {
-        throw new Error(`${method} /api/${path}: ${response.status}`);
+        throw new ApiError(response.status, `${method} /api/${path}: ${response.status}`);
     }
     return (await response.json()) as T;
 }
@@ -87,6 +123,12 @@ export const api = {
         call<{ ok: boolean }>("PUT", "providers/" + encodeURIComponent(name), input),
     feedback: (id: string, verdict: "accepted" | "rejected", reason: string) =>
         call<{ updated: number }>("POST", `findings/${id}/feedback`, { verdict, reason }),
+    login: (user: string, password: string) => call<{ ok: boolean }>("POST", "session", { user, password }),
+    logout: () => call<{ ok: boolean }>("DELETE", "session"),
+    publishPrompt: (role: "finder" | "verifier", body: string, note: string) =>
+        call<{ version: PromptVersion }>("POST", "prompts", { role, body, note }),
+    foldNotes: (role: "finder" | "verifier") =>
+        call<{ version: PromptVersion; folded: number }>("POST", "prompts/fold", { role }),
 };
 
 /** One-click merge: open a PR from the runner's patch branch into the default branch. */

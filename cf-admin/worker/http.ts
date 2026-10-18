@@ -8,6 +8,9 @@ export type Env = {
     ACCESS_AUD?: string;
     /** Access team domain, for example myteam.cloudflareaccess.com. */
     ACCESS_TEAM_DOMAIN?: string;
+    /** Overview login. Both must be set; they are Worker vars, not a Pages secret. */
+    ADMIN_USER?: string;
+    ADMIN_PASSWORD?: string;
     /** Public overview Pages URL used in links written back to GitHub. */
     OVERVIEW_URL?: string;
     /** Written by the deploy workflow so the overview page can show what is running. */
@@ -23,6 +26,8 @@ export type Deps = {
     secret(name: string): string | undefined;
     /** Returns the Access identity (email) or null when the request is not authenticated. */
     admin(request: Request): Promise<string | null>;
+    /** Hardcoded console login from Worker vars. Absent means password login is off. */
+    credentials?: Credentials;
     overviewUrl?: string;
     deployment: Deployment;
     now(): Date;
@@ -34,7 +39,11 @@ export type Deployment = {
     deployedAt?: string;
     runUrl?: string;
     accessConfigured: boolean;
+    /** True when ADMIN_USER and ADMIN_PASSWORD are set on the Worker. */
+    passwordLogin?: boolean;
 };
+
+export type Credentials = { user: string; password: string };
 
 export class HttpError extends Error {
     readonly status: number;

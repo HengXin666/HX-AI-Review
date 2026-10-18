@@ -26,6 +26,8 @@ type Settings = {
     providerKeyValue: string;
     deploySha: string;
     deployRunUrl: string;
+    adminUser: string;
+    adminPassword: string;
 };
 
 function env(name: string, fallback = ""): string {
@@ -63,6 +65,8 @@ export function settings(): Settings {
         providerKeyValue: env("HX_PROVIDER_KEY_VALUE"),
         deploySha: env("DEPLOY_SHA", env("GITHUB_SHA")),
         deployRunUrl: env("DEPLOY_RUN_URL"),
+        adminUser: env("HX_ADMIN_USER", "admin"),
+        adminPassword: env("HX_ADMIN_PASSWORD", "hx-context-review"),
     };
 }
 
@@ -144,6 +148,8 @@ export function writeWorkerConfig(s: Settings, databaseId: string): string {
         DEPLOY_SHA: s.deploySha,
         DEPLOYED_AT: new Date().toISOString(),
         DEPLOY_RUN_URL: s.deployRunUrl,
+        ADMIN_USER: s.adminUser,
+        ADMIN_PASSWORD: s.adminPassword,
     };
     const lines = [
         `name = ${toml(s.worker)}`,
@@ -240,7 +246,8 @@ async function main(): Promise<void> {
     if (!s.accessAud || !s.accessTeamDomain) {
         report.push(
             "",
-            "Access is not configured yet: /api/* answers 403 until HX_ACCESS_AUD and HX_ACCESS_TEAM_DOMAIN are set.",
+            "Access is not configured. Password login still works when ADMIN_USER and ADMIN_PASSWORD are set " +
+                "(defaults admin / hx-context-review, override with HX_ADMIN_USER and HX_ADMIN_PASSWORD).",
         );
     }
     summary(report);

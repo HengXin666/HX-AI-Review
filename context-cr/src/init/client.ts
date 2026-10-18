@@ -1,5 +1,7 @@
 export type ModelApi = "openai-completions" | "anthropic-messages";
 export type Suppression = { fingerprint: string; reason: string };
+/** Operator addendum from the overview. It is appended to the built-in system prompt, never a replacement. */
+export type PromptAddendum = { version: number; body: string };
 
 /** Shape returned by the CF Worker GET /init. The api key never reaches a file, only the env. */
 export type InitConfig = {
@@ -19,6 +21,8 @@ export type InitConfig = {
     pricing: { input: number; output: number; cacheRead: number; cacheWrite: number };
     lastSha?: string;
     suppressions: Suppression[];
+    /** Absent on older Workers. null means that role has no operator addendum. */
+    prompts?: { finder?: PromptAddendum | null; verifier?: PromptAddendum | null };
     /** Opaque budget claim from /init; POST /runs echoes it so only the holder releases the reservation. */
     budgetClaim?: string;
 };
@@ -108,6 +112,29 @@ function suppressionsOf(value: unknown): Suppression[] {
     return value;
 }
 
+function addendumOf(value: unknown, field: string): PromptAddendum | null {
+    if (value === null || value === undefined) {
+        return null;
+    }
+    if (typeof value !== "object" || Array.isArray(value)) {
+        throw new Error(`init response field ${field} must be null or { version, body }`);
+    }
+    const version = (value as { version?: unknown }).version;
+    const body = (value as { body?: unknown }).body;
+    if (typeof body !== "string" || !Number.isSafeInteger(version) || (version as number) < 1) {
+        throw new Error(`init response field ${field} must be null or { version, body }`);
+    }
+    return { version: version as number, body };
+}
+
+function promptsOf(value: unknown): NonNullable<InitConfig["prompts"]> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("init response field prompts must be an object");
+    }
+    const row = value as Record<string, unknown>;
+    return { finder: addendumOf(row.finder, "prompts.finder"), verifier: addendumOf(row.verifier, "prompts.verifier") };
+}
+
 export function parseInit(raw: unknown): InitResponse {
     const data = raw as Record<string, unknown>;
     const models = (data.models ?? {}) as Record<string, unknown>;
@@ -142,6 +169,9 @@ export function parseInit(raw: unknown): InitResponse {
         suppressions: suppressionsOf(data.suppressions),
         budgetClaim: typeof data.budgetClaim === "string" ? data.budgetClaim : undefined,
     };
+    if (data.prompts !== undefined) {
+        result.prompts = promptsOf(data.prompts);
+    }
     // A capped run is handed a reservation that must be marked as spending before its first session;
     // without the claim the marker cannot be sent, and a takeover would settle the run as free.
     if (!l0Only && result.limits.maxRunUsd !== null && !result.budgetClaim) {

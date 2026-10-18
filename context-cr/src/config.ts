@@ -18,6 +18,10 @@ export type RepoConfig = {
     virtualPaths: string[];
     /** Repository-relative baseline of approved fingerprints, read from the trusted base. */
     baseline?: string;
+    /** Recent pull requests attached to the finder evidence pack. 0 disables the search. */
+    evidencePrs: number;
+    /** Recent issues attached to the finder evidence pack. 0 disables the search. */
+    evidenceIssues: number;
 };
 
 export const DEFAULT_CONFIG: RepoConfig = {
@@ -27,6 +31,8 @@ export const DEFAULT_CONFIG: RepoConfig = {
     exclude: [],
     scopeIgnore: ["pnpm-lock.yaml", "package-lock.json", "uv.lock", "yarn.lock"],
     virtualPaths: ["scripts/.hx_code_quality/"],
+    evidencePrs: 5,
+    evidenceIssues: 5,
 };
 
 export function trimSlash(path: string): string {
@@ -35,6 +41,14 @@ export function trimSlash(path: string): string {
 
 function stringList(value: unknown, fallback: string[]): string[] {
     return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : fallback;
+}
+
+/** Evidence limits are optional; a missing or junk value keeps the default, and the range is 0..20. */
+function evidenceLimit(value: unknown, fallback: number): number {
+    if (typeof value !== "number" || !Number.isInteger(value)) {
+        return fallback;
+    }
+    return Math.min(20, Math.max(0, value));
 }
 
 export function loadConfig(root: string): RepoConfig {
@@ -55,6 +69,8 @@ export function loadConfig(root: string): RepoConfig {
         scopeIgnore: stringList(raw.scopeIgnore, DEFAULT_CONFIG.scopeIgnore),
         virtualPaths: stringList(raw.virtualPaths, DEFAULT_CONFIG.virtualPaths),
         baseline: typeof raw.baseline === "string" ? raw.baseline : undefined,
+        evidencePrs: evidenceLimit(raw.evidencePrs, DEFAULT_CONFIG.evidencePrs),
+        evidenceIssues: evidenceLimit(raw.evidenceIssues, DEFAULT_CONFIG.evidenceIssues),
     };
 }
 

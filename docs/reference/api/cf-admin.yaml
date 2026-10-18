@@ -1,10 +1,11 @@
 openapi: 3.1.0
 info:
     title: hx-context-review cf-admin Worker
-    version: 0.3.0
+    version: 0.4.0
     description: >
         Config delivery, ingest and overview API. Model traffic never passes through this Worker.
-        Runner endpoints use the per-repo HX_CTX_TOKEN; /api endpoints sit behind Cloudflare Access.
+        Runner endpoints use the per-repo HX_CTX_TOKEN. /api endpoints accept a Cloudflare Access JWT
+        or an hxctx_admin session cookie from POST /api/session. Both unset means 403.
 components:
     securitySchemes:
         repoToken:
@@ -15,6 +16,11 @@ components:
             type: apiKey
             in: header
             name: Cf-Access-Jwt-Assertion
+        session:
+            type: apiKey
+            in: cookie
+            name: hxctx_admin
+            description: HMAC session from POST /api/session. HttpOnly, 12h.
     schemas:
         Finding:
             type: object
@@ -83,6 +89,20 @@ components:
                         properties:
                             fingerprint: { type: string }
                             reason: { type: string }
+                prompts:
+                    type: object
+                    description: Active operator addenda. null means that role has none. Missing on older servers.
+                    properties:
+                        finder:
+                            type: [object, "null"]
+                            properties:
+                                version: { type: integer, minimum: 1 }
+                                body: { type: string }
+                        verifier:
+                            type: [object, "null"]
+                            properties:
+                                version: { type: integer, minimum: 1 }
+                                body: { type: string }
         RunPayload:
             type: object
             required: [repo, sha, findings]
@@ -190,6 +210,7 @@ components:
                 deployedAt: { type: string }
                 runUrl: { type: string }
                 accessConfigured: { type: boolean }
+                passwordLogin: { type: boolean, description: True when ADMIN_USER and ADMIN_PASSWORD are both set }
         Token:
             type: object
             required: [token]
@@ -271,6 +292,9 @@ paths:
                                 properties:
                                     runId: { type: string }
                                     overviewUrl: { type: string }
+                                    resolved:
+                                        type: integer
+                                        description: Open findings on this pull request marked resolved because they were not reported again. 0 for pushes and when AI findings were not re-checked.
                 "400":
                     {
                         description: "Invalid payload: a missing required field or a present field with a wrong type or range",
@@ -287,7 +311,7 @@ paths:
     /api/overview:
         get:
             operationId: getOverview
-            security: [{ access: [] }]
+            security: [{ access: [] }, { session: [] }]
             responses:
                 "200":
                     description: Everything the overview page shows
@@ -301,6 +325,14 @@ paths:
                                     repos: { type: array, items: { $ref: "#/components/schemas/Repo" } }
                                     runs: { type: array, items: { type: object } }
                                     findings: { type: array, items: { type: object } }
+                                    resolved:
+                                        {
+                                            type: array,
+                                            items: { type: object },
+                                            description: Findings marked resolved by a later commit,
+                                        }
+                                    prompts: { type: array, items: { type: object } }
+                                    notes: { type: array, items: { type: object } }
                                     providers:
                                         type: array
                                         items:
@@ -310,11 +342,11 @@ paths:
                                                   properties:
                                                       name: { type: string }
                                                       keyPresent: { type: boolean }
-                "403": { description: No valid Access identity }
+                "403": { description: No Access identity and no valid session }
     /api/status:
         get:
             operationId: getStatus
-            security: [{ access: [] }]
+            security: [{ access: [] }, { session: [] }]
             responses:
                 "200":
                     description: Deployed commit and the Access identity
@@ -328,7 +360,7 @@ paths:
     /api/repos:
         post:
             operationId: createRepo
-            security: [{ access: [] }]
+            security: [{ access: [] }, { session: [] }]
             requestBody:
                 required: true
                 content: { application/json: { schema: { $ref: "#/components/schemas/RepoCreate" } } }
@@ -347,7 +379,7 @@ paths:
     /api/repos/{owner}/{repo}:
         patch:
             operationId: updateRepo
-            security: [{ access: [] }]
+            security: [{ access: [] }, { session: [] }]
             parameters:
                 - { name: owner, in: path, required: true, schema: { type: string } }
                 - { name: repo, in: path, required: true, schema: { type: string } }
@@ -365,7 +397,7 @@ paths:
     /api/repos/{owner}/{repo}/rotate-token:
         post:
             operationId: rotateToken
-            security: [{ access: [] }]
+            security: [{ access: [] }, { session: [] }]
             parameters:
                 - { name: owner, in: path, required: true, schema: { type: string } }
                 - { name: repo, in: path, required: true, schema: { type: string } }
@@ -379,7 +411,7 @@ paths:
     /api/providers/{name}:
         put:
             operationId: upsertProvider
-            security: [{ access: [] }]
+            security: [{ access: [] }, { session: [] }]
             parameters:
                 - { name: name, in: path, required: true, schema: { type: string, pattern: "^[A-Za-z0-9_.-]{1,64}$" } }
             requestBody:
@@ -396,7 +428,7 @@ paths:
     /api/findings/{id}/patch:
         get:
             operationId: getPatch
-            security: [{ access: [] }]
+            security: [{ access: [] }, { session: [] }]
             parameters:
                 - { name: id, in: path, required: true, schema: { type: string } }
             responses:
@@ -405,7 +437,7 @@ paths:
     /api/findings/{id}/feedback:
         post:
             operationId: postFindingFeedback
-            security: [{ access: [] }]
+            security: [{ access: [] }, { session: [] }]
             parameters:
                 - { name: id, in: path, required: true, schema: { type: string } }
             requestBody:
@@ -416,3 +448,63 @@ paths:
                     description: Number of open findings updated
                     content:
                         { application/json: { schema: { type: object, properties: { updated: { type: integer } } } } }
+    /api/session:
+        post:
+            operationId: login
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            required: [user, password]
+                            properties:
+                                user: { type: string }
+                                password: { type: string }
+            responses:
+                "200": { description: Sets hxctx_admin }
+                "401": { description: Unknown user or password }
+                "403": { description: ADMIN_USER or ADMIN_PASSWORD is unset }
+        delete:
+            operationId: logout
+            responses:
+                "200": { description: Clears the session cookie }
+    /api/prompts:
+        get:
+            operationId: listPrompts
+            security: [{ access: [] }, { session: [] }]
+            responses:
+                "200": { description: Versions and rejection notes }
+        post:
+            operationId: publishPrompt
+            security: [{ access: [] }, { session: [] }]
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            required: [role, body]
+                            properties:
+                                role: { type: string, enum: [finder, verifier] }
+                                body: { type: string, description: At most 4000 bytes }
+                                note: { type: string }
+            responses:
+                "201": { description: Published addendum }
+                "400": { description: Empty body, unknown role, or over 4000 bytes }
+    /api/prompts/fold:
+        post:
+            operationId: foldPromptNotes
+            security: [{ access: [] }, { session: [] }]
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            required: [role]
+                            properties:
+                                role: { type: string, enum: [finder, verifier] }
+            responses:
+                "201": { description: Notes folded into a new active addendum }
+                "400": { description: No unfolded notes, or the folded text exceeds 4000 bytes }

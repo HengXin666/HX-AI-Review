@@ -6,10 +6,13 @@ Cloudflare 侧. Worker 入口 [cf-admin/worker/index.ts](../../cf-admin/worker/i
 
 | 接口 | 鉴权 | 作用 |
 |---|---|---|
-| `GET /init` | Bearer HX_CTX_TOKEN | 配置下发: api_url, api_key, api 类型, finder/verifier 模型, 上下文窗口, last_sha, 抑制表 |
-| `POST /runs` | Bearer HX_CTX_TOKEN | 入库: findings, 补丁, 耗时, token 用量, MD/JSON 报告, pi 会话 JSONL; 推进 last_sha 与预算 |
-| `POST /feedback` | Bearer HX_CTX_TOKEN | 按指纹采纳或驳回; 驳回必须带原因 |
-| `GET /api/overview` | Cloudflare Access | 部署信息, 所有仓库, provider (只含 key 是否存在), 最近 50 次运行, 最近 50 条待处理发现 |
+| `GET /init` | Bearer HX_CTX_TOKEN | 配置下发: api_url, api_key, api 类型, finder/verifier 模型, 上下文窗口, last_sha, 抑制表, 当前 prompt 附录 |
+| `POST /runs` | Bearer HX_CTX_TOKEN | 入库: findings, 补丁, 耗时, token 用量, MD/JSON 报告, pi 会话 JSONL; 推进 last_sha 与预算; 同一 PR 上未再出现的发现标 resolved |
+| `POST /feedback` | Bearer HX_CTX_TOKEN | 按指纹采纳或驳回; 驳回必须带原因, 并写入 prompt_notes |
+| `GET /api/overview` | Access 或会话 cookie | 部署信息, 所有仓库, provider (只含 key 是否存在), 最近 50 次运行, 待处理与已解决发现, prompt 版本与驳回笔记 |
+| `POST /api/session` | 无 (登录本身) | 用 Worker 变量里的用户名密码换 hxctx_admin cookie; 未配置凭证时 403 |
+| `DELETE /api/session` | 无 | 清除会话 cookie |
+| `GET /api/prompts`, `POST /api/prompts`, `POST /api/prompts/fold` | Access 或会话 | 列出, 发布或把未折叠的驳回笔记折进下一版附录 |
 | `GET /api/status` | Cloudflare Access | 部署的 commit, 时间, 运行链接, Access 是否配置 |
 | `POST /api/repos` | Access | 登记仓库, 返回一次性明文 token |
 | `PATCH /api/repos/{owner}/{repo}` | Access | 开关, 模式 (full/l0), provider, 模型分级, 月预算 |
@@ -43,18 +46,28 @@ Cloudflare 侧. Worker 入口 [cf-admin/worker/index.ts](../../cf-admin/worker/i
 
 ## 数据
 
-D1 结构见 [0001_init.sql](../../cf-admin/migrations/0001_init.sql), 预算预留列见 [0002_budget_reservation.sql](../../cf-admin/migrations/0002_budget_reservation.sql).
+D1 结构见 [0001_init.sql](../../cf-admin/migrations/0001_init.sql), 预算预留列见 [0002_budget_reservation.sql](../../cf-admin/migrations/0002_budget_reservation.sql), 多轮状态与提示词见 [0003_rounds_prompts.sql](../../cf-admin/migrations/0003_rounds_prompts.sql).
 
 | 表 | 内容 |
 |---|---|
 | providers | 名称, api_url, api 类型, key_secret (Worker secret 名), 上下文窗口, 最大输出, 输入/输出单价 |
 | repos | owner/repo (大小写不敏感, COLLATE NOCASE), token SHA-256, 开关, 模式, provider, 模型分级, 月预算, 本月花费, 预算月份, last_sha |
 | runs | 每次运行: sha, base, 事件, PR 号, 状态, Error/Warning 数, token, 花费, 耗时, 补丁分支 |
-| findings | 每条发现: 指纹, 规则, 等级, 位置, 说明, 证据, 补丁 R2 key, 状态 open/accepted/rejected |
+| findings | 每条发现: 指纹, 规则, 等级, 位置, 说明, 证据, 补丁 R2 key, 状态 open/accepted/rejected/resolved, resolved_by_run |
 | feedback | 每次采纳或驳回: 指纹, 结论, 原因, 来源 (token 或 Access 身份) |
 | suppressions | 驳回的指纹与原因, 下一次 /init 下发给 finder |
+| prompt_versions | 操作者附录: role finder 或 verifier, 版本号, 正文, 说明, 是否当前生效. 追加到 runner 内置系统提示, 不替换 |
+| prompt_notes | 驳回原因, 尚未折进附录时 folded_into 为空 |
 
 R2 键: `runs/<owner>/<repo>/<runId>/report.md`, `report.json`, `sessions.jsonl`, `patches/<fingerprint>.diff`.
+
+`POST /runs` 在写入本次运行后, 若带 `prNumber`, 把同一仓库同一 PR 上、指纹未再次出现的 open 发现标为 resolved, 并记下 `resolved_by_run`. 没有 PR 编号的 push 不解决旧发现. `l0Only` 或 `complete: false` 时不解决 `CX-AI` (模型没有复查), L0 规则每次都会重跑所以仍可解决. accepted/rejected 保持人工结论. 响应带 `resolved` 计数.
+
+## 提示词版本与登录
+
+驳回同时写入 suppressions 与 prompt_notes. 管理员可 `POST /api/prompts` 发布最多 4000 字节的附录, 或 `POST /api/prompts/fold` 把未折叠笔记收成 "Do not repeat these rejected claims". 当前附录经 `/init` 的 `prompts` 下发. 附录不能把 AI 发现升成 Error.
+
+总览页鉴权是 Access 身份, 或 `ADMIN_USER` 与 `ADMIN_PASSWORD` (部署时来自 `HX_ADMIN_USER` / `HX_ADMIN_PASSWORD`, 默认 admin / hx-context-review) 签发的 cookie. 密码用 SHA-256("hxctx:"+口令) 比较. cookie 为 HMAC-SHA256, HttpOnly, SameSite=Lax, 12 小时, https 时带 Secure. `POST` 与 `DELETE /api/session` 在 `requireAdmin` 之前. 两者都没配则 403.
 
 ## last_sha 与预算
 
@@ -72,16 +85,17 @@ provider 名只允许字母, 数字, `.`, `_`, `-`; 新建 provider 必须显式
 
 ## 总览页
 
-`cf-admin/pages` 是 React + TS + Vite 单页, 部署到 Pages 并由 Access 保护. 页面同源请求 `/api/*`, 由 Pages Function `cf-admin/pages/functions/api/[[path]].ts` 经 service binding 转给 Worker, Access 在边缘加上的 JWT 头随请求传递, Worker 再次校验. 页面功能:
+`cf-admin/pages` 是 React + TS + Vite 单页, 组件来自 `@hx/ui` (open-vetta 设计语言), 部署到 Pages. 页面同源请求 `/api/*`, 由 Pages Function `cf-admin/pages/functions/api/[[path]].ts` 经 service binding 转给 Worker. Access JWT 或会话 cookie 随请求传递, Worker 再次校验. 页面功能:
 
-- 部署状态: 当前 commit, 部署时间, 部署运行日志, Access 是否已配置, 重新部署入口.
+- 部署状态: 当前 commit, 部署时间, 部署运行日志, Access 是否已配置, 密码登录是否开启, 重新部署入口. 未登录且接口 403 时显示登录表单.
 - 仓库: 登记 (token 只显示一次), 轮换 token, 开关, 模式, 模型分级, 本月花费/预算 (清空预算框不会被当成 0, 会恢复原值), last_sha.
-- Model providers: 列表 (key 只显示是否存在) 与新增/修改表单.
-- 待处理发现: 查看补丁, 采纳, 驳回 (必须填写原因, 原因回流抑制表).
+- Model providers: 列表 (key 只显示是否存在) 与新增/修改表单. 新 provider 仍必须填写价格.
+- 提示词附录: 发布 finder/verifier 附录, 或把驳回笔记折进下一版.
+- 待处理发现: 查看补丁, 采纳, 驳回 (必须填写原因, 原因回流抑制表和 prompt_notes). 另列已被后续提交标为 resolved 的发现.
 - 最近运行: 状态, Error/Warning 数, 花费, 耗时, 补丁分支的 compare 链接 (一键开 PR 合入补丁).
 
 ## 部署与 Access
 
 - 部署用手动触发的 [deploy-cf.yml](../../.github/workflows/deploy-cf.yml), 步骤见 [deploy-cf.md](../tutorials/deploy-cf.md).
-- Access 应用只需覆盖总览页域名; Worker 的 `/init`, `/runs`, `/feedback` 用 HX_CTX_TOKEN 鉴权, `/api/*` 自己校验 Access JWT (格式错误的 JWT 同样按未认证处理, 返回 403).
-- Worker 变量 `ACCESS_TEAM_DOMAIN` 与 `ACCESS_AUD` 由部署工作流从仓库变量写入, 未配置时 /api/* 一律 403.
+- Access 应用只需覆盖总览页域名; Worker 的 `/init`, `/runs`, `/feedback` 用 HX_CTX_TOKEN 鉴权. `/api/*` 校验 Access JWT, 没有身份时再认会话 cookie (格式错误的 JWT 同样按未认证处理).
+- Worker 变量 `ACCESS_TEAM_DOMAIN` 与 `ACCESS_AUD` 由部署工作流从仓库变量写入. `ADMIN_USER` 与 `ADMIN_PASSWORD` 同样写入. Access 与密码都没配时 /api/* 一律 403.

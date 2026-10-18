@@ -1,8 +1,9 @@
 // Storage port. routes/ only see these interfaces; d1.ts is the real D1/R2 adapter, tests use a fake.
 
 export type Mode = "full" | "l0";
-export type FindingStatus = "open" | "accepted" | "rejected";
+export type FindingStatus = "open" | "accepted" | "rejected" | "resolved";
 export type Verdict = "accepted" | "rejected";
+export type PromptRole = "finder" | "verifier";
 
 export type RepoRow = {
     id: number;
@@ -69,10 +70,41 @@ export type FindingRow = {
     evidence: string;
     patchKey: string | null;
     status: FindingStatus;
+    /** Run that marked this finding resolved, when status is resolved. */
+    resolvedByRun?: string | null;
 };
 
 export type Suppression = { fingerprint: string; reason: string };
 export type FeedbackInput = { repoId: number; fingerprint: string; verdict: Verdict; reason: string; source: string };
+
+export type RoundInput = {
+    repoId: number;
+    prNumber: number;
+    runId: string;
+    /** Fingerprints reported by the run that just finished. Absent ones on this PR can be resolved. */
+    seen: string[];
+    /** False when the model stage did not run: AI findings stay open because they were not re-checked. */
+    aiRechecked: boolean;
+};
+
+export type PromptVersion = {
+    id: number;
+    role: PromptRole;
+    version: number;
+    body: string;
+    note: string;
+    active: boolean;
+    createdAt: string;
+};
+
+export type PromptNote = {
+    id: number;
+    repoId: number;
+    fingerprint: string;
+    reason: string;
+    foldedInto: number | null;
+    createdAt: string;
+};
 
 export interface Store {
     repoByTokenHash(hash: string): Promise<RepoRow | null>;
@@ -119,8 +151,19 @@ export interface Store {
     recentRuns(limit: number): Promise<(RunRow & { repo: string })[]>;
     openFindings(limit: number): Promise<(FindingRow & { repo: string })[]>;
     finding(id: string): Promise<FindingRow | null>;
-    /** Mark every open finding of the repo with this fingerprint; rejected also feeds suppressions. */
+    /** Mark every open finding of the repo with this fingerprint; rejected also feeds suppressions and prompt notes. */
     feedback(input: FeedbackInput): Promise<number>;
+    /**
+     * Same pull request, later commit: open findings whose fingerprint was not reported again become resolved.
+     * Returns how many rows changed.
+     */
+    resolveRound(input: RoundInput): Promise<number>;
+    findingsByStatus(status: FindingStatus, limit: number): Promise<(FindingRow & { repo: string })[]>;
+    activePrompts(): Promise<PromptVersion[]>;
+    listPromptVersions(): Promise<PromptVersion[]>;
+    listPromptNotes(limit: number): Promise<PromptNote[]>;
+    publishPrompt(role: PromptRole, body: string, note: string): Promise<PromptVersion>;
+    foldNotes(ids: number[], versionId: number): Promise<void>;
 }
 
 export interface BlobStore {

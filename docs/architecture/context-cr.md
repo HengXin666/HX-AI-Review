@@ -6,7 +6,7 @@ runner 侧 CLI. 入口 [context-cr/src/cli.ts](../../context-cr/src/cli.ts), 步
 
 | 模块 | 输入 | 输出 |
 |---|---|---|
-| `context-cr/src/init/client.ts` | HX_CTX_ENDPOINT, HX_CTX_TOKEN, GITHUB_REPOSITORY | `InitConfig` (无 key, 含模型单价) + api_key |
+| `context-cr/src/init/client.ts` | HX_CTX_ENDPOINT, HX_CTX_TOKEN, GITHUB_REPOSITORY | `InitConfig` (无 key, 含模型单价与可选 prompts 附录) + api_key |
 | `context-cr/src/state.ts` | RUNNER_TEMP | 运行状态目录, key 文件 (0600, 读后即删), 运行 nonce |
 | `context-cr/src/l0/` | 仓库快照 (git 跟踪文件), `.hx-context-review.json`, 可信 baseline | `Finding[]` |
 | `context-cr/src/scope/base.ts` | GitHub 事件, last_sha | 审核区间基点与原因 |
@@ -69,6 +69,8 @@ skill 注入上界 = 所有 skill 的 front matter (常驻 L1) + 最大的 `conc
 审查 agent 的完整设计 (角色分工, 输入, 闸门, 上限, 失败语义, 评估) 见 [agent-review.md](agent-review.md). 这里只记实现落点:
 
 - 编排在 `context-cr/src/review/index.ts`, 只依赖 `AgentRunner` 端口; `context-cr/src/review/pi.ts` 用 pi SDK 实现该端口, 并负责每会话的轮数与时长上限.
+- `steps.ts` 的 review 步在开会话前调用 `buildEvidencePack` (调用图, 引用方, 最近相关 PR/issue). 失败只记日志, 不把运行标成 incomplete.
+- `/init` 可带 `prompts.finder` / `prompts.verifier` (`{ version, body }` 或 null). 缺失整个 `prompts` 字段时按旧 Worker 处理; 字段在但形状不对则解析失败. 非空 body 追加到对应系统提示, 不替换内置提示.
 - pi 会话: `ModelRuntime.registerProvider` 注册 api_url 为自定义 provider, `setRuntimeApiKey` 注入 key; `createAgentSession` 使用内存 SessionManager 与 SettingsManager, 自定义 ResourceLoader 不加载任何 AGENTS, skill 或 extension.
 - 上下文文件正文用 `git show HEAD:<path>` 从被审提交读取, 符号链接与 `.git` 下的路径不读 (`context-cr/src/review/context.ts` 负责编号, 分批, 摘录).
 - 被审仓库的 checkout 设置 `persist-credentials: false`, .git 目录的 config 里没有 token; 推补丁分支时 publish 只为那一条 `git push` 通过 `GIT_CONFIG_*` 环境变量注入 GITHUB_TOKEN.
@@ -80,4 +82,4 @@ skill 注入上界 = 所有 skill 的 front matter (常驻 L1) + 最大的 `conc
 
 - 报告: `scripts/.hx_code_quality/reports/context-review.{md,json}`, 超过 10 条只列数量与类型.
 - 补丁分支: 只收 verifier 判 correct, 且是单个已有文件的纯文本修改 (不含新建, 删除, 改权限, 改名, 二进制) 的补丁. `hx-ctx/patch-<head 前 12 位>`, 以 head 为基, 提交者 hx-context-review, `--force` 推送, 不碰被审分支. 互相冲突的补丁逐个跳过; 推送失败只记录日志, 不影响入库与评论.
-- 评论: push 发 commit comment; PR 找到带 `<!-- hx-context-review -->` 标记的评论就更新, 否则新建.
+- 评论: push 发 commit comment; PR 找到带 `<!-- hx-context-review -->` 标记的评论就更新, 否则新建. `POST /runs` 返回的 `resolved` 大于 0 时, 评论注明本 PR 上有多少条更早的发现被标成 resolved.
