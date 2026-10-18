@@ -65,8 +65,8 @@ export function settings(): Settings {
         providerKeyValue: env("HX_PROVIDER_KEY_VALUE"),
         deploySha: env("DEPLOY_SHA", env("GITHUB_SHA")),
         deployRunUrl: env("DEPLOY_RUN_URL"),
-        adminUser: env("HX_ADMIN_USER", "admin"),
-        adminPassword: env("HX_ADMIN_PASSWORD", "hx-context-review"),
+        adminUser: env("HX_ADMIN_USER"),
+        adminPassword: env("HX_ADMIN_PASSWORD"),
     };
 }
 
@@ -148,8 +148,6 @@ export function writeWorkerConfig(s: Settings, databaseId: string): string {
         DEPLOY_SHA: s.deploySha,
         DEPLOYED_AT: new Date().toISOString(),
         DEPLOY_RUN_URL: s.deployRunUrl,
-        ADMIN_USER: s.adminUser,
-        ADMIN_PASSWORD: s.adminPassword,
     };
     const lines = [
         `name = ${toml(s.worker)}`,
@@ -233,6 +231,11 @@ async function main(): Promise<void> {
                 wrangler(["secret", "put", s.providerKeyName, "--config", config], { input: s.providerKeyValue });
                 report.push(`- secret ${s.providerKeyName}: updated`);
             }
+            if (s.adminUser && s.adminPassword) {
+                wrangler(["secret", "put", "ADMIN_USER", "--config", config], { input: s.adminUser });
+                wrangler(["secret", "put", "ADMIN_PASSWORD", "--config", config], { input: s.adminPassword });
+                report.push("- password login secrets: updated");
+            }
         }
     }
     if (pages) {
@@ -246,8 +249,7 @@ async function main(): Promise<void> {
     if (!s.accessAud || !s.accessTeamDomain) {
         report.push(
             "",
-            "Access is not configured. Password login still works when ADMIN_USER and ADMIN_PASSWORD are set " +
-                "(defaults admin / hx-context-review, override with HX_ADMIN_USER and HX_ADMIN_PASSWORD).",
+            "Access is not configured. Password login is disabled unless HX_ADMIN_USER and HX_ADMIN_PASSWORD are set.",
         );
     }
     summary(report);

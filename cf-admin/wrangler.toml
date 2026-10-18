@@ -8,10 +8,6 @@ compatibility_date = "2026-10-01"
 OVERVIEW_URL = ""
 ACCESS_TEAM_DOMAIN = ""
 ACCESS_AUD = ""
-# Console login. Both must be non-empty or password login stays off. Override in deploy via
-# HX_ADMIN_USER and HX_ADMIN_PASSWORD; these template values are what local `wrangler dev` uses.
-ADMIN_USER = "admin"
-ADMIN_PASSWORD = "hx-context-review"
 
 [[d1_databases]]
 binding = "DB"
