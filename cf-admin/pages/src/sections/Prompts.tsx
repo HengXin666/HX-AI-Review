@@ -16,11 +16,12 @@ export function Prompts({ prompts, notes, onDone, onError }: Props) {
     const [role, setRole] = useState<"finder" | "verifier">("finder");
     const publish = (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
-        const data = new FormData(event.currentTarget);
+        const form = event.currentTarget;
+        const data = new FormData(form);
         const body = String(data.get("body") ?? "");
         const note = String(data.get("note") ?? "");
         api.publishPrompt(role, body, note).then(() => {
-            event.currentTarget.reset();
+            form.reset();
             onDone();
         }, onError);
     };
