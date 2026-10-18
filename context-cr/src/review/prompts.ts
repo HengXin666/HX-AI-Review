@@ -97,7 +97,7 @@ export function finderPrompt(
     // session, leaving the range unreviewed.
     const render = (docLimit: number, diffCap: number, evidenceCap: number): string => {
         const evidenceBlock =
-            evidence.length === 0
+            evidenceCap === 0
                 ? []
                 : [
                       "",
