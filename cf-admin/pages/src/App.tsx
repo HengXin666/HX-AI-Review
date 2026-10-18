@@ -63,7 +63,9 @@ export function App() {
     const logout = () => {
         api.logout().then(() => {
             setData(null);
-            setPhase("login");
+            // Access sessions are not revoked by DELETE /api/session; keep the dashboard
+            // when Access still authenticates, and show password login only when it does not.
+            reload();
         }, fail);
     };
 
