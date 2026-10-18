@@ -278,20 +278,25 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
             await put(prefix + "sessions.jsonl", blobs.sessionsJsonl, NDJSON);
         }
         await deps.store.insertRun(run, rows());
-        resolved =
-            prNumber === null
-                ? 0
-                : await deps.store.resolveRound({
-                      repoId: repo.id,
-                      prNumber,
-                      runId,
-                      seen: rows().map((item) => item.fingerprint),
-                      aiRechecked: !run.l0Only && !incomplete,
-                  });
     } catch (error) {
         // Compensate: a failed write must not leave R2 objects that no D1 run points to.
         await deps.blobs.delete(written).catch(() => undefined);
         throw error;
+    }
+    if (prNumber !== null) {
+        try {
+            resolved = await deps.store.resolveRound({
+                repoId: repo.id,
+                prNumber,
+                runId,
+                runCreatedAt: run.createdAt,
+                seen: rows().map((item) => item.fingerprint),
+                aiRechecked: !run.l0Only && !incomplete,
+            });
+        } catch (error) {
+            // Persistence succeeded; do not discard the report or skip settlement if cleanup fails.
+            console.error("resolve round failed", error);
+        }
     }
     // The claim id from /init: charge records spend always, but frees only this run's own claim, so a
     // run that was refused the budget and published L0 results cannot release the holder's claim.

@@ -39,7 +39,7 @@ function checkBody(body: string): string {
 
 export async function handlePrompts(request: Request, deps: Deps, rest: string[]): Promise<Response> {
     if (request.method === "GET" && rest.length === 0) {
-        const [versions, notes] = await Promise.all([deps.store.listPromptVersions(), deps.store.listPromptNotes(50)]);
+        const [versions, notes] = await Promise.all([deps.store.listPromptVersions(), deps.store.unfoldedPromptNotes(50)]);
         return json({ versions, notes });
     }
     const body = await readJson(request);
@@ -49,7 +49,7 @@ export async function handlePrompts(request: Request, deps: Deps, rest: string[]
         return json({ version: published }, 201);
     }
     if (request.method === "POST" && rest[0] === "fold") {
-        const notes = (await deps.store.listPromptNotes(50)).filter((note) => note.foldedInto === null);
+        const notes = await deps.store.unfoldedPromptNotes(50);
         if (!notes.length) {
             throw new HttpError(400, "no unfolded rejection notes");
         }

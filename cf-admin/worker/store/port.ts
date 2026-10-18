@@ -81,6 +81,7 @@ export type RoundInput = {
     repoId: number;
     prNumber: number;
     runId: string;
+    runCreatedAt: string;
     /** Fingerprints reported by the run that just finished. Absent ones on this PR can be resolved. */
     seen: string[];
     /** False when the model stage did not run: AI findings stay open because they were not re-checked. */
@@ -162,6 +163,7 @@ export interface Store {
     activePrompts(): Promise<PromptVersion[]>;
     listPromptVersions(): Promise<PromptVersion[]>;
     listPromptNotes(limit: number): Promise<PromptNote[]>;
+    unfoldedPromptNotes(limit: number): Promise<PromptNote[]>;
     publishPrompt(role: PromptRole, body: string, note: string): Promise<PromptVersion>;
     foldNotes(ids: number[], versionId: number): Promise<void>;
 }

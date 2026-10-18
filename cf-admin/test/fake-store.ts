@@ -228,6 +228,9 @@ export class FakeStore implements Store {
     async listPromptNotes(limit: number) {
         return this.notes.slice(-limit).reverse();
     }
+    async unfoldedPromptNotes(limit: number) {
+        return this.notes.filter((item) => item.foldedInto === null).slice(0, limit);
+    }
     async publishPrompt(role: PromptRole, body: string, note: string) {
         for (const item of this.prompts) {
             if (item.role === role) {

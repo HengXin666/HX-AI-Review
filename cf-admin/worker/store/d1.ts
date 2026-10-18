@@ -297,7 +297,9 @@ export class D1Store implements Store {
                     )
                     .bind(input.repoId, input.fingerprint, input.reason),
                 this.db
-                    .prepare("INSERT INTO prompt_notes (repo_id, fingerprint, reason) VALUES (?, ?, ?)")
+                    .prepare(
+                        "INSERT INTO prompt_notes (repo_id, fingerprint, reason) SELECT ?, ?, ? WHERE changes() > 0",
+                    )
                     .bind(input.repoId, input.fingerprint, input.reason),
             );
         }
@@ -309,9 +311,9 @@ export class D1Store implements Store {
         // json_each of an empty array matches nothing, so NOT IN that set keeps every missing fingerprint.
         const sql = `UPDATE findings SET status = 'resolved', resolved_by_run = ?1
             WHERE status = 'open' AND repo_id = ?2 AND run_id != ?4
-            AND run_id IN (SELECT id FROM runs WHERE repo_id = ?2 AND pr_number = ?3)
+            AND run_id IN (SELECT id FROM runs WHERE repo_id = ?2 AND pr_number = ?3 AND created_at < ?6)
             AND fingerprint NOT IN (SELECT value FROM json_each(?5))
-            AND (?6 = 1 OR rule_id != 'CX-AI')`;
+            AND (?7 = 1 OR rule_id != 'CX-AI')`;
         const result = await this.db
             .prepare(sql)
             .bind(
@@ -320,6 +322,7 @@ export class D1Store implements Store {
                 input.prNumber,
                 input.runId,
                 JSON.stringify(input.seen),
+                input.runCreatedAt,
                 input.aiRechecked ? 1 : 0,
             )
             .run();
@@ -343,6 +346,12 @@ export class D1Store implements Store {
 
     async listPromptNotes(limit: number) {
         return (await this.all("SELECT * FROM prompt_notes ORDER BY id DESC LIMIT ?", limit)).map(promptNote);
+    }
+
+    async unfoldedPromptNotes(limit: number) {
+        return (
+            await this.all("SELECT * FROM prompt_notes WHERE folded_into IS NULL ORDER BY id LIMIT ?", limit)
+        ).map(promptNote);
     }
 
     async publishPrompt(role: PromptRole, body: string, note: string): Promise<PromptVersion> {

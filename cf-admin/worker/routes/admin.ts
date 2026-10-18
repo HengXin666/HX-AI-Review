@@ -79,7 +79,7 @@ async function overview(deps: Deps): Promise<Response> {
         deps.store.findingsByStatus("resolved", LIST_LIMIT),
         deps.store.listProviders(),
         deps.store.listPromptVersions(),
-        deps.store.listPromptNotes(LIST_LIMIT),
+        deps.store.unfoldedPromptNotes(LIST_LIMIT),
     ]);
     // Never the key itself: only whether the named Worker secret exists.
     const providerView = providers.map((item) => ({ ...item, keyPresent: Boolean(deps.secret(item.keySecret)) }));
