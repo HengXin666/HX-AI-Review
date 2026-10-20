@@ -3,6 +3,7 @@
 import { resolve } from "node:path";
 import { git } from "./git.ts";
 import { isBlocking } from "./contract/report.ts";
+import { runRulesStep } from "./rules/run.ts";
 import { stepInit, stepL0, stepPublish, stepReview, stepScope } from "./steps.ts";
 
 const USAGE = `usage: hx-context-review <command> [--root <dir>] [--format findings]
@@ -12,7 +13,8 @@ commands:
   scope     diff -> ancestor AGENTS chain + reverse references; output empty=true|false
   review    pi finder -> verifier on the scope (skipped when empty or L0-only)
   publish   write MD/JSON, POST /runs, push patch branch, commit/PR comment
-  run       init, l0, scope, review and publish in one process`;
+  rules     run the deterministic rule registry; exit 1 on blocking findings
+  run       init, l0, rules, scope, review and publish in one process`;
 
 type Args = { command: string; root: string; format?: string };
 
@@ -68,13 +70,22 @@ async function main(argv: string[]): Promise<number> {
             process.stdout.write(`publish: ${blocking} blocking finding(s)\n`);
             return 0;
         }
+        case "rules": {
+            const rulesRun = runRulesStep(args.root);
+            const counts = rulesRun.report.counts;
+            process.stdout.write(
+                `rules: ${counts.error} error(s), ${counts.warning} warning(s), ${counts.blocking} blocking\n`,
+            );
+            return counts.blocking > 0 ? 1 : 0;
+        }
         case "run": {
             await stepInit(args.root);
             const l0 = stepL0(args.root);
+            const rulesRun = runRulesStep(args.root);
             stepScope(args.root);
             await stepReview(args.root);
             await stepPublish(args.root);
-            return l0.some(isBlocking) ? 1 : 0;
+            return l0.some(isBlocking) || rulesRun.report.counts.blocking > 0 ? 1 : 0;
         }
         default:
             process.stderr.write(USAGE + "\n");

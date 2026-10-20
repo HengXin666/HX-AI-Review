@@ -73,6 +73,7 @@ export const RULE = {
     orphan: "CX-ORPHAN",
     ai: "CX-AI",
     tool: "tool-error",
+    exemption: "EXEMPT-001",
 } as const;
 
 export const ENV = {

@@ -3,6 +3,17 @@ import { createHash } from "node:crypto";
 
 export type Severity = "error" | "warning";
 export type Origin = "new" | "historical";
+export type ExemptionState = "exempt" | "expired";
+
+/** Repository exemption that matched a finding, with the state it had for this run. */
+export type ExemptionRef = {
+    path: string;
+    reason: string;
+    expiresOnChange: boolean;
+    state: ExemptionState;
+};
+
+export type FindingMeta = { criteria?: string; exemption?: ExemptionRef | null };
 
 export type Finding = {
     ruleId: string;
@@ -13,6 +24,10 @@ export type Finding = {
     evidence: string;
     fingerprint: string;
     origin: Origin;
+    /** One-line criteria summary of the rule that produced this finding. */
+    criteria?: string;
+    /** Matching exemption entry, null when no exemption applies. */
+    exemption?: ExemptionRef | null;
 };
 
 /** A unified diff proposed by the AI stage, bound to the finding it fixes. */
@@ -45,6 +60,7 @@ export function makeFinding(
     message: string,
     evidence: string,
     anchor = message,
+    meta: FindingMeta = {},
 ): Finding {
     return {
         ruleId,
@@ -55,6 +71,8 @@ export function makeFinding(
         evidence,
         fingerprint: fingerprint(ruleId, path, anchor, evidence),
         origin: "new",
+        criteria: meta.criteria ?? "",
+        exemption: meta.exemption ?? null,
     };
 }
 

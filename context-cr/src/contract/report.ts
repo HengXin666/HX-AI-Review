@@ -26,9 +26,9 @@ export type ReportInput = Omit<ReviewReport, "tool" | "version" | "ok" | "counts
     rejections?: ReviewReport["rejections"];
 };
 
-/** Only new Error findings block, matching hx-agent-code baseline semantics. */
+/** Only new Error findings block; an active repository exemption keeps a finding out of the gate. */
 export function isBlocking(finding: Finding): boolean {
-    return finding.severity === ERROR && finding.origin === "new";
+    return finding.severity === ERROR && finding.origin === "new" && finding.exemption?.state !== "exempt";
 }
 
 export function buildReport(input: ReportInput): ReviewReport {
@@ -46,7 +46,7 @@ export function buildReport(input: ReportInput): ReviewReport {
     };
 }
 
-function escapeMd(text: string): string {
+export function escapeMd(text: string): string {
     return text.replace(/([\\`*_[\]|<>])/g, "\\$1").replace(/[\r\n]+/g, " ");
 }
 

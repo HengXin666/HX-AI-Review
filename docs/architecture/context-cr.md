@@ -9,6 +9,7 @@ runner 侧 CLI. 入口 [context-cr/src/cli.ts](../../context-cr/src/cli.ts), 步
 | `context-cr/src/init/client.ts` | HX_CTX_ENDPOINT, HX_CTX_TOKEN, GITHUB_REPOSITORY | `InitConfig` (无 key, 含模型单价与可选 prompts 附录) + api_key |
 | `context-cr/src/state.ts` | RUNNER_TEMP | 运行状态目录, key 文件 (0600, 读后即删), 运行 nonce |
 | `context-cr/src/l0/` | 仓库快照 (git 跟踪文件), `.hx-context-review.json`, 可信 baseline | `Finding[]` |
+| `context-cr/src/rules/` | 仓库快照, 配置, base 修订与豁免文件 | `Finding[]` + `rules.{md,json}` 报告 |
 | `context-cr/src/scope/base.ts` | GitHub 事件, last_sha | 审核区间基点与原因 |
 | `context-cr/src/scope/index.ts` | 快照, 变更列表, 可选引用索引提示 | `ContextScope` |
 | `context-cr/src/review/` | `InitConfig`, `ContextScope`, diff, `AgentRunner` | 确认后的 Warning, 补丁, 用量, 会话记录 |
@@ -52,6 +53,25 @@ runner 侧 CLI. 入口 [context-cr/src/cli.ts](../../context-cr/src/cli.ts), 步
 skill 注入上界 = 所有 skill 的 front matter (常驻 L1) + 最大的 `concurrentSkills` 个 SKILL.md 正文 (同时加载的 L2). 未知时按保守上界计算, 不当作 0.
 
 引用解析顺序: 相对所在文件, 相对仓库根, 相对所在 skill 根. 代码块 (``` 围栏) 内的内容不算引用.
+
+## 规则引擎 (rules)
+
+`cli.ts rules` 是 review.yml 的第 3b 步, 调用 `context-cr/src/rules/run.ts`, 在 L0 之外再跑一组确定性规则. 结果写到 `scripts/.hx_code_quality/reports/rules.{md,json}` 和只列 Warning 的 `scripts/.hx_code_quality/reports/rules-pending-review.md`; workflow 的 rules 步骤 continue-on-error 以便报告先落盘并随同一份 artifact 上传, 随后单独一步在仍有未豁免 Error 时让 job 失败, 所以规则既产出报告, 也真正参与门禁.
+
+| ID | 等级 | 判据 |
+|---|---|---|
+| ARCH-001 | Error | 有 impl/ 的模块暴露公共入口, 其他模块只导入该入口 |
+| ARCH-002 | Error | 目录导入图无环 |
+| ARCH-003 | Warning | 每目录最多 6 个文件; 混用语言时升为 Error |
+| ARCH-004 | Error | 接口层不导入数据源包, 不直接写 SQL |
+| STYLE-003 | Error | 文件头注释不超过 10 行, 注释只用 ASCII 标点且无 emoji |
+| STYLE-004 | Warning | 基线中没有的新依赖需要人工决策 |
+| DOC-001 | Error | 文档相对链接指向已跟踪文件或目录 |
+| CTX-001 | Error | AGENTS.md 少于 150 行与 16KB, 单个一级标题, 无标题跳级, 有配对 README |
+| CTX-002 | Error | SKILL.md 有 front matter 与匹配的 name, description, 正文有标题 |
+| CI-001 | Error | 工作流保留下 on: 与 jobs:, 调用的脚本, 包与工作流都存在 |
+
+豁免只认 base: 根目录豁免文件里只有与 base 版本逐字段一致的条目才能让发现保持 exempt; 工作区新增或修改的条目按 expired 处理, 对应 Error 照常阻断, 改动豁免文件本身还会产出 EXEMPT-001 Warning 交人工确认. base 解析失败时改用空树计算变更, 所有豁免按 expired 处理, 并产出阻断级 tool-error, 不允许在无法判断变更时放行.
 
 ## context_scope
 
