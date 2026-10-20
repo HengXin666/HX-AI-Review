@@ -1,0 +1,19 @@
+name: tests-all
+on:
+    workflow_dispatch:
+    workflow_call:
+permissions:
+    contents: read
+jobs:
+    backend-api:
+        uses: ./.github/workflows/tests-backend-api.yml
+    frontend-request:
+        uses: ./.github/workflows/tests-frontend-request.yml
+    frontend-ui:
+        uses: ./.github/workflows/tests-frontend-ui.yml
+    e2e:
+        uses: ./.github/workflows/tests-e2e.yml
+    perf:
+        uses: ./.github/workflows/tests-perf.yml
+    build-compat:
+        uses: ./.github/workflows/tests-build-compat.yml

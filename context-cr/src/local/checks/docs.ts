@@ -2,6 +2,7 @@ import { posix } from "node:path";
 import { ERROR, WARNING } from "../../constants.ts";
 import { makeFinding } from "../../contract/finding.ts";
 import type { Finding } from "../../contract/finding.ts";
+import { withoutFences } from "../../l0/refs.ts";
 import { lineOf } from "../../l0/snapshot.ts";
 import { LOCAL_RULE } from "./rules.ts";
 import type { CheckContext, LocalCheck } from "./rules.ts";
@@ -37,7 +38,8 @@ function checkDocLinks(ctx: CheckContext): Finding[] {
         if (!text) {
             continue;
         }
-        for (const match of text.matchAll(LINK_RE)) {
+        const body = withoutFences(text);
+        for (const match of body.matchAll(LINK_RE)) {
             const raw = match[1];
             if (EXTERNAL_RE.test(raw)) {
                 continue;
@@ -46,7 +48,7 @@ function checkDocLinks(ctx: CheckContext): Finding[] {
             if (!target) {
                 continue;
             }
-            const line = lineOf(text, match.index);
+            const line = lineOf(body, match.index);
             if (target.startsWith("..")) {
                 const message = "link escapes the repository: " + raw;
                 findings.push(makeFinding(LOCAL_RULE.docLink, ERROR, path, line, message, raw));
@@ -61,23 +63,40 @@ function checkDocLinks(ctx: CheckContext): Finding[] {
     return findings;
 }
 
+type LinkRules = { rules: LinkRule[]; problem?: Finding };
+
 /** Mapping that forces a watched path and its document into the same change. */
-function readLinkRules(ctx: CheckContext): LinkRule[] {
+function readLinkRules(ctx: CheckContext): LinkRules {
     const text = ctx.read(LINKS_CONFIG);
     if (!text) {
-        return [];
+        const message = "doc sync config is missing: " + LINKS_CONFIG;
+        return { rules: [], problem: makeFinding(LOCAL_RULE.docSync, ERROR, LINKS_CONFIG, 1, message, LINKS_CONFIG) };
     }
-    const data = JSON.parse(text) as { links?: LinkRule[] };
+    let data: { links?: unknown };
+    try {
+        data = JSON.parse(text) as { links?: unknown };
+    } catch {
+        const message = "doc sync config is not valid JSON: " + LINKS_CONFIG;
+        return { rules: [], problem: makeFinding(LOCAL_RULE.docSync, ERROR, LINKS_CONFIG, 1, message, LINKS_CONFIG) };
+    }
     if (!Array.isArray(data.links)) {
-        return [];
+        const message = "doc sync config needs a links array: " + LINKS_CONFIG;
+        return { rules: [], problem: makeFinding(LOCAL_RULE.docSync, ERROR, LINKS_CONFIG, 1, message, LINKS_CONFIG) };
     }
-    return data.links.filter((item) => typeof item.doc === "string" && Array.isArray(item.watch));
+    const rules = data.links.filter(
+        (item): item is LinkRule =>
+            typeof item === "object" &&
+            item !== null &&
+            typeof (item as LinkRule).doc === "string" &&
+            Array.isArray((item as LinkRule).watch),
+    );
+    return { rules };
 }
 
 function checkDocSync(ctx: CheckContext): Finding[] {
-    const rules = readLinkRules(ctx);
+    const { rules, problem } = readLinkRules(ctx);
     const changed = new Set(ctx.changed);
-    const findings: Finding[] = [];
+    const findings: Finding[] = problem ? [problem] : [];
     for (const rule of rules) {
         const hits = ctx.changed.filter((path) => rule.watch.some((prefix) => path.startsWith(prefix)));
         if (!hits.length || changed.has(rule.doc)) {
@@ -128,6 +147,16 @@ function checkAgents(ctx: CheckContext): Finding[] {
     return findings;
 }
 
+/** YAML scalar value without the optional matching quotes. */
+function yamlScalar(value: string | undefined): string | undefined {
+    const trimmed = value?.trim();
+    if (!trimmed) {
+        return undefined;
+    }
+    const quoted = /^(["'])(.*)\1$/.exec(trimmed);
+    return quoted ? quoted[2] : trimmed;
+}
+
 function checkSkills(ctx: CheckContext): Finding[] {
     const findings: Finding[] = [];
     for (const path of ctx.changed) {
@@ -145,14 +174,8 @@ function checkSkills(ctx: CheckContext): Finding[] {
             continue;
         }
         const front = lines.slice(1, close);
-        const name = front
-            .find((line) => line.startsWith("name:"))
-            ?.slice(5)
-            .trim();
-        const description = front
-            .find((line) => line.startsWith("description:"))
-            ?.slice(12)
-            .trim();
+        const name = yamlScalar(front.find((line) => line.startsWith("name:"))?.slice(5));
+        const description = yamlScalar(front.find((line) => line.startsWith("description:"))?.slice(12));
         const dir = posix.basename(posix.dirname(path));
         if (name !== dir) {
             const message = "front matter name " + (name ?? "(missing)") + " differs from directory " + dir;

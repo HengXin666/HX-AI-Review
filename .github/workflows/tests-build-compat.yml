@@ -1,0 +1,14 @@
+name: tests-build-compat
+on:
+    pull_request:
+    push:
+        branches: [main]
+    workflow_dispatch:
+    workflow_call:
+permissions:
+    contents: read
+jobs:
+    build-compat:
+        uses: ./.github/workflows/tests-category.yml
+        with:
+            category: build-compat

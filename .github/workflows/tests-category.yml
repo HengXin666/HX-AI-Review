@@ -1,0 +1,49 @@
+name: tests-category
+on:
+    workflow_call:
+        inputs:
+            category:
+                required: true
+                type: string
+            tier:
+                required: false
+                type: string
+                default: all
+permissions:
+    contents: read
+jobs:
+    category:
+        runs-on: ubuntu-latest
+        timeout-minutes: 60
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+                  ref: ${{ github.event.pull_request.head.sha || github.sha }}
+                  persist-credentials: false
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: "24"
+            - uses: pnpm/action-setup@v4
+            - name: Install runner dependencies
+              run: pnpm install --frozen-lockfile
+            - name: Resolve the test branch overlay
+              id: overlay
+              shell: bash
+              run: |
+                  if git ls-remote --exit-code --heads origin test >/dev/null 2>&1; then
+                      git fetch --no-tags origin refs/heads/test:refs/remotes/origin/test
+                      git worktree add .hx-tests origin/test
+                      (cd .hx-tests && pnpm install --frozen-lockfile)
+                      echo "root=.hx-tests" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "root=" >> "$GITHUB_OUTPUT"
+                      echo "::notice::test branch is absent; ${{ inputs.category }} has no overlay and is skipped"
+                  fi
+            - name: Run one test category against the test branch
+              if: steps.overlay.outputs.root != ''
+              shell: bash
+              run: |
+                  BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+                  if [ -z "$BASE" ]; then BASE="origin/main"; fi
+                  node context-cr/src/cli.ts test --category "${{ inputs.category }}" --tier "${{ inputs.tier }}" --root "${{ steps.overlay.outputs.root }}" --code-root . --base "$BASE"

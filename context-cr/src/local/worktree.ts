@@ -6,17 +6,31 @@ import { emptyTree, git, tryGit } from "../git.ts";
 export type LocalChange = { status: string; path: string; oldPath?: string };
 export type LocalBase = { base: string; label: string };
 
-/** Resolve the revision the worktree is compared with; an explicit ref must resolve. */
+const DEFAULT_BASE_REFS = ["origin/HEAD", "origin/main", "origin/master", "main", "master"];
+
+function resolveCommit(root: string, ref: string): string | undefined {
+    return tryGit(root, ["rev-parse", "--verify", ref + "^{commit}"])?.trim() || undefined;
+}
+
+/** Resolve the revision the worktree is compared with; a requested ref must share history with HEAD. */
 export function resolveLocalBase(root: string, requested?: string): LocalBase {
-    if (requested) {
-        const sha = tryGit(root, ["rev-parse", "--verify", requested + "^{commit}"])?.trim();
-        if (!sha) {
-            throw new Error("base ref not found: " + requested);
-        }
-        const merged = tryGit(root, ["merge-base", sha, "HEAD"])?.trim();
-        return { base: merged || sha, label: requested + (merged ? " merge-base" : "") };
+    const head = resolveCommit(root, "HEAD");
+    if (!head) {
+        return { base: "", label: "empty tree (no commits)" };
     }
-    return { base: "HEAD", label: "HEAD (worktree only)" };
+    const ref = requested || DEFAULT_BASE_REFS.find((item) => resolveCommit(root, item));
+    if (!ref) {
+        return { base: head, label: "HEAD (worktree only)" };
+    }
+    const sha = resolveCommit(root, ref);
+    if (!sha) {
+        throw new Error("base ref not found: " + ref);
+    }
+    const merged = tryGit(root, ["merge-base", sha, head])?.trim();
+    if (!merged) {
+        throw new Error("no merge-base between " + ref + " and HEAD; fetch the full history first");
+    }
+    return { base: merged, label: ref + " merge-base" };
 }
 
 /** Changed paths between base and the worktree, including staged edits and untracked files. */
@@ -68,9 +82,9 @@ export function readAt(root: string, rev: string, path: string): string | undefi
     return rev ? tryGit(root, ["show", rev + ":" + path]) : undefined;
 }
 
-/** Files tracked in the current worktree, used for the repository-wide view of each change. */
+/** Files present in the worktree, tracked or untracked, used for the repository-wide view of each change. */
 export function trackedInWorktree(root: string): string[] {
-    return git(root, ["ls-files", "-z"]).split("\0").filter(Boolean);
+    return git(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]).split("\0").filter(Boolean);
 }
 
 /** True when the path exists in the worktree, whether tracked, untracked or a directory. */

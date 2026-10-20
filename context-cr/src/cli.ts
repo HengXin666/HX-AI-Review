@@ -4,19 +4,23 @@ import { resolve } from "node:path";
 import { git } from "./git.ts";
 import { isBlocking } from "./contract/report.ts";
 import { runRulesStep } from "./rules/run.ts";
+import { runLocal } from "./local/run.ts";
+import { runSuite } from "./local/suite/run.ts";
 import { stepInit, stepL0, stepPublish, stepReview, stepScope } from "./steps.ts";
 
-const USAGE = `usage: hx-context-review <command> [--root <dir>] [--format findings]
+const USAGE = `usage: hx-context-review <command> [--root <dir>] [--base <ref>] [--format findings]
 commands:
   init      GET /init, mask api_key, export it to the job env
   l0        deterministic L0 checks; exit 1 on new Error findings
+  local     diff-only local checks against the worktree; exit 1 on blocking findings
   scope     diff -> ancestor AGENTS chain + reverse references; output empty=true|false
   review    pi finder -> verifier on the scope (skipped when empty or L0-only)
   publish   write MD/JSON, POST /runs, push patch branch, commit/PR comment
   rules     run the deterministic rule registry; exit 1 on blocking findings
-  run       init, l0, rules, scope, review and publish in one process`;
+  run       init, l0, rules, scope, review and publish in one process
+  test      run one test category/tier from the local suite
 
-type Args = { command: string; root: string; format?: string };
+type Args = { command: string; root: string; format?: string; base?: string };
 
 function parseArgs(argv: string[]): Args {
     const [command, ...rest] = argv;
@@ -26,6 +30,8 @@ function parseArgs(argv: string[]): Args {
         const value = rest[i + 1];
         if (flag === "--root" && value) {
             args.root = value;
+        } else if (flag === "--base" && value) {
+            args.base = value;
         } else if (flag === "--format" && value === "findings") {
             args.format = value;
         } else {
@@ -38,6 +44,9 @@ function parseArgs(argv: string[]): Args {
 }
 
 async function main(argv: string[]): Promise<number> {
+    if (argv[0] === "test") {
+        return runSuite(argv.slice(1));
+    }
     const args = parseArgs(argv);
     switch (args.command) {
         case "init":
@@ -53,6 +62,19 @@ async function main(argv: string[]): Promise<number> {
                 );
             }
             return findings.some(isBlocking) ? 1 : 0;
+        }
+        case "local": {
+            const result = runLocal(args.root, args.base);
+            if (args.format) {
+                process.stdout.write(JSON.stringify(result.report.findings) + "\n");
+            } else {
+                process.stdout.write(
+                    `local: ${result.report.findings.length} finding(s), ` +
+                        `${result.report.counts.blocking} blocking, ${result.changes} changed; ` +
+                        `base ${result.label}; report ${result.written.md}\n`,
+                );
+            }
+            return result.report.findings.some(isBlocking) ? 1 : 0;
         }
         case "scope": {
             const scope = stepScope(args.root);

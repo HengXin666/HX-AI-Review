@@ -29,7 +29,7 @@ export const CATEGORIES: TestCategory[] = [
         workflow: "tests-backend-api.yml",
         trigger: "pull_request, push to the default branch, tests-all dispatch",
         failure:
-            "any selected test exits non-zero; the real tier fails when HX_API_BASE is set and the probe is not 2xx",
+            "any selected test exits non-zero; the real tier fails when HX_API_BASE is set and /healthz is not 2xx with status ok",
         tiers: [
             {
                 id: "fake",
@@ -40,7 +40,7 @@ export const CATEGORIES: TestCategory[] = [
                 id: "real",
                 title: "real data",
                 requiresEnv: "HX_API_BASE",
-                steps: [{ id: "probe", kind: "probe", probe: "/" }],
+                steps: [{ id: "probe", kind: "probe", probe: "/healthz" }],
             },
         ],
     },

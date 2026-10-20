@@ -116,6 +116,7 @@ finder 的候选在花钱请 verifier 之前先过代码检查 (`context-cr/src/
 ## 输出与反馈闭环
 
 - 每条确认的发现是一个 Warning: 规则 `CX-AI`, 消息为 "标题: 说明", 证据附 verifier 理由, 指纹为 路径 + 完整标题 (同一条过期陈述跨运行保持同一指纹; 标题不截断, 以免指纹变化让抑制失效).
+- 报告名与报告目录的共享常量在 `context-cr/src/constants.ts`: CI 审查写 `context-review`, 本地 diff 写 `local-review`, 两者使用同一 `ReviewReport` 契约; 这些命名不影响 AI 发现语义.
 - 报告 (MD/JSON, 含 `rejections`) 与全部会话记录 (finder 与 verifier 的完整消息, 包括失败会话, JSONL) 存入 R2, 可在总览页追溯每条结论是怎么得出的.
 - 维护者在总览页采纳或驳回发现; 驳回的指纹与理由进入抑制表, 下次 `/init` 下发: finder 在提示词里看到它们, 闸门直接拦下同指纹候选.
 

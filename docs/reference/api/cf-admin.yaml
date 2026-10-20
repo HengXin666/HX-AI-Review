@@ -258,6 +258,21 @@ components:
                 bySeverity: { type: array, items: { $ref: "#/components/schemas/SeveritySummary" } }
                 topRule: { type: [string, "null"], description: Most triggered rule id }
 paths:
+    /healthz:
+        get:
+            operationId: getHealth
+            security: []
+            description: Unauthenticated liveness probe for the deployment, used by the real test tier.
+            responses:
+                "200":
+                    description: Deployment is serving requests
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                required: [status]
+                                properties:
+                                    status: { type: string, enum: [ok] }
     /init:
         get:
             operationId: getInit

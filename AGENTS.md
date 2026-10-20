@@ -4,9 +4,9 @@
 
 ## 边界
 
-- `context-cr/` 只在 GitHub Actions runner 里运行, 读 checkout 下来的文件, 用 pi SDK 直连模型. 它不依赖 `cf-admin/` 的任何代码, 两边只通过 [docs/reference/api/cf-admin.yaml](docs/reference/api/cf-admin.yaml) 的 HTTP 契约对接.
+- `context-cr/` 在 GitHub Actions runner 里按步骤运行, 也可本地跑 `local` diff 检查与 `test` 编排; 读 checkout 下来的文件, 用 pi SDK 直连模型. 它不依赖 `cf-admin/` 的任何代码, 两边只通过 [docs/reference/api/cf-admin.yaml](docs/reference/api/cf-admin.yaml) 的 HTTP 契约对接.
 - `cf-admin/` 是 Cloudflare Worker + D1 + R2 + Pages. 它永远不转发模型请求, 只下发配置, 入库, 提供总览.
-- Error 只来自 L0 确定性检查; AI 阶段只产出 Warning 与补丁. 改规则等级前先改 [docs/reference/report-contract.md](docs/reference/report-contract.md).
+- CI 里 Error 只来自 L0 确定性检查; AI 阶段只产出 Warning 与补丁. 本地 diff 检查复用同一 Finding 契约, 但不属于 CI 门禁. 改规则等级前先改 [docs/reference/report-contract.md](docs/reference/report-contract.md).
 - api_key 只能出现在 /init 响应, runner 的 0600 临时 key 文件 (review 读后即删) 与 review 进程里; 不进 `$GITHUB_ENV`, 不入 D1, 不进日志.
 
 ## 约定
@@ -25,7 +25,7 @@
 ## 完成前
 
 ```sh
-pnpm typecheck && pnpm test && pnpm l0 && pnpm format:check && pnpm doc-links
+pnpm typecheck && pnpm test && pnpm l0 && pnpm local:diff && pnpm format:check && pnpm doc-links
 ```
 
 门禁报告写在 `scripts/.hx_code_quality/reports/`, 超过 10 条只看数量与类型统计.

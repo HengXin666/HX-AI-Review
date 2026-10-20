@@ -13,6 +13,8 @@
         "format": "prettier --write .",
         "format:check": "prettier --check .",
         "l0": "node context-cr/src/cli.ts l0 --root .",
+        "local:diff": "node context-cr/src/cli.ts local --root .",
+        "local:test": "node context-cr/src/cli.ts test",
         "quality:code": "node .agents/skills/hx-agent-code/scripts/ci.ts code",
         "quality:docs": "node .agents/skills/hx-agent-code/scripts/ci.ts docs",
         "doc-links": "node scripts/quality/doc-links/index.ts"

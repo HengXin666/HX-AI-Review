@@ -51,6 +51,7 @@ pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
 pnpm l0            # 用本工具检查本仓库自己的上下文
+pnpm local:diff    # 本地 diff-only 检查, 写 local-review.{md,json}
 pnpm quality:docs  # hx-agent-code 文档门禁
 ```
 

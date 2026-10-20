@@ -6,6 +6,7 @@ Cloudflare 侧. Worker 入口 [cf-admin/worker/index.ts](../../cf-admin/worker/i
 
 | 接口 | 鉴权 | 作用 |
 |---|---|---|
+| `GET /healthz` | 无 | 部署存活探针, 返回 `{"status":"ok"}`; 真实测试层用它验证后端可达 |
 | `GET /init` | Bearer HX_CTX_TOKEN | 配置下发: api_url, api_key, api 类型, finder/verifier 模型, 上下文窗口, last_sha, 抑制表, 当前 prompt 附录 |
 | `POST /runs` | Bearer HX_CTX_TOKEN | 入库: findings, 补丁, 耗时, token 用量, MD/JSON 报告, pi 会话 JSONL; 推进 last_sha 与预算; 同一 PR 上未再出现的发现标 resolved |
 | `POST /feedback` | Bearer HX_CTX_TOKEN | 按指纹采纳或驳回; 驳回必须带原因, 并写入 prompt_notes |

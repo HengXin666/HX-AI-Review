@@ -29,6 +29,8 @@ workflow_call (业务仓库调用, 本仓库自身不跑)
 | [quality-docs.yml](../../../.github/workflows/quality-docs.yml) | push, pull_request | docs 组无新 Error |
 | [quality-build.yml](../../../.github/workflows/quality-build.yml) | push, pull_request | build, compatibility, tests 三个 job 都成功 |
 | [quality-tests.yml](../../../.github/workflows/quality-tests.yml) | 被 quality-build 调用 | 选中的测试全部退出 0 |
+| [tests-all.yml](../../../.github/workflows/tests-all.yml) | 手动或 workflow_call | 六类测试聚合, 任一类别失败即失败 |
+| [tests-<category>.yml](../../../.github/workflows/tests-backend-api.yml) | 按类别: PR 路径, main push, schedule, label 或 tag | 对应类别退出 0; 没有 test 分支时输出 notice 并跳过 |
 | [deploy-cf.yml](../../../.github/workflows/deploy-cf.yml) | 手动 | 部署前测试通过, 部署步骤无错 |
 
 ## 本地命令
@@ -40,6 +42,8 @@ workflow_call (业务仓库调用, 本仓库自身不跑)
 | `pnpm l0` | docs / context-l0 | 本仓库自己的上下文 L0 检查 |
 | `pnpm doc-links` | docs / doc-links | 与 origin/main 的 merge-base 比较, 含未提交与未跟踪文件; 有 finding 时退出 1, 可作 `&&` 门禁; 可加 `-- --base <ref>` |
 | `pnpm test` | tests | 所有包的单元测试与 quality 自身测试 |
+| `pnpm local:diff` | 无, 本地增量 | 只查与基准的差异: 规则 id 与 CI 相同, 写 `local-review.{md,json}`, 有阻断发现时退出 1; 可加 `-- --base <ref>` |
+| `pnpm local:test -- --category <id> --tier <id> --root <tests tree> --code-root . --base <ref>` | tests 的六类 | 本地跑单类别或层级, 每层写 `test-<category>-<tier>.{md,json}`; 未知类别或层级退出 2 |
 | `pnpm build` | build | 构建总览页 |
 
 提交前至少跑 `pnpm typecheck && pnpm test && pnpm l0 && pnpm format:check`. `pnpm quality:*` 直接调用 CI runner, 需要 GitHub 事件环境, 只供 Actions 使用.
@@ -123,6 +127,12 @@ workflow_call (业务仓库调用, 本仓库自身不跑)
 | coverage.json 状态 | 本文 "规则覆盖" |
 | 新增被监视的约束 | links.json 与本文 "HX-DOCLINK 映射" |
 | deploy-cf.yml 或 deploy.ts | [deploy-cf.md](../../tutorials/deploy-cf.md) |
+
+## 六类测试工作流
+
+`context-cr/src/local/suite/categories.ts` 是唯一类别清单. 每个类别有一个 `tests-<category>.yml`, 用 `workflow_call` 调用 `tests-category.yml`; `tests-all.yml` 聚合六个类别. 触发条件按类别: backend-api 与 build-compat 在 PR 与 main push 跑, frontend 两类只在 pages 变更时跑, e2e 只在 PR 带 `e2e` label 或夜间跑, perf 只在夜间与 `v*` tag 跑.
+
+类别 runner 在 `test` 分支存在时把该分支 checkout 到 `.hx-tests`, 用 `--root .hx-tests --code-root . --base <ref>` 跑; 没有 test 分支时输出 notice 并跳过该类别, 不伪装成通过. 迁移历史检查只接受显式 `--base`, 不退回 `HEAD`, 所以已提交的迁移修改也能被发现.
 
 ## 已知限制
 

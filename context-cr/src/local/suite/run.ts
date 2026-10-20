@@ -1,14 +1,19 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { REPORT_DIR, UTF8 } from "../../constants.ts";
+import { existsSync } from "node:fs";
+import { ERROR } from "../../constants.ts";
+import { EMPTY_USAGE, makeFinding } from "../../contract/finding.ts";
+import type { Finding } from "../../contract/finding.ts";
+import { buildReport } from "../../contract/report.ts";
+import type { ReviewReport } from "../../contract/report.ts";
 import { tryGit } from "../../git.ts";
+import { writeNamedReport } from "../report.ts";
 import { CATEGORIES, MIGRATIONS_PATH, category as findCategory, tierOf } from "./categories.ts";
 import type { TestCategory, TestStep, TestTier } from "./categories.ts";
 
 const DEFAULT_STEP_TIMEOUT_MS = 20 * 60 * 1000;
 const PROBE_TIMEOUT_MS = 15000;
 const OUTPUT_TAIL = 4000;
+const SUITE_PATH = "context-cr/src/local/suite/categories.ts";
 
 export type StepStatus = "passed" | "failed" | "skipped";
 export type StepResult = {
@@ -44,7 +49,7 @@ function runCommand(step: TestStep, root: string): StepResult {
     const timeout = step.timeoutMs ?? DEFAULT_STEP_TIMEOUT_MS;
     const result = spawnSync("bash", ["-lc", step.command ?? ""], {
         cwd: root,
-        encoding: UTF8 as BufferEncoding,
+        encoding: "utf8",
         timeout,
         env: process.env,
     });
@@ -60,7 +65,7 @@ function runCommand(step: TestStep, root: string): StepResult {
     };
 }
 
-/** Probe a deployed base url; a missing base url is a skipped tier, never a pass. */
+/** Probe a deployed base url health route; a missing base url is a skipped tier, never a pass. */
 async function runProbe(step: TestStep): Promise<StepResult> {
     const started = Date.now();
     const base = (process.env.HX_API_BASE ?? "").replace(/\/+$/, "");
@@ -71,16 +76,22 @@ async function runProbe(step: TestStep): Promise<StepResult> {
     try {
         const response = await fetch(url, {
             signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-            headers: { accept: "*/*" },
+            headers: { accept: "application/json" },
         });
-        const ok = response.status >= 200 && response.status < 300;
+        const body = await response.text();
+        let healthy = false;
+        try {
+            healthy = response.ok && (JSON.parse(body) as { status?: unknown }).status === "ok";
+        } catch {
+            healthy = false;
+        }
         return {
             id: step.id,
             kind: "probe",
-            status: ok ? "passed" : "failed",
+            status: healthy ? "passed" : "failed",
             exitCode: response.status,
             durationMs: Date.now() - started,
-            detail: "GET " + url + " -> " + response.status,
+            detail: "GET " + url + " -> " + response.status + " " + tail(body),
         };
     } catch (error) {
         return {
@@ -97,14 +108,17 @@ async function runProbe(step: TestStep): Promise<StepResult> {
 /** Migrations are append only: a modified or deleted migration breaks deployed history. */
 function runHistory(step: TestStep, options: RunOptions): StepResult {
     const started = Date.now();
-    const raw = tryGit(options.codeRoot, [
-        "diff",
-        "--name-status",
-        "-M",
-        options.base || "HEAD",
-        "--",
-        MIGRATIONS_PATH,
-    ]);
+    if (!options.base) {
+        return {
+            id: step.id,
+            kind: "history",
+            status: "failed",
+            exitCode: null,
+            durationMs: 0,
+            detail: "no comparison base for migration history",
+        };
+    }
+    const raw = tryGit(options.codeRoot, ["diff", "--name-status", "-M", options.base, "--", MIGRATIONS_PATH]);
     if (raw === undefined) {
         return {
             id: step.id,
@@ -174,20 +188,43 @@ function flag(args: string[], name: string): string | undefined {
     return at >= 0 ? args[at + 1] : undefined;
 }
 
-function writeResult(codeRoot: string, result: TierResult): string {
-    const dir = join(codeRoot, REPORT_DIR);
-    mkdirSync(dir, { recursive: true });
-    const file = join(dir, "test-" + result.category + "-" + result.tier + ".json");
-    writeFileSync(file, JSON.stringify(result, null, 4) + "\n", UTF8);
-    return file;
+function resultFindings(result: TierResult): Finding[] {
+    const findings: Finding[] = [];
+    for (const step of result.steps) {
+        if (step.status !== "failed") {
+            continue;
+        }
+        findings.push(makeFinding(result.ruleId, ERROR, SUITE_PATH, 1, step.id + " failed", step.detail));
+    }
+    if (result.status === "failed" && !findings.length) {
+        findings.push(makeFinding(result.ruleId, ERROR, SUITE_PATH, 1, result.failure, result.failure));
+    }
+    return findings;
 }
 
-async function main(args: string[]): Promise<number> {
+/** Write one tier outcome as the shared Markdown and JSON report pair. */
+function writeResult(codeRoot: string, result: TierResult, options: RunOptions): string {
+    const durationMs = result.steps.reduce((sum, step) => sum + step.durationMs, 0);
+    const report: ReviewReport = buildReport({
+        repo: codeRoot,
+        base: options.base,
+        head: tryGit(codeRoot, ["rev-parse", "HEAD"])?.trim() ?? "",
+        patches: [],
+        usage: EMPTY_USAGE,
+        durationMs,
+        stages: { tests: result.category + "/" + result.tier + ": " + result.status },
+        findings: resultFindings(result),
+    });
+    return writeNamedReport(codeRoot, "test-" + result.category + "-" + result.tier, report).md;
+}
+
+/** Run the selected test categories and write one report pair per tier. */
+export async function runSuite(args: string[]): Promise<number> {
     const id = flag(args, "--category");
     const tierId = flag(args, "--tier") ?? "all";
     const testsRoot = flag(args, "--root");
     const codeRoot = flag(args, "--code-root") ?? ".";
-    const base = flag(args, "--base") ?? "HEAD";
+    const base = flag(args, "--base");
     if (!id) {
         process.stderr.write(
             "usage: run.ts --category <id> [--tier <id>] --root <tests tree> --code-root <repo> --base <ref>\n",
@@ -203,11 +240,20 @@ async function main(args: string[]): Promise<number> {
         process.stderr.write("--root is required: point it at the overlay of the test branch\n");
         return 2;
     }
+    if (!base) {
+        process.stderr.write("--base is required: pass the commit or branch to compare migration history against\n");
+        return 2;
+    }
+    const tiers = tierOf(item, tierId);
+    if (!tiers.length) {
+        process.stderr.write("unknown tier " + tierId + " for category " + id + "\n");
+        return 2;
+    }
     const options: RunOptions = { testsRoot, codeRoot, base };
     let failed = 0;
-    for (const tier of tierOf(item, tierId)) {
+    for (const tier of tiers) {
         const result = await runCategory(item, tier, options);
-        const file = writeResult(codeRoot, result);
+        const file = writeResult(codeRoot, result, options);
         process.stdout.write(result.ruleId + " " + result.category + "/" + result.tier + ": " + result.status);
         process.stdout.write(result.failure ? " (" + result.failure + ")" : "");
         process.stdout.write(" -> " + file + "\n");
@@ -219,7 +265,7 @@ async function main(args: string[]): Promise<number> {
 }
 
 if (process.argv[1]?.endsWith("suite/run.ts")) {
-    main(process.argv.slice(2)).then(
+    runSuite(process.argv.slice(2)).then(
         (code) => process.exit(code),
         (error: unknown) => {
             process.stderr.write("run.ts: " + String(error) + "\n");

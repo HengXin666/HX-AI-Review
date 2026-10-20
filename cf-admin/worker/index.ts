@@ -11,6 +11,9 @@ import { D1Store, R2Blobs } from "./store/d1.ts";
 export function route(request: Request, deps: Deps): Promise<Response> {
     const { pathname } = new URL(request.url);
     const method = request.method;
+    if (method === "GET" && pathname === "/healthz") {
+        return Promise.resolve(json({ status: "ok" }));
+    }
     if (method === "GET" && pathname === "/init") {
         return handleInit(request, deps);
     }

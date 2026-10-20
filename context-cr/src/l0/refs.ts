@@ -20,7 +20,7 @@ const FENCE = /^(`{3,}|~{3,})/;
  * Strip fenced blocks so example snippets never count as references; keeps line numbers.
  * A fence closes only with the same character at least as long as its opener (CommonMark).
  */
-function withoutFences(text: string): string {
+export function withoutFences(text: string): string {
     let open: string | undefined;
     return text
         .split(/\r?\n/)

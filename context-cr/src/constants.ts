@@ -19,6 +19,7 @@ export const STATE_NAMESPACE = "hx-context-review";
 export const KEY_FILE = "api-key";
 export const REPORT_DIR = "scripts/.hx_code_quality/reports";
 export const REPORT_NAME = "context-review";
+export const LOCAL_REPORT_NAME = "local-review";
 export const INIT_FILE = "init.json";
 export const SCOPE_FILE = "scope.json";
 export const L0_FILE = "l0.json";

@@ -34,7 +34,26 @@ function resolveTarget(from: string, spec: string, tracked: Set<string>): string
     return candidates.find((item) => tracked.has(item));
 }
 
-/** Depth-first search for an import cycle that starts at the given file. */
+/** True when the edge from - to target did not exist at the comparison base. */
+function edgeIsNew(ctx: CheckContext, tracked: Set<string>, from: string, target: string): boolean {
+    const before = ctx.readBase(from);
+    if (before === undefined) {
+        return true;
+    }
+    return !importSpecs(before).some((spec) => spec.startsWith(".") && resolveTarget(from, spec, tracked) === target);
+}
+
+/** True when at least one import edge of the cycle is new relative to the comparison base. */
+function cycleIsNew(cycle: string[], ctx: CheckContext, tracked: Set<string>): boolean {
+    for (let index = 0; index < cycle.length - 1; index++) {
+        if (edgeIsNew(ctx, tracked, cycle[index], cycle[index + 1])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** Depth-first search for an import cycle that both starts at the given file and changes since base. */
 function cycleFrom(start: string, ctx: CheckContext, tracked: Set<string>): string[] | undefined {
     const stack: string[] = [];
     const onStack = new Set<string>();
@@ -42,7 +61,8 @@ function cycleFrom(start: string, ctx: CheckContext, tracked: Set<string>): stri
     const walk = (path: string): string[] | undefined => {
         if (onStack.has(path)) {
             const at = stack.indexOf(path);
-            return [...stack.slice(at), path];
+            const cycle = [...stack.slice(at), path];
+            return cycle.includes(start) ? cycle : undefined;
         }
         if (done.has(path)) {
             return undefined;
@@ -80,7 +100,7 @@ function checkCycles(ctx: CheckContext): Finding[] {
             continue;
         }
         const cycle = cycleFrom(path, ctx, tracked);
-        if (!cycle) {
+        if (!cycle || !cycleIsNew(cycle, ctx, tracked)) {
             continue;
         }
         const key = [...cycle].sort().join(">");
