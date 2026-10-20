@@ -6,6 +6,7 @@
             "watch": [
                 "scripts/quality/",
                 ".github/workflows/quality-",
+                ".github/workflows/tests-",
                 ".agents/skills/hx-agent-code/",
                 "context-cr/src/l0/",
                 ".hx-context-review.json",
@@ -37,6 +38,7 @@
                 "context-cr/src/steps.ts",
                 "context-cr/src/state.ts",
                 "context-cr/src/cli.ts",
+                "context-cr/src/local/",
                 "context-cr/src/publish/",
                 "context-cr/src/init/"
             ],

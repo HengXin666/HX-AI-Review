@@ -1,0 +1,15 @@
+name: tests-perf
+on:
+    schedule:
+        - cron: "0 19 * * *"
+    push:
+        tags: ["v*"]
+    workflow_dispatch:
+    workflow_call:
+permissions:
+    contents: read
+jobs:
+    perf:
+        uses: ./.github/workflows/tests-category.yml
+        with:
+            category: perf

@@ -6,6 +6,8 @@ hx-context-review 的 runner 侧. 由 [review.yml](../.github/workflows/review.y
 |---|---|---|
 | `node src/cli.ts init` | 2 init: GET /init, `::add-mask::` api_key, 存入 RUNNER_TEMP 下 0600 文件 | `init.json` (不含 key), output `l0_only` |
 | `node src/cli.ts l0` | 3 L0 确定性检查, 新 Error 退出 1 | `l0.json`; `--format findings` 输出 Finding 数组 |
+| `node src/cli.ts local` | 本地 diff-only 检查: 工作区 vs 基准, 含未跟踪文件 | `local-review.{md,json}`; 阻断发现退出 1; `--base <ref>` 指定基准 |
+| `node src/cli.ts test` | 本地跑六类测试中的一类/一层 | `test-<category>-<tier>.{md,json}`; 未知类别或层级退出 2 |
 | `node src/cli.ts scope` | 4 context_scope: diff -> 祖先 AGENTS 链 + 反向引用 | `scope.json`, output `empty` |
 | `node src/cli.ts review` | 5 pi finder -> verifier, 读取并删除 key 文件 | `ai.json`, `sessions.jsonl` |
 | `node src/cli.ts publish` | 6 入库 + 回写: POST /runs, 推补丁分支, commit/PR 评论 | `context-review.md` 与 `context-review.json` |
@@ -34,6 +36,21 @@ hx-context-review 的 runner 侧. 由 [review.yml](../.github/workflows/review.y
 - `src/review/`: finder/verifier 编排 (`index.ts`), pi SDK 适配 (`pi.ts`), 工具与提示词
 - `src/publish/`: POST /runs, 补丁分支, 评论渲染
 - `src/contract/`: Finding 与报告, 与 hx-agent-code 同一契约
+- `src/local/`: 工作区 diff 检测, 本地 code/docs 规则, 六类测试编排
+
+## 本地 diff 与测试
+
+根目录有两个脚本直接可用:
+
+```sh
+pnpm local:diff                       # 默认与 origin/main 的 merge-base 比较
+pnpm local:diff -- --base origin/main
+pnpm local:test -- --category backend-api --tier fake --root . --code-root . --base origin/main
+```
+
+`local` 只用 git diff 与工作区文件, 不发模型请求, 不跑测试. 它构造 `CheckContext` 后运行 `src/local/checks/code.ts` 与 `docs.ts`, 规则 id 与 CI 一致, 报告写 `scripts/.hx_code_quality/reports/local-review.{md,json}`, 有新 Error 时退出 1. 基准 ref 找不到或没有共同祖先时报错, 不会退回分支最新提交; 仓库没有首次提交时用空树, 未跟踪文件仍纳入检查.
+
+`test` 要求显式 `--base`, 依次跑选定层级的步骤; 真实层的探针访问后端 `/healthz` 并要求返回 `{"status":"ok"}`, 迁移历史比较基准与 `cf-admin/migrations`, 结果按共享 `ReviewReport` 契约写成 md 与 json 一对.
 
 设计说明见 [docs/architecture/context-cr.md](../docs/architecture/context-cr.md).
 

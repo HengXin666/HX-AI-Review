@@ -17,6 +17,7 @@ pnpm format        # prettier, 4 spaces, width 120
 pnpm typecheck     # tsc strict for both packages and scripts/quality
 pnpm test          # node --test in both packages and the quality checker
 pnpm l0            # hx-context-review L0 on this repository's own context files
+pnpm local:diff    # diff-only local rules against the worktree; -- --base <ref> overrides
 pnpm doc-links     # HX-DOCLINK: watched paths changed => linked doc changed
 ```
 
