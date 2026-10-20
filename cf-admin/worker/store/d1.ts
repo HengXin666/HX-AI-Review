@@ -137,8 +137,8 @@ export class D1Store implements Store {
             input_tokens, output_tokens, cost_usd, duration_ms, patch_branch, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
         const findingSql = `INSERT INTO findings (id, run_id, repo_id, fingerprint, rule_id, severity, path, line, message, evidence,
             patch_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`;
-        const ruleSql = `INSERT OR IGNORE INTO rule_results (run_id, rule_id, severity, file, line, status, waived)
-            VALUES (?, ?, ?, ?, ?, 'open', 0)`;
+        const ruleSql = `INSERT OR IGNORE INTO rule_results (finding_id, run_id, rule_id, severity, file, line, status, waived)
+            VALUES (?, ?, ?, ?, ?, ?, 'open', 0)`;
         await this.db.batch([
             this.db
                 .prepare(runSql)
@@ -177,7 +177,7 @@ export class D1Store implements Store {
                         f.patchKey,
                     ),
             ),
-            ...findings.map((f) => this.db.prepare(ruleSql).bind(f.runId, f.ruleId, f.severity, f.path, f.line)),
+            ...findings.map((f) => this.db.prepare(ruleSql).bind(f.id, f.runId, f.ruleId, f.severity, f.path, f.line)),
         ]);
     }
 
@@ -292,10 +292,8 @@ export class D1Store implements Store {
             this.db
                 .prepare(
                     `UPDATE rule_results SET status = ?1, waived = CASE WHEN ?1 = 'rejected' THEN 1 ELSE waived END
-                WHERE EXISTS (SELECT 1 FROM findings WHERE findings.repo_id = ?2 AND findings.fingerprint = ?3
-                    AND findings.status = ?1 AND findings.run_id = rule_results.run_id
-                    AND findings.rule_id = rule_results.rule_id AND findings.path = rule_results.file
-                    AND findings.line = rule_results.line)`,
+                WHERE finding_id IN (SELECT id FROM findings WHERE repo_id = ?2 AND fingerprint = ?3
+                    AND status = ?1)`,
                 )
                 .bind(input.verdict, input.repoId, input.fingerprint),
             this.db
@@ -329,9 +327,8 @@ export class D1Store implements Store {
         const rules = this.db
             .prepare(
                 `UPDATE rule_results SET status = 'resolved'
-            WHERE EXISTS (SELECT 1 FROM findings WHERE findings.resolved_by_run = ?1
-                AND findings.run_id = rule_results.run_id AND findings.rule_id = rule_results.rule_id
-                AND findings.path = rule_results.file AND findings.line = rule_results.line)`,
+            WHERE run_id IN (SELECT run_id FROM findings WHERE resolved_by_run = ?1)
+                AND finding_id IN (SELECT id FROM findings WHERE resolved_by_run = ?1)`,
             )
             .bind(input.runId);
         const [result] = await this.db.batch([
@@ -367,7 +364,8 @@ export class D1Store implements Store {
             SUM(CASE WHEN severity = 'warning' THEN 1 ELSE 0 END) AS warnings,
             SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open_count,
             SUM(CASE WHEN waived = 1 THEN 1 ELSE 0 END) AS waived,
-            COUNT(DISTINCT run_id) AS runs, COUNT(DISTINCT file) AS files
+            COUNT(DISTINCT run_id) AS runs,
+            COUNT(DISTINCT (SELECT repo_id FROM runs WHERE runs.id = rule_results.run_id) || ':' || file) AS files
             FROM rule_results${clause} GROUP BY rule_id ORDER BY total DESC, rule_id LIMIT ?`;
         const bySeveritySql = `SELECT severity, COUNT(*) AS total, COUNT(DISTINCT rule_id) AS rules,
             SUM(CASE WHEN waived = 1 THEN 1 ELSE 0 END) AS waived

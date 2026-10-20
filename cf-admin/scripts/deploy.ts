@@ -220,13 +220,15 @@ async function main(): Promise<void> {
         const databaseId = ensureDatabase(s.database);
         const config = writeWorkerConfig(s, databaseId);
         report.push(`- D1: ${s.database} (${databaseId})`);
-        if (all || s.target === "migrations") {
+        if (all || worker || s.target === "migrations") {
             wrangler(["d1", "migrations", "apply", s.database, "--remote", "--config", config]);
             report.push("- migrations: applied");
         }
         if (worker) {
             tryWrangler(["r2", "bucket", "create", s.bucket]);
             const out = wrangler(["deploy", "--config", config]);
+            // Backfill findings created while the old Worker was still serving during the rollout.
+            wrangler(["d1", "migrations", "apply", s.database, "--remote", "--config", config]);
             const url = /https:\/\/[\w.-]+\.workers\.dev/.exec(out)?.[0] ?? "(see wrangler output)";
             report.push(`- Worker: ${s.worker} at ${url} (use as HX_CTX_ENDPOINT)`);
             if (s.providerKeyName) {

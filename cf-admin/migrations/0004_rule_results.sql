@@ -3,20 +3,22 @@
 -- backfill skips rows that already exist.
 
 CREATE TABLE IF NOT EXISTS rule_results (
+    finding_id TEXT PRIMARY KEY REFERENCES findings(id),
     run_id TEXT NOT NULL REFERENCES runs(id),
     rule_id TEXT NOT NULL,
     severity TEXT NOT NULL CHECK (severity IN ('error', 'warning')),
     file TEXT NOT NULL,
     line INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'accepted', 'rejected', 'resolved')),
-    waived INTEGER NOT NULL DEFAULT 0 CHECK (waived IN (0, 1)),
-    PRIMARY KEY (run_id, rule_id, file, line)
+    waived INTEGER NOT NULL DEFAULT 0 CHECK (waived IN (0, 1))
 );
 
+CREATE INDEX IF NOT EXISTS rule_results_run ON rule_results (run_id);
 CREATE INDEX IF NOT EXISTS rule_results_rule ON rule_results (rule_id, severity);
 CREATE INDEX IF NOT EXISTS rule_results_severity ON rule_results (severity);
+CREATE INDEX IF NOT EXISTS findings_resolved_by_run ON findings (resolved_by_run);
 
-INSERT OR IGNORE INTO rule_results (run_id, rule_id, severity, file, line, status, waived)
-SELECT run_id, rule_id, severity, path, line, status,
+INSERT OR IGNORE INTO rule_results (finding_id, run_id, rule_id, severity, file, line, status, waived)
+SELECT id, run_id, rule_id, severity, path, line, status,
     CASE WHEN status = 'rejected' THEN 1 ELSE 0 END
 FROM findings;
