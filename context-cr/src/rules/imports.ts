@@ -66,17 +66,20 @@ function resolveTypeScript(snapshot: Snapshot, from: string, spec: string): stri
     if (base.startsWith("..")) {
         return undefined;
     }
-    return firstExisting(snapshot, [
-        base,
-        ...TS_CANDIDATES.map((ext) => base + ext),
-        ...TS_CANDIDATES.map((ext) => base + "/index" + ext),
-    ]);
+    const candidates = [base, ...TS_CANDIDATES.map((ext) => base + ext), ...TS_CANDIDATES.map((ext) => base + "/index" + ext)];
+    const jsToTs: Record<string, string> = { ".js": ".ts", ".jsx": ".tsx", ".mjs": ".mts", ".cjs": ".cts" };
+    const replacement = Object.entries(jsToTs).find(([ext]) => base.endsWith(ext));
+    if (replacement) {
+        candidates.push(base.slice(0, -replacement[0].length) + replacement[1]);
+    }
+    return firstExisting(snapshot, candidates);
 }
 
 function resolvePython(snapshot: Snapshot, from: string, spec: string): string | undefined {
     const match = /^(\.+)(.*)$/.exec(spec);
     if (!match) {
-        return undefined;
+        const absolute = spec.replace(/\./g, "/");
+        return firstExisting(snapshot, [absolute + ".py", absolute + "/__init__.py"]);
     }
     let base = posix.dirname(from);
     for (let level = 1; level < match[1].length; level++) {
