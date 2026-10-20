@@ -4,6 +4,7 @@ import type { Deps } from "../http.ts";
 import type { RepoPatch } from "../store/port.ts";
 import { verdictOf } from "./feedback.ts";
 import { handlePrompts } from "./prompts.ts";
+import { handleRules } from "./rules.ts";
 import { handleSession } from "./session.ts";
 import { PROVIDER_NAME, handleProviderPut } from "./providers.ts";
 
@@ -138,6 +139,9 @@ export async function handleAdmin(request: Request, deps: Deps, parts: string[])
     }
     if (resource === "prompts") {
         return handlePrompts(request, deps, rest);
+    }
+    if (method === "GET" && resource === "rules") {
+        return handleRules(request, deps);
     }
     if (resource === "findings" && rest.length === 2) {
         const finding = await deps.store.finding(rest[0]);

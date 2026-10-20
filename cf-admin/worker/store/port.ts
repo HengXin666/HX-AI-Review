@@ -74,6 +74,33 @@ export type FindingRow = {
     resolvedByRun?: string | null;
 };
 
+export type RuleSeverity = "error" | "warning";
+
+/** One (rule, severity) total from the rule dimension table. */
+export type RuleSummary = {
+    ruleId: string;
+    total: number;
+    errors: number;
+    warnings: number;
+    open: number;
+    waived: number;
+    runs: number;
+    files: number;
+};
+
+export type SeveritySummary = { severity: RuleSeverity; total: number; rules: number; waived: number };
+
+/** Totals cover every matching row; byRule keeps the most frequent rules up to the caller's limit. */
+export type RuleAggregate = {
+    total: number;
+    waived: number;
+    byRule: RuleSummary[];
+    bySeverity: SeveritySummary[];
+    topRule: string | null;
+};
+
+export type RuleFilter = { repoId?: number; severity?: RuleSeverity };
+
 export type Suppression = { fingerprint: string; reason: string };
 export type FeedbackInput = { repoId: number; fingerprint: string; verdict: Verdict; reason: string; source: string };
 
@@ -151,6 +178,8 @@ export interface Store {
     recentRuns(limit: number): Promise<(RunRow & { repo: string })[]>;
     openFindings(limit: number): Promise<(FindingRow & { repo: string })[]>;
     finding(id: string): Promise<FindingRow | null>;
+    /** Rule and severity totals over recorded rule results, most frequent rule first. */
+    ruleStats(filter: RuleFilter, limit: number): Promise<RuleAggregate>;
     /** Mark every open finding of the repo with this fingerprint; rejected also feeds suppressions and prompt notes. */
     feedback(input: FeedbackInput): Promise<number>;
     /**

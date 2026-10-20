@@ -11,6 +11,10 @@ import type {
     RepoPatch,
     RepoRow,
     RoundInput,
+    RuleAggregate,
+    RuleFilter,
+    RuleSeverity,
+    RuleSummary,
     RunRow,
     Store,
     Suppression,
@@ -22,6 +26,15 @@ export class FakeStore implements Store {
     providers = new Map<string, ProviderRow>();
     runs: RunRow[] = [];
     findings: FindingRow[] = [];
+    ruleResults: {
+        runId: string;
+        ruleId: string;
+        severity: RuleSeverity;
+        file: string;
+        line: number;
+        status: FindingStatus;
+        waived: boolean;
+    }[] = [];
     supp = new Map<string, Suppression>();
     feedbackLog: FeedbackInput[] = [];
     prompts: PromptVersion[] = [];
@@ -94,6 +107,26 @@ export class FakeStore implements Store {
     async insertRun(run: RunRow, findings: FindingRow[]) {
         this.runs.push(run);
         this.findings.push(...findings);
+        for (const item of findings) {
+            const known = this.ruleResults.some(
+                (row) =>
+                    row.runId === item.runId &&
+                    row.ruleId === item.ruleId &&
+                    row.file === item.path &&
+                    row.line === item.line,
+            );
+            if (!known) {
+                this.ruleResults.push({
+                    runId: item.runId,
+                    ruleId: item.ruleId,
+                    severity: item.severity === "warning" ? "warning" : "error",
+                    file: item.path,
+                    line: item.line,
+                    status: "open",
+                    waived: false,
+                });
+            }
+        }
     }
     async listProviders() {
         return [...this.providers.values()];
@@ -184,6 +217,19 @@ export class FakeStore implements Store {
             (item) => item.repoId === input.repoId && item.fingerprint === input.fingerprint && item.status === "open",
         );
         hits.forEach((item) => (item.status = input.verdict));
+        for (const hit of hits) {
+            for (const row of this.ruleResults) {
+                if (
+                    row.runId === hit.runId &&
+                    row.ruleId === hit.ruleId &&
+                    row.file === hit.path &&
+                    row.line === hit.line
+                ) {
+                    row.status = input.verdict;
+                    row.waived = input.verdict === "rejected" || row.waived;
+                }
+            }
+        }
         if (input.verdict === "rejected") {
             this.supp.set(`${input.repoId}:${input.fingerprint}`, {
                 fingerprint: input.fingerprint,
@@ -209,10 +255,79 @@ export class FakeStore implements Store {
             }
             item.status = "resolved";
             item.resolvedByRun = input.runId;
+            for (const row of this.ruleResults) {
+                if (
+                    row.runId === item.runId &&
+                    row.ruleId === item.ruleId &&
+                    row.file === item.path &&
+                    row.line === item.line
+                ) {
+                    row.status = "resolved";
+                }
+            }
             changed++;
         }
         return changed;
     }
+    async ruleStats(filter: RuleFilter, limit: number): Promise<RuleAggregate> {
+        const repoOf = new Map(this.runs.map((run) => [run.id, run.repoId]));
+        const rows = this.ruleResults.filter(
+            (row) =>
+                (filter.repoId === undefined || repoOf.get(row.runId) === filter.repoId) &&
+                (filter.severity === undefined || row.severity === filter.severity),
+        );
+        const rules = new Map<string, RuleSummary & { runIds: Set<string>; fileNames: Set<string> }>();
+        const severities = new Map<RuleSeverity, { total: number; rules: Set<string>; waived: number }>();
+        for (const row of rows) {
+            const rule = rules.get(row.ruleId) ?? {
+                ruleId: row.ruleId,
+                total: 0,
+                errors: 0,
+                warnings: 0,
+                open: 0,
+                waived: 0,
+                runs: 0,
+                files: 0,
+                runIds: new Set<string>(),
+                fileNames: new Set<string>(),
+            };
+            rule.total += 1;
+            rule.errors += row.severity === "error" ? 1 : 0;
+            rule.warnings += row.severity === "warning" ? 1 : 0;
+            rule.open += row.status === "open" ? 1 : 0;
+            rule.waived += row.waived ? 1 : 0;
+            rule.runIds.add(row.runId);
+            rule.fileNames.add(row.file);
+            rule.runs = rule.runIds.size;
+            rule.files = rule.fileNames.size;
+            rules.set(row.ruleId, rule);
+            const group = severities.get(row.severity) ?? { total: 0, rules: new Set<string>(), waived: 0 };
+            group.total += 1;
+            group.waived += row.waived ? 1 : 0;
+            group.rules.add(row.ruleId);
+            severities.set(row.severity, group);
+        }
+        const byRule = [...rules.values()]
+            .sort((a, b) => b.total - a.total || a.ruleId.localeCompare(b.ruleId))
+            .slice(0, limit)
+            .map(({ runIds: _runIds, fileNames: _fileNames, ...rule }) => rule);
+        const bySeverity = [...severities.entries()]
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([severity, group]) => ({
+                severity,
+                total: group.total,
+                rules: group.rules.size,
+                waived: group.waived,
+            }));
+        return {
+            total: bySeverity.reduce((sum, row) => sum + row.total, 0),
+            waived: bySeverity.reduce((sum, row) => sum + row.waived, 0),
+            byRule,
+            bySeverity,
+            topRule: byRule[0]?.ruleId ?? null,
+        };
+    }
+
     async findingsByStatus(status: FindingStatus, limit: number) {
         return this.findings
             .filter((item) => item.status === status)
