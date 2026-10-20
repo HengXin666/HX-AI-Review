@@ -1,7 +1,6 @@
 import { posix } from "node:path";
 import { ERROR, WARNING } from "../constants.ts";
 import { isExcluded } from "../config.ts";
-import type { Snapshot } from "../l0/snapshot.ts";
 import { API_DIRS, DATA_SOURCE_PACKAGES, DIRECTORY_FILE_LIMIT, ENTRY_FILES } from "./constants.ts";
 import { parseImports, resolveImport, sourceFiles } from "./imports.ts";
 import type { Rule, RuleContext, RuleIssue } from "./types.ts";

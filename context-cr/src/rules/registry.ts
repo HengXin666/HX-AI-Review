@@ -51,7 +51,9 @@ export function runRules(ctx: RuleContext, rules: Rule[] = registeredRules()): F
         } catch (error) {
             const reason = error instanceof Error ? error.message : String(error);
             const message = `${rule.id} crashed: ${reason}`;
-            findings.push(makeFinding(RULE.tool, ERROR, ".", 1, message, rule.id, rule.id, { criteria: rule.criteria }));
+            findings.push(
+                makeFinding(RULE.tool, ERROR, ".", 1, message, rule.id, rule.id, { criteria: rule.criteria }),
+            );
         }
     }
     return sortFindings(findings);

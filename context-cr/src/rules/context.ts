@@ -78,7 +78,10 @@ function checkSkill(ctx: RuleContext, file: string): RuleIssue[] {
             anchor: "name",
         });
     }
-    const description = /^description:\s*(.+)$/m.exec(head[1])?.[1].replace(/^["']|["']$/g, "").trim();
+    const description = /^description:\s*(.+)$/m
+        .exec(head[1])?.[1]
+        .replace(/^["']|["']$/g, "")
+        .trim();
     if (!description) {
         issues.push({ path: file, line: 1, message: "Front matter description is empty", anchor: "description" });
     }

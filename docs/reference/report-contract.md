@@ -67,3 +67,16 @@ Markdown 版本与 GitHub 评论遵守同一展示规则: 问题合计超过 10 
 ## 排序与稳定性
 
 按 path, line, ruleId, fingerprint 排序, 不含时间戳与随机 ID (除 durationMs). Markdown 中转义控制字符.
+
+## 规则维度 (2026-10-21)
+
+规则引擎产出的事件在既有 finding 之上追加两个字段, 老字段不变:
+
+```json
+{ "ruleId": "ARCH-001", "severity": "error", "waived": false, "waiverReason": "" }
+```
+
+- `ruleId`: 规则命名空间 ARCH / STYLE / DOC / CTX / CI / META 加三位序号, 唯一事实源是 `context-cr/src/rules/registry.ts`, 不在别处拼字符串。
+- `severity`: `error` 拦截 (退出码非零), `warning` 只汇总待 review。豁免后的条目进 `waived`, 不计入 counts。
+- 规则表见 [rules.md](rules.md); 豁免登记格式与生效规则见该文档的豁免一节。
+- 聚合口径: CF 侧按 `ruleId` 与 `severity` 分组统计, 字段名与本文一致。

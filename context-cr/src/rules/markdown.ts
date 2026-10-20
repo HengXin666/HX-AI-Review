@@ -15,7 +15,8 @@ export function withoutFences(text: string): string {
                 return "";
             }
             if (open) {
-                const closes = marker && marker[0] === open[0] && marker.length >= open.length && line.trim() === marker;
+                const closes =
+                    marker && marker[0] === open[0] && marker.length >= open.length && line.trim() === marker;
                 if (closes) {
                     open = undefined;
                 }

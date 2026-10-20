@@ -104,13 +104,7 @@ export function renderRulesMarkdown(report: RulesReport): string {
 /** Warnings only, as one checklist file a human or an agent reviews after the blocking gate passes. */
 export function renderPendingReview(report: RulesReport): string {
     const warnings = report.findings.filter((item) => item.severity === WARNING);
-    const lines = [
-        "# Rules warnings pending review",
-        "",
-        rangeLine(report),
-        `Warnings: ${warnings.length}`,
-        "",
-    ];
+    const lines = ["# Rules warnings pending review", "", rangeLine(report), `Warnings: ${warnings.length}`, ""];
     if (warnings.length === 0) {
         lines.push("No warnings.", "");
         return lines.join("\n");
