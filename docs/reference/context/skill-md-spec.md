@@ -94,12 +94,14 @@ metadata:
 | frontmatter | 10 行 | 常驻注入, 每个技能都计费 |
 | 正文 | 150 行 | 加载时注入, 与并发加载数相乘 |
 | 单文件 | 500 行 | 仓库通用上限 |
-| 注入预算 | 所有 frontmatter + 最大的 concurrentSkills 个正文 少于 65536 字节 | HC-BUDGET (Error) |
+| 注入预算 | 每个目标目录的注入总量不超过 65536 字节 (组成见下) | HC-BUDGET (Error) |
 
 - 超 150 行: 保留 何时用 / 输入 / 步骤 / 判据, 细节移 references/.
 - 超 500 行: 必须拆分, 不允许靠压缩行宽规避.
 - 行数按换行符计数, 末尾换行不计.
 - 正文行数 = 总行数 - frontmatter 行数.
+- 注入总量按每个目标目录分别计算: 所有技能 frontmatter + 最大的 concurrentSkills 个正文 + 该目录的祖先 AGENTS.md 链; 被 exclude 的路径不计入.
+- 注入总量等于 65536 字节通过, 超过才报 Error; 判据与 HC-BUDGET 实现一致, 详见 [validation.md](validation.md).
 
 ## 真实例子: hx-agent-code
 
@@ -153,7 +155,7 @@ metadata:
 - [ ] name 与目录名一致, 小写 kebab
 - [ ] description 有做什么, 触发词, 不触发
 - [ ] 五节齐全
-- [ ] 正文少于 150 行, 单文件少于 500 行
+- [ ] 正文少于 150 行, 单文件少于 500 行, 注入总量不超过 65536 字节
 - [ ] 所有引用可达, 无 ./ 或 ../ 前缀
 - [ ] 细节在 references/, 正文只留路由
 - [ ] 判据可运行, 至少一条给出命令与期望输出
