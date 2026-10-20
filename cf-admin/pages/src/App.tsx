@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button, PageHeader } from "@hx/ui";
 import { ApiError, api } from "./api.ts";
-import type { Overview, ProviderInput, Repo, RepoInput } from "./api.ts";
+import type { Overview, ProviderInput, Repo, RepoInput, RuleStats } from "./api.ts";
 import { Activity } from "./sections/Activity.tsx";
 import { Deployment } from "./sections/Deployment.tsx";
 import { Login } from "./sections/Login.tsx";
 import { Prompts } from "./sections/Prompts.tsx";
 import { Providers } from "./sections/Providers.tsx";
 import { Repos } from "./sections/Repos.tsx";
+import { Rules } from "./sections/Rules.tsx";
 
 export function App() {
     const [data, setData] = useState<Overview | null>(null);
+    const [rules, setRules] = useState<RuleStats | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [phase, setPhase] = useState<"loading" | "login" | "ready">("loading");
     const fail = (err: Error) => {
@@ -21,9 +23,10 @@ export function App() {
         }
     };
     const reload = useCallback(() => {
-        api.overview().then((next) => {
+        Promise.all([api.overview(), api.rules().catch(() => null)]).then(([next, stats]) => {
             setError(null);
             setData(next);
+            setRules(stats);
             setPhase("ready");
         }, fail);
     }, []);
@@ -96,6 +99,7 @@ export function App() {
             <Repos repos={data.repos} onChange={updateRepo} onCreate={createRepo} onRotate={rotate} />
             <Providers providers={data.providers} onSave={saveProvider} />
             <Prompts prompts={data.prompts ?? []} notes={data.notes ?? []} onDone={reload} onError={fail} />
+            <Rules stats={rules} />
             <Activity findings={data.findings} resolved={data.resolved ?? []} runs={data.runs} onVerdict={verdict} />
         </main>
     );
