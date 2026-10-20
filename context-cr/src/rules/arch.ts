@@ -32,16 +32,16 @@ function edges(ctx: RuleContext): Edge[] {
 function implRoots(ctx: RuleContext): string[] {
     const roots = new Set<string>();
     for (const file of sourceFiles(ctx.snapshot, (path) => isExcluded(ctx.config, path))) {
-        const index = file.lastIndexOf("/impl/");
-        if (index > 0) {
-            roots.add(file.slice(0, index));
+        const index = file.indexOf("/impl/");
+        if (index >= 0) {
+            roots.add(file.slice(0, index) || ".");
         }
     }
     return [...roots].sort();
 }
 
 function moduleRootOf(path: string, roots: string[]): string | undefined {
-    const hits = roots.filter((root) => path === root || path.startsWith(root + "/"));
+    const hits = roots.filter((root) => root === "." || path === root || path.startsWith(root + "/"));
     hits.sort((a, b) => b.length - a.length);
     return hits[0];
 }
@@ -62,15 +62,16 @@ function checkImplLayering(ctx: RuleContext): RuleIssue[] {
         }
     }
     for (const edge of edges(ctx)) {
-        const index = edge.target.lastIndexOf("/impl");
+        const targetParts = edge.target.split("/");
+        const index = targetParts.lastIndexOf("impl");
         if (index < 0) {
             continue;
         }
-        const after = edge.target.slice(index + "/impl".length);
+        const after = targetParts.slice(index + 1).join("/");
         if (after !== "" && !after.startsWith("/")) {
             continue;
         }
-        const targetRoot = edge.target.slice(0, index);
+        const targetRoot = targetParts.slice(0, index).join("/") || ".";
         const importerRoot = moduleRootOf(edge.file, roots) ?? posix.dirname(edge.file);
         if (importerRoot === targetRoot) {
             continue;
@@ -252,18 +253,25 @@ function isDataSource(spec: string): boolean {
 }
 
 function isApiLayer(path: string, roots: string[]): boolean {
-    if (path.includes("/impl/")) {
+    if (path.split("/").includes("impl")) {
         return false;
     }
-    const segments = posix.dirname(path).split("/");
-    if (segments.some((segment) => API_DIRS.includes(segment))) {
+    const root = moduleRootOf(path, roots);
+    if (root === undefined) {
+        return false;
+    }
+    const relative = posix.relative(root, posix.dirname(path));
+    if (relative && relative.split("/").some((segment) => API_DIRS.includes(segment))) {
         return true;
     }
-    const root = moduleRootOf(path, roots);
-    return root !== undefined && posix.dirname(path) === root && ENTRY_FILES.includes(posix.basename(path));
+    return posix.dirname(path) === root && ENTRY_FILES.includes(posix.basename(path));
 }
 
-const SQL = /["'`][^"'`]*\b(SELECT|INSERT INTO|UPDATE|DELETE FROM)\b/;
+const SQL = /["'`][^"'`]*\b(SELECT|INSERT INTO|UPDATE|DELETE FROM)\b/gs;
+
+function lineOfText(text: string, index: number): number {
+    return text.slice(0, index).split("\n").length;
+}
 
 /** ARCH-004: the API layer imports no data-source package and holds no SQL. */
 function checkDataSourceSeparation(ctx: RuleContext): RuleIssue[] {
@@ -285,16 +293,14 @@ function checkDataSourceSeparation(ctx: RuleContext): RuleIssue[] {
                 evidence: "move the concrete source behind impl/",
             });
         }
-        text.split(/\r?\n/).forEach((line, index) => {
-            if (SQL.test(line)) {
-                issues.push({
-                    path: file,
-                    line: index + 1,
-                    message: "API layer holds SQL instead of calling a data source interface",
-                    evidence: line.trim().slice(0, 80),
-                });
-            }
-        });
+        for (const match of text.matchAll(SQL)) {
+            issues.push({
+                path: file,
+                line: lineOfText(text, match.index ?? 0),
+                message: "API layer holds SQL instead of calling a data source interface",
+                evidence: match[0].trim().slice(0, 80),
+            });
+        }
     }
     return issues;
 }
