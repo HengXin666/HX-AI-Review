@@ -212,3 +212,102 @@ test("a later pull request run resolves missing L0 findings but not unchecked CX
     assert.equal(notes.length, 1);
     assert.equal(notes[0].reason, "still true");
 });
+
+test("same-line hits of one rule keep separate rows and feedback touches only its own finding", async () => {
+    const { db, store, repo } = await seeded();
+    const hit = {
+        runId: "r1",
+        repoId: repo.id,
+        ruleId: "HC-CONTEXT",
+        severity: "warning",
+        path: "src/index.ts",
+        line: 7,
+        message: "m",
+        evidence: "e",
+        patchKey: null,
+        status: "open" as const,
+    };
+    await store.insertRun(
+        {
+            id: "r1",
+            repoId: repo.id,
+            sha: "r1",
+            baseSha: "base",
+            event: "pull_request",
+            prNumber: 9,
+            status: "warned",
+            l0Only: false,
+            errors: 0,
+            warnings: 2,
+            inputTokens: 0,
+            outputTokens: 0,
+            costUsd: 0,
+            durationMs: 1,
+            patchBranch: null,
+            createdAt: "2026-10-11T00:00:00.000Z",
+        },
+        [
+            { ...hit, id: "r1-0", fingerprint: "fp-a" },
+            { ...hit, id: "r1-1", fingerprint: "fp-b" },
+        ],
+    );
+    const before = await store.ruleStats({}, 10);
+    assert.equal(before.total, 2);
+    assert.equal(before.byRule[0].files, 1);
+    await store.feedback({
+        repoId: repo.id,
+        fingerprint: "fp-a",
+        verdict: "rejected",
+        reason: "intended",
+        source: "test",
+    });
+    const rows = (
+        db.prepare("SELECT finding_id, status, waived FROM rule_results ORDER BY finding_id").all() as Row[]
+    ).map((row) => ({ finding_id: row.finding_id, status: row.status, waived: row.waived }));
+    assert.deepEqual(rows, [
+        { finding_id: "r1-0", status: "rejected", waived: 1 },
+        { finding_id: "r1-1", status: "open", waived: 0 },
+    ]);
+});
+
+test("the same file path in two repositories counts as two files", async () => {
+    const { store, repo } = await seeded();
+    const other = (await store.createRepo("o/s", "hash2", {}))!;
+    const run = (id: string, repoId: number) => ({
+        id,
+        repoId,
+        sha: id,
+        baseSha: "base",
+        event: "push",
+        prNumber: null,
+        status: "warned",
+        l0Only: false,
+        errors: 0,
+        warnings: 1,
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0,
+        durationMs: 1,
+        patchBranch: null,
+        createdAt: "2026-10-11T00:00:00.000Z",
+    });
+    const hit = (id: string, runId: string, repoId: number) => ({
+        id,
+        runId,
+        repoId,
+        fingerprint: "fp",
+        ruleId: "HC-CONTEXT",
+        severity: "warning",
+        path: "src/index.ts",
+        line: 1,
+        message: "m",
+        evidence: "e",
+        patchKey: null,
+        status: "open" as const,
+    });
+    await store.insertRun(run("r1", repo.id), [hit("r1-0", "r1", repo.id)]);
+    await store.insertRun(run("r2", other.id), [hit("r2-0", "r2", other.id)]);
+    const stats = await store.ruleStats({}, 10);
+    assert.equal(stats.total, 2);
+    assert.equal(stats.byRule[0].files, 2);
+});

@@ -27,6 +27,7 @@ export class FakeStore implements Store {
     runs: RunRow[] = [];
     findings: FindingRow[] = [];
     ruleResults: {
+        findingId: string;
         runId: string;
         ruleId: string;
         severity: RuleSeverity;
@@ -108,24 +109,16 @@ export class FakeStore implements Store {
         this.runs.push(run);
         this.findings.push(...findings);
         for (const item of findings) {
-            const known = this.ruleResults.some(
-                (row) =>
-                    row.runId === item.runId &&
-                    row.ruleId === item.ruleId &&
-                    row.file === item.path &&
-                    row.line === item.line,
-            );
-            if (!known) {
-                this.ruleResults.push({
-                    runId: item.runId,
-                    ruleId: item.ruleId,
-                    severity: item.severity === "warning" ? "warning" : "error",
-                    file: item.path,
-                    line: item.line,
-                    status: "open",
-                    waived: false,
-                });
-            }
+            this.ruleResults.push({
+                findingId: item.id,
+                runId: item.runId,
+                ruleId: item.ruleId,
+                severity: item.severity === "warning" ? "warning" : "error",
+                file: item.path,
+                line: item.line,
+                status: "open",
+                waived: false,
+            });
         }
     }
     async listProviders() {
@@ -219,12 +212,7 @@ export class FakeStore implements Store {
         hits.forEach((item) => (item.status = input.verdict));
         for (const hit of hits) {
             for (const row of this.ruleResults) {
-                if (
-                    row.runId === hit.runId &&
-                    row.ruleId === hit.ruleId &&
-                    row.file === hit.path &&
-                    row.line === hit.line
-                ) {
+                if (row.findingId === hit.id) {
                     row.status = input.verdict;
                     row.waived = input.verdict === "rejected" || row.waived;
                 }
@@ -256,12 +244,7 @@ export class FakeStore implements Store {
             item.status = "resolved";
             item.resolvedByRun = input.runId;
             for (const row of this.ruleResults) {
-                if (
-                    row.runId === item.runId &&
-                    row.ruleId === item.ruleId &&
-                    row.file === item.path &&
-                    row.line === item.line
-                ) {
+                if (row.findingId === item.id) {
                     row.status = "resolved";
                 }
             }
@@ -279,6 +262,7 @@ export class FakeStore implements Store {
         const rules = new Map<string, RuleSummary & { runIds: Set<string>; fileNames: Set<string> }>();
         const severities = new Map<RuleSeverity, { total: number; rules: Set<string>; waived: number }>();
         for (const row of rows) {
+            const repoId = repoOf.get(row.runId);
             const rule = rules.get(row.ruleId) ?? {
                 ruleId: row.ruleId,
                 total: 0,
@@ -297,7 +281,7 @@ export class FakeStore implements Store {
             rule.open += row.status === "open" ? 1 : 0;
             rule.waived += row.waived ? 1 : 0;
             rule.runIds.add(row.runId);
-            rule.fileNames.add(row.file);
+            rule.fileNames.add(`${repoId}:${row.file}`);
             rule.runs = rule.runIds.size;
             rule.files = rule.fileNames.size;
             rules.set(row.ruleId, rule);

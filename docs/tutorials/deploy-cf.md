@@ -34,10 +34,10 @@ Settings -> Secrets and variables -> Actions.
 
 Actions -> deploy-cf -> Run workflow:
 
-- `target`: `all` (默认), 或只部署 `migrations`, `worker`, `pages`. 只有 `all`, `migrations`, `worker` 会检查并在缺失时创建 D1; `pages` 只创建/部署 Pages 项目.
+- `target`: `all` (默认), 或只部署 `migrations`, `worker`, `pages`. `all`, `migrations`, `worker` 都会先检查并在缺失时创建 D1 再应用迁移; 单独部署 `worker` 不会跳过迁移. `pages` 只创建/部署 Pages 项目.
 - `provider-key-name`: 填 Worker secret 名 (例如 `PROVIDER_DEFAULT_KEY`) 时, 用 `HX_PROVIDER_API_KEY` 设置该 secret; 只在 `target` 为 `all` 或 `worker` 时有效. 填了名字但 `HX_PROVIDER_API_KEY` 为空, 或 target 不部署 Worker, 部署直接失败, 不会静默跳过. 留空则不动 secret.
 
-部署顺序: 先跑 typecheck 与测试; 创建或复用 Pages 项目并读取其实际域名 (写入 Worker 的 OVERVIEW_URL); 再创建或复用 D1, 生成带真实 database_id 与部署信息 (commit, 时间, 运行链接) 的 wrangler 配置; 应用 D1 迁移; 创建或复用 R2 bucket, 部署 Worker; 构建并部署 Pages. 运行摘要 (Summary) 会列出 Worker 地址 (即业务仓库的 `HX_CTX_ENDPOINT`) 与总览页地址.
+部署顺序: 先跑 typecheck 与测试; 创建或复用 Pages 项目并读取其实际域名 (写入 Worker 的 OVERVIEW_URL); 再创建或复用 D1, 生成带真实 database_id 与部署信息 (commit, 时间, 运行链接) 的 wrangler 配置; 应用 D1 迁移; 创建或复用 R2 bucket, 部署 Worker, 再幂等重放一次 rule_results 回填 (补上迁移完成到新 Worker 生效之间旧 Worker 写入的命中); 构建并部署 Pages. 运行摘要 (Summary) 会列出 Worker 地址 (即业务仓库的 `HX_CTX_ENDPOINT`) 与总览页地址.
 
 ## 4. 配置 Access (首次部署后做一次)
 
