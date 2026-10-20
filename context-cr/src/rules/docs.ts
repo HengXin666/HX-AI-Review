@@ -44,7 +44,7 @@ function checkDocLinks(ctx: RuleContext): RuleIssue[] {
         if (!isDoc(file) || isExcluded(ctx.config, file)) {
             continue;
         }
-        const text = withoutFences(ctx.snapshot.read(file) ?? "");
+        const text = withoutFences(ctx.snapshot.read(file) ?? "").replace(/`[^`]*`/g, "");
         for (const match of text.matchAll(LINK)) {
             const raw = match[1].replace(/^<|>$/g, "");
             const line = lineOf(text, match.index);

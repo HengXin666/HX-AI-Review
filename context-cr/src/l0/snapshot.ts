@@ -23,7 +23,7 @@ function build(files: string[], read: (path: string) => string | undefined): Sna
     return {
         files: [...files].sort(),
         read: (path) => (set.has(path) ? read(path) : undefined),
-        exists: (path) => set.has(path) || dirs.has(path.replace(/\/$/, "")),
+        exists: (path) => path === "." || path === "" || set.has(path) || dirs.has(path.replace(/\/$/, "")),
     };
 }
 
