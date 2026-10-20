@@ -23,12 +23,15 @@ export function App() {
         }
     };
     const reload = useCallback(() => {
-        Promise.all([api.overview(), api.rules().catch(() => null)]).then(([next, stats]) => {
-            setError(null);
-            setData(next);
-            setRules(stats);
-            setPhase("ready");
-        }, fail);
+        api.overview().then(
+            (next) => {
+                setError(null);
+                setData(next);
+                setPhase("ready");
+            },
+            fail,
+        );
+        api.rules().then(setRules, () => setRules(null));
     }, []);
     useEffect(reload, [reload]);
 
