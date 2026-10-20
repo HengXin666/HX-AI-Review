@@ -1,5 +1,16 @@
 // Row mappers from D1 snake_case columns to the port types.
-import type { FindingRow, FindingStatus, PromptNote, PromptVersion, ProviderRow, RepoRow, RunRow } from "./port.ts";
+import type {
+    FindingRow,
+    FindingStatus,
+    PromptNote,
+    PromptVersion,
+    ProviderRow,
+    RepoRow,
+    RuleSeverity,
+    RuleSummary,
+    RunRow,
+    SeveritySummary,
+} from "./port.ts";
 
 export type Row = Record<string, unknown>;
 
@@ -80,6 +91,35 @@ const STATUSES = new Set<FindingStatus>(["open", "accepted", "rejected", "resolv
 function statusOf(value: unknown): FindingStatus {
     const status = String(value);
     return STATUSES.has(status as FindingStatus) ? (status as FindingStatus) : "open";
+}
+
+const SEVERITIES = new Set<RuleSeverity>(["error", "warning"]);
+
+function severityOf(value: unknown): RuleSeverity {
+    const severity = String(value);
+    return SEVERITIES.has(severity as RuleSeverity) ? (severity as RuleSeverity) : "error";
+}
+
+export function ruleSummary(row: Row): RuleSummary {
+    return {
+        ruleId: String(row.rule_id),
+        total: Number(row.total),
+        errors: Number(row.errors),
+        warnings: Number(row.warnings),
+        open: Number(row.open_count),
+        waived: Number(row.waived),
+        runs: Number(row.runs),
+        files: Number(row.files),
+    };
+}
+
+export function severitySummary(row: Row): SeveritySummary {
+    return {
+        severity: severityOf(row.severity),
+        total: Number(row.total),
+        rules: Number(row.rules),
+        waived: Number(row.waived),
+    };
 }
 
 export function promptVersion(row: Row): PromptVersion {

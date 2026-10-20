@@ -9,6 +9,7 @@ const PACKAGE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 const GENERATED_DIR = join(PACKAGE_DIR, ".deploy");
 const PAGES_DIR = join(PACKAGE_DIR, "pages");
 const COMPATIBILITY_DATE = "2026-10-01";
+const RULE_BACKFILL = join(PACKAGE_DIR, "migrations", "0004_rule_results.sql");
 const TARGETS = ["all", "migrations", "worker", "pages"] as const;
 
 type Target = (typeof TARGETS)[number];
@@ -220,15 +221,15 @@ async function main(): Promise<void> {
         const databaseId = ensureDatabase(s.database);
         const config = writeWorkerConfig(s, databaseId);
         report.push(`- D1: ${s.database} (${databaseId})`);
-        if (all || s.target === "migrations") {
-            wrangler(["d1", "migrations", "apply", s.database, "--remote", "--config", config]);
-            report.push("- migrations: applied");
-        }
+        wrangler(["d1", "migrations", "apply", s.database, "--remote", "--config", config]);
+        report.push("- migrations: applied");
         if (worker) {
             tryWrangler(["r2", "bucket", "create", s.bucket]);
             const out = wrangler(["deploy", "--config", config]);
             const url = /https:\/\/[\w.-]+\.workers\.dev/.exec(out)?.[0] ?? "(see wrangler output)";
             report.push(`- Worker: ${s.worker} at ${url} (use as HX_CTX_ENDPOINT)`);
+            wrangler(["d1", "execute", s.database, "--remote", "--config", config, "--file", RULE_BACKFILL]);
+            report.push("- rule_results: backfill replayed after the Worker rollout");
             if (s.providerKeyName) {
                 wrangler(["secret", "put", s.providerKeyName, "--config", config], { input: s.providerKeyValue });
                 report.push(`- secret ${s.providerKeyName}: updated`);

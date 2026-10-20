@@ -13,6 +13,7 @@ Cloudflare 侧. Worker 入口 [cf-admin/worker/index.ts](../../cf-admin/worker/i
 | `POST /api/session` | 无 (登录本身) | 用 Worker 变量里的用户名密码换 hxctx_admin cookie; 未配置凭证时 403 |
 | `DELETE /api/session` | 无 | 清除会话 cookie |
 | `GET /api/prompts`, `POST /api/prompts`, `POST /api/prompts/fold` | Access 或会话 | 列出, 发布或把未折叠的驳回笔记折进下一版附录 |
+| `GET /api/rules` | Access 或会话 cookie | 按规则 id 与严重级聚合 rule_results; `repo`, `severity`, `limit` 三个查询参数分别限定仓库, 等级与返回条数 |
 | `GET /api/status` | Cloudflare Access | 部署的 commit, 时间, 运行链接, Access 是否配置 |
 | `POST /api/repos` | Access | 登记仓库, 返回一次性明文 token |
 | `PATCH /api/repos/{owner}/{repo}` | Access | 开关, 模式 (full/l0), provider, 模型分级, 月预算 |
@@ -46,7 +47,7 @@ Cloudflare 侧. Worker 入口 [cf-admin/worker/index.ts](../../cf-admin/worker/i
 
 ## 数据
 
-D1 结构见 [0001_init.sql](../../cf-admin/migrations/0001_init.sql), 预算预留列见 [0002_budget_reservation.sql](../../cf-admin/migrations/0002_budget_reservation.sql), 多轮状态与提示词见 [0003_rounds_prompts.sql](../../cf-admin/migrations/0003_rounds_prompts.sql).
+D1 结构见 [0001_init.sql](../../cf-admin/migrations/0001_init.sql), 预算预留列见 [0002_budget_reservation.sql](../../cf-admin/migrations/0002_budget_reservation.sql), 多轮状态与提示词见 [0003_rounds_prompts.sql](../../cf-admin/migrations/0003_rounds_prompts.sql), 规则维度见 [0004_rule_results.sql](../../cf-admin/migrations/0004_rule_results.sql).
 
 | 表 | 内容 |
 |---|---|
@@ -58,6 +59,7 @@ D1 结构见 [0001_init.sql](../../cf-admin/migrations/0001_init.sql), 预算预
 | suppressions | 驳回的指纹与原因, 下一次 /init 下发给 finder |
 | prompt_versions | 操作者附录: role finder 或 verifier, 版本号, 正文, 说明, 是否当前生效. 追加到 runner 内置系统提示, 不替换 |
 | prompt_notes | 驳回原因, 尚未折进附录时 folded_into 为空 |
+| rule_results | 每个运行的每个规则命中一行: run_id, rule_id, severity, file, line, status, waived; 与 findings 同批写入, 迁移时从 findings 回填 |
 
 R2 键: `runs/<owner>/<repo>/<runId>/report.md`, `report.json`, `sessions.jsonl`, `patches/<fingerprint>.diff`.
 
@@ -78,6 +80,14 @@ R2 键: `runs/<owner>/<repo>/<runId>/report.md`, `report.json`, `sessions.jsonl`
 provider 名只允许字母, 数字, `.`, `_`, `-`; 新建 provider 必须显式给出输入/输出单价 (免费填 0), 更新时省略的字段 (包括 API 协议) 保留原值; 未知协议, 负数或非整数的 token 上限返回 400. 仓库的 enabled, mode, provider, 模型名, budgetUsd 同理: 省略不改, 出现但类型或取值不对返回 400, 不会被静默忽略. `POST /runs` 同样严格: complete, l0Only 必须是布尔, usage 各项与 durationMs 必须是非负数且为整数 (usage.cost 例外, 单价按百万 token 计, 允许小数), prNumber 与 finding 行号必须是正整数, 字符串字段必须是字符串, 否则 400. 显式 `null` 一律按非法值处理而不是省略: 只有字段缺失才表示不提供. patches 里缺字段或类型不对的条目同样 400, 只有字段合法且 `applies: false` 的补丁才被跳过. status 一律由服务端推导 (failed, incomplete, warned, passed), runner 只能在没有发现时标 skipped; runner 发 incomplete 时同样不推进 last_sha.
 
 `POST /spend` 只接受 `budgetClaim`, 把该预留标记为已开始花费, 供接管时判断是否结算. 重复标记本运行仍持有的预留是 no-op; 预留已被更新的运行接管时返回 409, 该运行必须停止而不是继续花费, 否则同一次运行会被结算一次, 又按真实花费记一次. 迟到的 `/runs` 上报真实花费时, `settled_claims` 里该预留的额度会被真实花费替换而不是叠加, 所以被接管后仍然跑完的运行不会让当月预算被重复扣减. `/init` 的 `limits.maxRunUsd` 是本次运行的可用额度 (无上限时为 null), runner 达到它就不再开新的模型会话; 有上限的仓库同时按上节的预留规则独占本次额度. 只下发 L0 时附带 `l0Cause`: disabled, mode (主动选择), budget, config (区间未审, runner 报 incomplete). 旧数据里 contextWindow 或 maxTokens 不是正整数的 provider 也按 config 降级, 不会把非法上限发给模型. 同名仓库 (大小写不敏感) 重复登记返回 409, 并发创建撞唯一约束同样映射为 409.
+
+## 规则维度与聚合
+
+`rule_results` 与 findings 同批写入, 每次运行每个规则命中一行. 人工驳回把对应行置 `rejected` 且 `waived = 1`; 同一 PR 的后续提交未再报告时置 `resolved`, 与 findings 的多轮语义一致. `waived` 只表示已判定不处理, 不影响命中计数, 所以聚合能回答"哪条规则最常触发".
+
+`GET /api/rules` 按 rule_id 与 severity 聚合: `total` 与 `waived` 覆盖全部命中, `byRule` 按命中数降序 (最多 `limit` 条), `bySeverity` 给出每个等级的命中数与规则数, `topRule` 是最常触发的规则 id. `repo` 未登记时返回 404 而不是空视图, `severity` 与 `limit` 非法时返回 400. 规则 id 沿用统一命名空间: ARCH, STYLE, DOC, CTX, CI, TEST, META 前缀; 旧数据里的其他 id (如 CX-AI) 照常聚合, 不改写.
+
+迁移文件可重复执行: 建表与索引用 `IF NOT EXISTS`, 回填用 `INSERT OR IGNORE`, 所以重新执行既不会报错也不会重复插入.
 
 ## 分层
 

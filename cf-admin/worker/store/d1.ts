@@ -1,5 +1,5 @@
 // Real adapter: D1 for rows, R2 for reports, sessions and patches.
-import { finding, promptNote, promptVersion, provider, repo, run } from "./rows.ts";
+import { finding, promptNote, promptVersion, provider, repo, ruleSummary, run, severitySummary } from "./rows.ts";
 import type { Row } from "./rows.ts";
 import type {
     BlobStore,
@@ -11,6 +11,8 @@ import type {
     ProviderRow,
     RepoPatch,
     RoundInput,
+    RuleAggregate,
+    RuleFilter,
     RunRow,
     Store,
     Suppression,
@@ -135,6 +137,8 @@ export class D1Store implements Store {
             input_tokens, output_tokens, cost_usd, duration_ms, patch_branch, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
         const findingSql = `INSERT INTO findings (id, run_id, repo_id, fingerprint, rule_id, severity, path, line, message, evidence,
             patch_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`;
+        const ruleSql = `INSERT INTO rule_results (finding_id, run_id, rule_id, severity, file, line, status, waived)
+            VALUES (?, ?, ?, ?, ?, ?, 'open', 0)`;
         await this.db.batch([
             this.db
                 .prepare(runSql)
@@ -173,6 +177,7 @@ export class D1Store implements Store {
                         f.patchKey,
                     ),
             ),
+            ...findings.map((f) => this.db.prepare(ruleSql).bind(f.id, f.runId, f.ruleId, f.severity, f.path, f.line)),
         ]);
     }
 
@@ -285,6 +290,13 @@ export class D1Store implements Store {
                 .prepare("UPDATE findings SET status = ? WHERE repo_id = ? AND fingerprint = ? AND status = 'open'")
                 .bind(input.verdict, input.repoId, input.fingerprint),
             this.db
+                .prepare(
+                    `UPDATE rule_results SET status = ?1, waived = CASE WHEN ?1 = 'rejected' THEN 1 ELSE waived END
+                WHERE finding_id IN (SELECT id FROM findings
+                    WHERE repo_id = ?2 AND fingerprint = ?3 AND status = ?1)`,
+                )
+                .bind(input.verdict, input.repoId, input.fingerprint),
+            this.db
                 .prepare("INSERT INTO feedback (repo_id, fingerprint, verdict, reason, source) VALUES (?, ?, ?, ?, ?)")
                 .bind(input.repoId, input.fingerprint, input.verdict, input.reason, input.source),
         ];
@@ -312,18 +324,66 @@ export class D1Store implements Store {
             AND run_id IN (SELECT id FROM runs WHERE repo_id = ?2 AND pr_number = ?3)
             AND fingerprint NOT IN (SELECT value FROM json_each(?5))
             AND (?6 = 1 OR rule_id != 'CX-AI')`;
-        const result = await this.db
-            .prepare(sql)
-            .bind(
-                input.runId,
-                input.repoId,
-                input.prNumber,
-                input.runId,
-                JSON.stringify(input.seen),
-                input.aiRechecked ? 1 : 0,
+        const rules = this.db
+            .prepare(
+                `UPDATE rule_results SET status = 'resolved'
+            WHERE finding_id IN (SELECT id FROM findings WHERE resolved_by_run = ?1)`,
             )
-            .run();
+            .bind(input.runId);
+        const [result] = await this.db.batch([
+            this.db
+                .prepare(sql)
+                .bind(
+                    input.runId,
+                    input.repoId,
+                    input.prNumber,
+                    input.runId,
+                    JSON.stringify(input.seen),
+                    input.aiRechecked ? 1 : 0,
+                ),
+            rules,
+        ]);
         return result.meta.changes;
+    }
+
+    async ruleStats(filter: RuleFilter, limit: number): Promise<RuleAggregate> {
+        const from = "FROM rule_results JOIN runs ON runs.id = rule_results.run_id";
+        const where: string[] = [];
+        const args: unknown[] = [];
+        if (filter.repoId !== undefined) {
+            where.push("runs.repo_id = ?");
+            args.push(filter.repoId);
+        }
+        if (filter.severity) {
+            where.push("rule_results.severity = ?");
+            args.push(filter.severity);
+        }
+        const clause = where.length ? " WHERE " + where.join(" AND ") : "";
+        const byRuleSql = `SELECT rule_results.rule_id AS rule_id, COUNT(*) AS total,
+            SUM(CASE WHEN rule_results.severity = 'error' THEN 1 ELSE 0 END) AS errors,
+            SUM(CASE WHEN rule_results.severity = 'warning' THEN 1 ELSE 0 END) AS warnings,
+            SUM(CASE WHEN rule_results.status = 'open' THEN 1 ELSE 0 END) AS open_count,
+            SUM(CASE WHEN rule_results.waived = 1 THEN 1 ELSE 0 END) AS waived,
+            COUNT(DISTINCT rule_results.run_id) AS runs,
+            COUNT(DISTINCT runs.repo_id || '/' || rule_results.file) AS files
+            ${from}${clause} GROUP BY rule_results.rule_id ORDER BY total DESC, rule_results.rule_id LIMIT ?`;
+        const bySeveritySql = `SELECT rule_results.severity AS severity, COUNT(*) AS total,
+            COUNT(DISTINCT rule_results.rule_id) AS rules,
+            SUM(CASE WHEN rule_results.waived = 1 THEN 1 ELSE 0 END) AS waived
+            ${from}${clause} GROUP BY rule_results.severity ORDER BY rule_results.severity`;
+        const [rules, severities] = await Promise.all([
+            this.all(byRuleSql, ...args, limit),
+            this.all(bySeveritySql, ...args),
+        ]);
+        const byRule = rules.map(ruleSummary);
+        const bySeverity = severities.map(severitySummary);
+        return {
+            total: bySeverity.reduce((sum, row) => sum + row.total, 0),
+            waived: bySeverity.reduce((sum, row) => sum + row.waived, 0),
+            byRule,
+            bySeverity,
+            topRule: byRule[0]?.ruleId ?? null,
+        };
     }
 
     async findingsByStatus(status: FindingStatus, limit: number) {

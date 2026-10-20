@@ -39,6 +39,30 @@ export type Finding = {
     fingerprint?: string;
 };
 
+export type RuleSummary = {
+    ruleId: string;
+    total: number;
+    errors: number;
+    warnings: number;
+    open: number;
+    waived: number;
+    runs: number;
+    files: number;
+};
+
+export type SeveritySummary = { severity: "error" | "warning"; total: number; rules: number; waived: number };
+
+export type RuleStats = {
+    repo: string | null;
+    severity: "error" | "warning" | null;
+    limit: number;
+    total: number;
+    waived: number;
+    byRule: RuleSummary[];
+    bySeverity: SeveritySummary[];
+    topRule: string | null;
+};
+
 export type Provider = {
     name: string;
     apiUrl: string;
@@ -116,6 +140,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 
 export const api = {
     overview: () => call<Overview>("GET", "overview"),
+    rules: () => call<RuleStats>("GET", "rules"),
     updateRepo: (name: string, patch: Partial<Repo>) => call<{ repo: Repo }>("PATCH", "repos/" + name, patch),
     createRepo: (input: RepoInput) => call<{ repo: Repo; token: string }>("POST", "repos", input),
     rotateToken: (name: string) => call<{ token: string }>("POST", `repos/${name}/rotate-token`),
