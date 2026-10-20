@@ -18,7 +18,7 @@ commands:
   publish   write MD/JSON, POST /runs, push patch branch, commit/PR comment
   rules     run the deterministic rule registry; exit 1 on blocking findings
   run       init, l0, rules, scope, review and publish in one process
-  test      run one test category/tier from the local suite
+  test      run one test category/tier from the local suite`;
 
 type Args = { command: string; root: string; format?: string; base?: string };
 
