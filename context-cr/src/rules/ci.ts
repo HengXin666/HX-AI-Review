@@ -5,7 +5,7 @@ import { WORKFLOW_DIR } from "./constants.ts";
 import type { Rule, RuleContext, RuleIssue } from "./types.ts";
 
 const LOCAL_USES = /uses:\s*\.\/(\.github\/workflows\/[\w./-]+\.ya?ml)/g;
-const NODE_RUN = /\bnode\s+([\w@./-]+\.(?:ts|js|mjs|cjs))/g;
+const NODE_RUN = /\bnode\s+(?:[^\n;&|]*?\s+)?([\w@./-]+\.(?:ts|js|mjs|cjs))/g;
 const PNPM_FILTER = /--filter\s+([^\s"']+)/g;
 const WORKING_DIR = /working-directory:\s*([^\s"']+)/g;
 
@@ -63,7 +63,8 @@ function checkWorkflows(ctx: RuleContext): RuleIssue[] {
         }
         for (const match of text.matchAll(NODE_RUN)) {
             const script = match[1].replace(/^\.\//, "");
-            const candidates = [script, ...dirs.map((dir) => dir + "/" + script)];
+            const working = [...text.matchAll(WORKING_DIR)].filter((item) => (item.index ?? 0) < (match.index ?? 0)).at(-1)?.[1];
+            const candidates = [script, ...(working ? [working.replace(/^\.\//, "").replace(/\/$/, "") + "/" + script] : [])];
             if (!candidates.some((path) => ctx.snapshot.exists(path))) {
                 issues.push({
                     path: file,
@@ -75,8 +76,15 @@ function checkWorkflows(ctx: RuleContext): RuleIssue[] {
             }
         }
         for (const match of text.matchAll(PNPM_FILTER)) {
-            const name = match[1].replace(/\.\.\.$/, "");
-            if (name.includes("$") || packages.has(name)) {
+            let name = match[1];
+            name = name.replace(/^!/, "").replace(/^\.\.\./, "").replace(/^\^/, "");
+            if (name.includes("$") || name.startsWith(".") || name.startsWith("/") || name.startsWith("{") || name.includes("[")) {
+                continue;
+            }
+            if (name.includes("*")) {
+                const pattern = new RegExp("^" + name.split("*").map((part) => part.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")).join(".*") + "$");
+                if ([...packages].some((pkg) => pattern.test(pkg))) continue;
+            } else if (packages.has(name)) {
                 continue;
             }
             issues.push({
