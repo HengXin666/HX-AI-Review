@@ -8,7 +8,7 @@ CTX-001 判定 AGENTS.md 结构, CTX-002 判定 SKILL.md 结构. 两者是规范
 
 - error: 结构缺失导致 agent 无法路由, 无法判断边界, 或引用断链; 阻断.
 - warning: 完整性, 风格, 冗余; 不阻断, 进 review.
-- 同一问题只报一次: 长度与配对归 HC-CONTEXT, frontmatter 归 CX-SKILL, 引用归 CX-DEADREF, CTX 只补结构判据.
+- 同一问题只报一次: 长度与配对归 HC-CONTEXT, frontmatter 归 CX-SKILL, 引用归 CX-DEADREF, CTX-001 只补结构判据; error 级节不允许豁免, warning 级节必须写明不适用原因.
 - 启发式判据只出 warning, 不参与阻断.
 
 ## 总览
@@ -17,7 +17,6 @@ CTX-001 判定 AGENTS.md 结构, CTX-002 判定 SKILL.md 结构. 两者是规范
 |---|---|---|
 | 缺节 | error: 定位, 共享铁律, 红线; warning: 项目布局, 落盘 | error: 何时用, 步骤, 判据; warning: 输入, 反例 |
 | 缺字段 | error: 同目录 README.md | error: name, description |
-| 超长 | error: 达到 150 行或 16384 字节; warning: 达到 90% | warning: 正文达到 150 行; error: 文件达到 500 行, 注入达到 65536 字节 |
 | 引用失效 | error: markdown 链接; warning: 反引号路径 | error: markdown 链接; warning: 反引号路径 |
 | 其他 | error: 决策进文件头; warning: 决策未引用, 复制父级 | warning: 引用前缀, 示例冒充引用 |
 
@@ -25,19 +24,16 @@ CTX-001 判定 AGENTS.md 结构, CTX-002 判定 SKILL.md 结构. 两者是规范
 
 | 检查项 | 判据 | 等级 | 对应实现 |
 |---|---|---|---|
-| 缺 定位 | 标题后 15 行内没有定位段或首读链接 | error | 无 |
+| 缺 定位 | 标题后的前 10 行内没有定位段或首读链接 | error | 无 |
 | 缺 共享铁律 | 没有可判定的硬约束节 | error | 无 |
 | 缺 红线 | 没有禁止事项或决策引用规则 | error | 无 |
 | 缺 项目布局 | 没有目录表或路由规则, 且未写明原因 | warning | 无 |
 | 缺 落盘 | 没有产物, 凭据, 文档去向, 且未写明原因 | warning | 无 |
-| 缺 README 配对 | 同目录没有 README.md | error | HC-CONTEXT |
-| 超长 (行) | 行数达到 150 | error | HC-CONTEXT |
-| 超长 (字节) | 字节数达到 16384 | error | HC-CONTEXT |
 | 接近上限 | 行数达到 135, 或字节数达到 14745 | warning | 无 |
 | 链接失效 | markdown 链接目标不存在 | error | CX-DEADREF |
 | 路径失效 | 反引号路径不存在 | warning | CX-DEADREF |
 | 决策进文件头 | 前 10 行出现决策, 历史或变更记录 | error | 无 |
-| 决策未引用 | 正文出现决策结论, 且未指向函数签名或 note | warning | 无 |
+| 决策未引用 | 正文出现决策结论, 且未指向唯一 note 的精确路径 | warning | 无 |
 | 复制父级 | 与父级 AGENTS.md 连续 5 行以上相同 | warning | 无 |
 | 孤儿目录 | 目录未登记在布局表或归属索引 | warning | 无 |
 
@@ -46,7 +42,7 @@ CTX-001 判定 AGENTS.md 结构, CTX-002 判定 SKILL.md 结构. 两者是规范
 - 文件头 = 标题到第一个二级标题之间; 只允许标题, 定位段, 首读链接.
 - 写明原因 = 文件内有一行明确说明该节不适用, 例如"本仓库无产物落盘, 不设落盘节".
 - 接近上限取上限的 90%: 135 行, 14745 字节, 用于提前提醒而不是阻断.
-- 决策未引用是启发式: 出现"决定", "选择", "因为"等结论句, 且同段没有函数签名或 note 引用.
+- 决策未引用是启发式: 出现"决定", "选择", "因为"等结论句, 且同段没有唯一 note 的精确路径引用.
 - 孤儿目录不归 CX-ORPHAN: 该规则只覆盖 docs 下未被引用的文档, 不覆盖目录.
 
 ## CTX-002: SKILL.md
@@ -65,7 +61,7 @@ CTX-001 判定 AGENTS.md 结构, CTX-002 判定 SKILL.md 结构. 两者是规范
 | 缺 反例 | 没有该节 | warning | 无 |
 | 超长 (正文) | 正文达到 150 行 | warning | 无 |
 | 超长 (文件) | 文件达到 500 行 | error | 仓库通用上限 |
-| 注入超预算 | 所有 frontmatter 加最大的 concurrentSkills 个正文达到 65536 字节 | error | HC-BUDGET |
+| 注入超预算 | 每个目标目录分别计算: 所有 frontmatter + 最大的 concurrentSkills 个正文 + 该目录祖先 AGENTS.md 链; 超过 65536 字节 | error | HC-BUDGET |
 | 链接失效 | markdown 链接目标不存在 | error | CX-DEADREF |
 | 路径失效 | 反引号路径不存在 | warning | CX-DEADREF |
 | 引用前缀 | 引用以 ./ 或 ../ 开头 | warning | 无 |
@@ -79,13 +75,20 @@ CTX-001 判定 AGENTS.md 结构, CTX-002 判定 SKILL.md 结构. 两者是规范
 - 示例冒充引用用于提醒: 代码块不参与引用解析, 不能靠示例满足可达性.
 - 引用前缀仍可解析, 所以只记 warning; 规范要求相对技能根书写.
 
+## HC-BUDGET 注入预算
+
+对每个目标文件目录分别计算注入量: 所有技能 frontmatter、最多 `concurrentSkills` 个技能正文, 以及该目录从仓库根到目标目录的祖先 `AGENTS.md` 链。目录之间不合并预算; 总量超过 65536 字节才报 Error, 等于 65536 字节通过。
+
+正例: frontmatter 与技能正文未超预算, 但祖先 `AGENTS.md` 链使目标目录总量超过 65536 字节, 报 HC-BUDGET。
+反例: 只计算 frontmatter 与正文而忽略祖先链, 会错误放行同一目标目录, 不符合 HC-BUDGET。
+
 ## 判定示例
 
 | 场景 | 结果 |
 |---|---|
 | AGENTS.md 120 行, 五节齐全, 链接可达 | 无 finding |
-| AGENTS.md 152 行 | CTX-001 error (超长), 与 HC-CONTEXT 同一指纹, 只报一次 |
-| AGENTS.md 140 行 | CTX-001 warning (接近上限) |
+| AGENTS.md 152 行 | HC-CONTEXT error (超长) |
+| AGENTS.md 140 行 | HC-CONTEXT warning (接近上限) |
 | AGENTS.md 前 5 行写"我们决定用 D1" | CTX-001 error (决策进文件头) |
 | AGENTS.md 链接到已删除文档 | CTX-001 error (链接失效) |
 | SKILL.md 没有 frontmatter | CTX-002 error (缺 frontmatter) |

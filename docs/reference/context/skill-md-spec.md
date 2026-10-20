@@ -94,7 +94,7 @@ metadata:
 | frontmatter | 10 行 | 常驻注入, 每个技能都计费 |
 | 正文 | 150 行 | 加载时注入, 与并发加载数相乘 |
 | 单文件 | 500 行 | 仓库通用上限 |
-| 注入预算 | 所有 frontmatter + 最大的 concurrentSkills 个正文 少于 65536 字节 | HC-BUDGET (Error) |
+| 注入预算 | 对每个目标目录分别计算所有 frontmatter + 最大的 concurrentSkills 个正文 + 该目录祖先 AGENTS.md 链; 总量不超过 65536 字节 | HC-BUDGET (Error) |
 
 - 超 150 行: 保留 何时用 / 输入 / 步骤 / 判据, 细节移 references/.
 - 超 500 行: 必须拆分, 不允许靠压缩行宽规避.
