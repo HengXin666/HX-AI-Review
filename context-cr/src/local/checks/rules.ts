@@ -20,7 +20,8 @@ export const LOCAL_RULE = {
 } as const;
 
 /** Paths that hold tests; they live on the test branch, never on the code branch. */
-export const TEST_PATH_RE = /(^|\/)(test|tests|e2e|perf|fixtures|test-request|test-ui)(\/|$)|[.](test|spec)[.](ts|tsx|js|jsx)$/;
+export const TEST_PATH_RE =
+    /(^|\/)(test|tests|e2e|perf|fixtures|test-request|test-ui)(\/|$)|[.](test|spec)[.](ts|tsx|js|jsx)$/;
 
 export const CODE_FILE_RE = /[.](ts|tsx|js|jsx|mjs|cjs)$/;
 

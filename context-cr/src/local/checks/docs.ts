@@ -120,7 +120,9 @@ function checkAgents(ctx: CheckContext): Finding[] {
         }
         if (!text.startsWith("# ")) {
             const first = text.split("\n")[0] ?? "";
-            findings.push(makeFinding(LOCAL_RULE.agentsStructure, WARNING, path, 1, "AGENTS.md has no level-1 heading", first));
+            findings.push(
+                makeFinding(LOCAL_RULE.agentsStructure, WARNING, path, 1, "AGENTS.md has no level-1 heading", first),
+            );
         }
     }
     return findings;
@@ -143,15 +145,23 @@ function checkSkills(ctx: CheckContext): Finding[] {
             continue;
         }
         const front = lines.slice(1, close);
-        const name = front.find((line) => line.startsWith("name:"))?.slice(5).trim();
-        const description = front.find((line) => line.startsWith("description:"))?.slice(12).trim();
+        const name = front
+            .find((line) => line.startsWith("name:"))
+            ?.slice(5)
+            .trim();
+        const description = front
+            .find((line) => line.startsWith("description:"))
+            ?.slice(12)
+            .trim();
         const dir = posix.basename(posix.dirname(path));
         if (name !== dir) {
             const message = "front matter name " + (name ?? "(missing)") + " differs from directory " + dir;
             findings.push(makeFinding(LOCAL_RULE.skillStructure, ERROR, path, 2, message, name ?? ""));
         }
         if (!description) {
-            findings.push(makeFinding(LOCAL_RULE.skillStructure, ERROR, path, 3, "front matter needs a description", ""));
+            findings.push(
+                makeFinding(LOCAL_RULE.skillStructure, ERROR, path, 3, "front matter needs a description", ""),
+            );
         }
     }
     return findings;

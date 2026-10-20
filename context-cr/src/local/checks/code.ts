@@ -114,7 +114,9 @@ function checkLayering(ctx: CheckContext): Finding[] {
                 continue;
             }
             const message = "production code imports test path " + target;
-            findings.push(makeFinding(LOCAL_RULE.layering, WARNING, path, lineOf(text, text.indexOf(spec)), message, spec));
+            findings.push(
+                makeFinding(LOCAL_RULE.layering, WARNING, path, lineOf(text, text.indexOf(spec)), message, spec),
+            );
         }
     }
     return findings;
@@ -165,7 +167,9 @@ function checkDataSource(ctx: CheckContext): Finding[] {
             continue;
         }
         const message = "route touches the database directly; go through the store port";
-        findings.push(makeFinding(LOCAL_RULE.dataSource, WARNING, path, lineOf(text, direct.index), message, direct[0]));
+        findings.push(
+            makeFinding(LOCAL_RULE.dataSource, WARNING, path, lineOf(text, direct.index), message, direct[0]),
+        );
     }
     return findings;
 }
@@ -174,7 +178,9 @@ function checkDataSource(ctx: CheckContext): Finding[] {
 function formatFindings(path: string, text: string): Finding[] {
     const findings: Finding[] = [];
     if (text.includes("\r")) {
-        findings.push(makeFinding(LOCAL_RULE.format, ERROR, path, lineOf(text, text.indexOf("\r")), "CRLF line ending", "crlf"));
+        findings.push(
+            makeFinding(LOCAL_RULE.format, ERROR, path, lineOf(text, text.indexOf("\r")), "CRLF line ending", "crlf"),
+        );
     }
     const lines = text.split("\n");
     let tab = 0;
@@ -188,7 +194,9 @@ function formatFindings(path: string, text: string): Finding[] {
         }
     }
     if (tab) {
-        findings.push(makeFinding(LOCAL_RULE.format, ERROR, path, tab, "tab indentation, the formatter uses spaces", "tab"));
+        findings.push(
+            makeFinding(LOCAL_RULE.format, ERROR, path, tab, "tab indentation, the formatter uses spaces", "tab"),
+        );
     }
     if (trailing) {
         findings.push(makeFinding(LOCAL_RULE.format, ERROR, path, trailing, "trailing whitespace", "trailing"));

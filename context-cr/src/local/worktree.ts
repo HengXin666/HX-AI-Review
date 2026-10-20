@@ -24,7 +24,7 @@ export function localChanges(root: string, base: string): LocalChange[] {
     const from = base || emptyTree(root);
     const raw = git(root, ["diff", "--name-status", "-z", "-M", from]).split("\0");
     const changes: LocalChange[] = [];
-    for (let index = 0; index < raw.length - 1; ) {
+    for (let index = 0; index < raw.length - 1;) {
         const status = raw[index++];
         if (/^[RC]/.test(status)) {
             const oldPath = raw[index++];

@@ -28,7 +28,8 @@ export const CATEGORIES: TestCategory[] = [
         title: "Backend API against a fake store and against a real deployment",
         workflow: "tests-backend-api.yml",
         trigger: "pull_request, push to the default branch, tests-all dispatch",
-        failure: "any selected test exits non-zero; the real tier fails when HX_API_BASE is set and the probe is not 2xx",
+        failure:
+            "any selected test exits non-zero; the real tier fails when HX_API_BASE is set and the probe is not 2xx",
         tiers: [
             {
                 id: "fake",
@@ -94,7 +95,8 @@ export const CATEGORIES: TestCategory[] = [
         title: "Performance budget",
         workflow: "tests-perf.yml",
         trigger: "nightly schedule, release tags, tests-all dispatch",
-        failure: "a measured budget is exceeded, the measurement tool is missing, or the test branch has no test/perf suite",
+        failure:
+            "a measured budget is exceeded, the measurement tool is missing, or the test branch has no test/perf suite",
         tiers: [
             {
                 id: "fake",

@@ -11,7 +11,14 @@ const PROBE_TIMEOUT_MS = 15000;
 const OUTPUT_TAIL = 4000;
 
 export type StepStatus = "passed" | "failed" | "skipped";
-export type StepResult = { id: string; kind: string; status: StepStatus; exitCode: number | null; durationMs: number; detail: string };
+export type StepResult = {
+    id: string;
+    kind: string;
+    status: StepStatus;
+    exitCode: number | null;
+    durationMs: number;
+    detail: string;
+};
 export type TierResult = {
     ruleId: string;
     category: string;
@@ -62,7 +69,10 @@ async function runProbe(step: TestStep): Promise<StepResult> {
     }
     const url = base + (step.probe ?? "/");
     try {
-        const response = await fetch(url, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS), headers: { accept: "*/*" } });
+        const response = await fetch(url, {
+            signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+            headers: { accept: "*/*" },
+        });
         const ok = response.status >= 200 && response.status < 300;
         return {
             id: step.id,
@@ -87,7 +97,14 @@ async function runProbe(step: TestStep): Promise<StepResult> {
 /** Migrations are append only: a modified or deleted migration breaks deployed history. */
 function runHistory(step: TestStep, options: RunOptions): StepResult {
     const started = Date.now();
-    const raw = tryGit(options.codeRoot, ["diff", "--name-status", "-M", options.base || "HEAD", "--", MIGRATIONS_PATH]);
+    const raw = tryGit(options.codeRoot, [
+        "diff",
+        "--name-status",
+        "-M",
+        options.base || "HEAD",
+        "--",
+        MIGRATIONS_PATH,
+    ]);
     if (raw === undefined) {
         return {
             id: step.id,
@@ -172,7 +189,9 @@ async function main(args: string[]): Promise<number> {
     const codeRoot = flag(args, "--code-root") ?? ".";
     const base = flag(args, "--base") ?? "HEAD";
     if (!id) {
-        process.stderr.write("usage: run.ts --category <id> [--tier <id>] --root <tests tree> --code-root <repo> --base <ref>\n");
+        process.stderr.write(
+            "usage: run.ts --category <id> [--tier <id>] --root <tests tree> --code-root <repo> --base <ref>\n",
+        );
         return 2;
     }
     const item = findCategory(id);
