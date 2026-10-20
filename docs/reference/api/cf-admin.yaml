@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
     title: hx-context-review cf-admin Worker
-    version: 0.4.0
+    version: 0.5.0
     description: >
         Config delivery, ingest and overview API. Model traffic never passes through this Worker.
         Runner endpoints use the per-repo HX_CTX_TOKEN. /api endpoints accept a Cloudflare Access JWT
@@ -223,6 +223,40 @@ components:
                 fingerprint: { type: string, description: Required on /feedback }
                 verdict: { type: string, enum: [accepted, rejected] }
                 reason: { type: string, description: Required when verdict is rejected }
+        RuleSummary:
+            type: object
+            description: Totals for one rule id over every matching rule result
+            required: [ruleId, total, errors, warnings, open, waived, runs, files]
+            properties:
+                ruleId: { type: string, description: "Canonical id, for example ARCH-003" }
+                total: { type: integer }
+                errors: { type: integer }
+                warnings: { type: integer }
+                open: { type: integer }
+                waived: { type: integer, description: Rejected by a human; still counted in total }
+                runs: { type: integer }
+                files: { type: integer }
+        SeveritySummary:
+            type: object
+            required: [severity, total, rules, waived]
+            properties:
+                severity: { type: string, enum: [error, warning] }
+                total: { type: integer }
+                rules: { type: integer, description: Distinct rule ids at this severity }
+                waived: { type: integer }
+        RuleStats:
+            type: object
+            description: Rule and severity totals over the rule dimension table
+            required: [repo, severity, limit, total, waived, byRule, bySeverity, topRule]
+            properties:
+                repo: { type: [string, "null"], description: Repo filter that was applied; null means all repos }
+                severity: { type: [string, "null"], enum: [error, warning, null] }
+                limit: { type: integer, description: Maximum rules in byRule; totals still cover every row }
+                total: { type: integer, description: Rule hits across every matching row }
+                waived: { type: integer }
+                byRule: { type: array, items: { $ref: "#/components/schemas/RuleSummary" } }
+                bySeverity: { type: array, items: { $ref: "#/components/schemas/SeveritySummary" } }
+                topRule: { type: [string, "null"], description: Most triggered rule id }
 paths:
     /init:
         get:
@@ -343,6 +377,38 @@ paths:
                                                       name: { type: string }
                                                       keyPresent: { type: boolean }
                 "403": { description: No Access identity and no valid session }
+    /api/rules:
+        get:
+            operationId: getRuleStats
+            security: [{ access: [] }, { session: [] }]
+            description: >-
+                Aggregates rule_results by rule id and severity. Canonical rule ids are ARCH-001..ARCH-004,
+                STYLE-001..STYLE-004, DOC-001..DOC-002, CTX-001..CTX-002, CI-001, TEST-001..TEST-006 and META-001;
+                other ids are accepted and aggregated as they are. A rejected finding sets waived on its rows,
+                while total keeps counting it, so the most triggered rule stays visible.
+            parameters:
+                - name: repo
+                  in: query
+                  required: false
+                  schema: { type: string }
+                  description: owner/repo; an unregistered name is a 404, not an empty result
+                - name: severity
+                  in: query
+                  required: false
+                  schema: { type: string, enum: [error, warning] }
+                - name: limit
+                  in: query
+                  required: false
+                  schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+            responses:
+                "200":
+                    description: Rule and severity totals
+                    content:
+                        application/json:
+                            schema: { $ref: "#/components/schemas/RuleStats" }
+                "400": { description: Unknown severity, or a limit outside 1..200 }
+                "403": { description: No Access identity and no valid session }
+                "404": { description: Unknown repository }
     /api/status:
         get:
             operationId: getStatus
