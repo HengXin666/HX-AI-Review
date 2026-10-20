@@ -8,6 +8,7 @@
 - 读者假设: 这些文件是编码 agent 动手前读的"事实". 判断标准始终是"照着这句话做的 agent 会不会被误导", 不是文风.
 - 不做: 不审代码本身的 bug, 不补写没变代码的文档, 不改代码文件, 不产出 Error. Error 只来自 L0 确定性检查 (见 [report-contract.md](../reference/report-contract.md)); AI 只产出 Warning 与补丁, 不阻断合并.
 - 精度优先于召回: 误报会消耗维护者注意力并让人忽略整个工具, 所以每条候选都要经过确定性闸门和独立 verifier 两道过滤.
+- 确定性规则引擎 (ARCH, STYLE, DOC, CTX, CI) 与豁免审核警告 EXEMPT-001 不属于本文的 AI 流程, 也不由模型产出; 它们的判据, 豁免信任与门禁见 [context-cr.md](context-cr.md) 的规则引擎一节.
 
 ## 流水线
 

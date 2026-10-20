@@ -27,6 +27,11 @@ export function withoutFences(text: string): string {
         .join("\n");
 }
 
+/** Markdown with fenced blocks and inline code blanked out; character offsets and line numbers survive. */
+export function withoutCode(text: string): string {
+    return withoutFences(text).replace(/(`+)([\s\S]*?)\1/g, (match) => match.replace(/[^\n]/g, " "));
+}
+
 export type Heading = { level: number; line: number };
 
 /** ATX headings outside fenced blocks, in file order. */

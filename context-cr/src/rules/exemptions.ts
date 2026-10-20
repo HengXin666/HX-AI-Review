@@ -33,17 +33,22 @@ function parseExemption(value: unknown, index: number): Exemption {
     };
 }
 
+/** Parse one exemption document; a malformed entry is an error, never a silent skip. */
+export function parseExemptions(text: string): Exemption[] {
+    const raw = JSON.parse(text) as { exemptions?: unknown };
+    if (!Array.isArray(raw.exemptions)) {
+        throw new Error(`${EXEMPTION_FILE}: exemptions must be an array`);
+    }
+    return raw.exemptions.map((item, index) => parseExemption(item, index));
+}
+
 /** Read the repository exemption file; a malformed entry is an error, never a silent skip. */
 export function loadExemptions(root: string): Exemption[] {
     const file = join(root, EXEMPTION_FILE);
     if (!existsSync(file)) {
         return [];
     }
-    const raw = JSON.parse(readFileSync(file, UTF8)) as { exemptions?: unknown };
-    if (!Array.isArray(raw.exemptions)) {
-        throw new Error(`${EXEMPTION_FILE}: exemptions must be an array`);
-    }
-    return raw.exemptions.map((item, index) => parseExemption(item, index));
+    return parseExemptions(readFileSync(file, UTF8));
 }
 
 function matches(entryPath: string, path: string): boolean {
@@ -62,13 +67,21 @@ export function isChanged(changed: string[], path: string): boolean {
     return changed.some((item) => matches(path, item));
 }
 
-/** Resolve the exemption state for one finding: active exemptions do not block, changed ones do. */
+function sameEntry(a: Exemption, b: Exemption): boolean {
+    return (
+        a.ruleId === b.ruleId && a.path === b.path && a.reason === b.reason && a.expiresOnChange === b.expiresOnChange
+    );
+}
+
+/** Resolve the exemption state: only an entry identical to the base revision can exempt a finding. */
 export function exemptionRef(ctx: RuleContext, ruleId: string, path: string): ExemptionRef | null {
     const entry = findExemption(ctx.exemptions, ruleId, path);
     if (!entry) {
         return null;
     }
-    const expired = entry.expiresOnChange && isChanged(ctx.changed, entry.path);
+    const trusted = (ctx.exemptionsAtBase ?? ctx.exemptions).some((item) => sameEntry(item, entry));
+    const known = ctx.baseKnown !== false;
+    const expired = !trusted || (entry.expiresOnChange && (!known || isChanged(ctx.changed, entry.path)));
     return {
         path: entry.path,
         reason: entry.reason,

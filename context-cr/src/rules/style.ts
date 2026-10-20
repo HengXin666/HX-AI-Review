@@ -134,21 +134,69 @@ function packageDependencies(text: string): string[] {
     }
 }
 
+const EGG_REF = /#egg=([A-Za-z0-9_.-]+)/;
+const DIRECT_REF = /^([A-Za-z0-9_.-]+)\s*@\s*\S+/;
+const URL_REF = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
+const VCS_REF = /^(?:git|hg|svn|bzr)\+/i;
+
+function dependencyId(raw: string): string {
+    const text = raw.trim();
+    const direct = DIRECT_REF.exec(text)?.[1];
+    if (direct) {
+        return direct;
+    }
+    const egg = EGG_REF.exec(text)?.[1];
+    if (egg) {
+        return egg;
+    }
+    if (VCS_REF.test(text) || URL_REF.test(text)) {
+        return text.split(/[;\s]/)[0];
+    }
+    return /^([A-Za-z0-9_.-]+)/.exec(text)?.[1] ?? "";
+}
+
+function quotedDependencies(line: string): string[] {
+    const names: string[] = [];
+    for (const match of line.matchAll(/["']([^"']+)["']/g)) {
+        const name = dependencyId(match[1]);
+        if (name !== "") {
+            names.push(name);
+        }
+    }
+    return names;
+}
+
 function pythonDependencies(text: string): string[] {
     const names: string[] = [];
-    let inDeps = false;
+    let section = "";
+    let inArray = false;
     for (const line of text.split(/\r?\n/)) {
-        if (/^\s*\[/.test(line)) {
-            inDeps = /dependencies/.test(line);
+        const header = /^\s*\[([^\]]+)\]/.exec(line);
+        if (header) {
+            section = header[1].trim();
+            inArray = false;
             continue;
         }
-        if (!inDeps) {
+        if (/^tool\.poetry\.(?:.*\.)?(?:dev-)?dependencies$/.test(section)) {
+            const key = /^\s*([A-Za-z0-9_.-]+)\s*=/.exec(line)?.[1];
+            if (key && key !== "python") {
+                names.push(key);
+            }
             continue;
         }
-        const match = /^\s*["']([A-Za-z0-9_.-]+)/.exec(line);
-        if (match) {
-            names.push(match[1]);
+        const project = section === "project";
+        const extras = section === "project.optional-dependencies";
+        if (!project && !extras) {
+            continue;
         }
+        const start = project
+            ? /^\s*(?:optional-)?dependencies\s*=\s*\[/.test(line)
+            : /^\s*[A-Za-z0-9_.-]+\s*=\s*\[/.test(line);
+        if (!inArray && !start) {
+            continue;
+        }
+        names.push(...quotedDependencies(line));
+        inArray = !line.includes("]");
     }
     return names;
 }
@@ -158,7 +206,7 @@ function requirementDependencies(text: string): string[] {
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter((line) => line !== "" && !line.startsWith("#") && !line.startsWith("-"))
-        .map((line) => /^([A-Za-z0-9_.-]+)/.exec(line)?.[1] ?? "")
+        .map(dependencyId)
         .filter((name) => name !== "");
 }
 
@@ -179,9 +227,6 @@ function dependenciesOf(path: string, text: string): string[] {
 
 /** STYLE-004: a dependency absent from the base revision needs a human decision. */
 function checkDependencies(ctx: RuleContext): RuleIssue[] {
-    if (ctx.base === "") {
-        return [];
-    }
     const issues: RuleIssue[] = [];
     for (const file of ctx.snapshot.files) {
         if (!isManifest(file) || isExcluded(ctx.config, file)) {

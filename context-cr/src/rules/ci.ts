@@ -5,9 +5,11 @@ import { WORKFLOW_DIR } from "./constants.ts";
 import type { Rule, RuleContext, RuleIssue } from "./types.ts";
 
 const LOCAL_USES = /uses:\s*\.\/(\.github\/workflows\/[\w./-]+\.ya?ml)/g;
-const NODE_RUN = /\bnode\s+([\w@./-]+\.(?:ts|js|mjs|cjs))/g;
+const NODE_RUN = /\bnode\s+(?:--?[^\s]+\s+)*([\w@./-]+\.(?:ts|js|mjs|cjs))/g;
 const PNPM_FILTER = /--filter\s+([^\s"']+)/g;
-const WORKING_DIR = /working-directory:\s*([^\s"']+)/g;
+const WORKING_DIR = /^\s*working-directory:\s*["']?([^\s"']+)["']?\s*$/;
+
+type ScriptRef = { script: string; dir: string; line: number };
 
 function workflowFiles(ctx: RuleContext): string[] {
     return ctx.snapshot.files
@@ -34,6 +36,116 @@ function packageNames(ctx: RuleContext): Set<string> {
     return names;
 }
 
+function normalizeDir(raw: string): string {
+    return raw.replace(/^\.\//, "").replace(/\/$/, "");
+}
+
+function scriptRefs(text: string): ScriptRef[] {
+    const refs: ScriptRef[] = [];
+    const lines = text.split(/\r?\n/);
+    let stepsIndent: number | undefined;
+    let stepIndent: number | undefined;
+    let block: { line: string; index: number }[] | undefined;
+    const flush = (): void => {
+        if (!block) {
+            return;
+        }
+        let dir = "";
+        for (const item of block) {
+            const working = WORKING_DIR.exec(item.line);
+            if (working) {
+                dir = normalizeDir(working[1]);
+            }
+        }
+        for (const item of block) {
+            for (const match of item.line.matchAll(NODE_RUN)) {
+                refs.push({ script: match[1].replace(/^\.\//, ""), dir, line: item.index + 1 });
+            }
+        }
+        block = undefined;
+    };
+    for (const [index, line] of lines.entries()) {
+        if (line.trim() === "" || line.trimStart().startsWith("#")) {
+            continue;
+        }
+        const indent = line.length - line.trimStart().length;
+        const steps = /^(\s*)steps:\s*$/.exec(line);
+        if (steps) {
+            flush();
+            stepsIndent = steps[1].length;
+            stepIndent = undefined;
+            continue;
+        }
+        const step = /^(\s*)-\s+/.exec(line);
+        if (step && stepsIndent !== undefined) {
+            if (stepIndent === undefined) {
+                stepIndent = step[1].length;
+            }
+            if (step[1].length === stepIndent) {
+                flush();
+                block = [];
+            }
+        } else if (block && stepsIndent !== undefined && indent <= stepsIndent) {
+            flush();
+            stepsIndent = undefined;
+            stepIndent = undefined;
+        }
+        if (block) {
+            block.push({ line, index });
+        }
+    }
+    flush();
+    return refs;
+}
+
+function escapeRegExp(text: string): string {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function directoryPattern(ctx: RuleContext, pattern: string): boolean {
+    const prefix = normalizeDir(pattern.split("*")[0]);
+    if (prefix === "" || prefix === ".") {
+        return true;
+    }
+    return ctx.snapshot.exists(prefix) || ctx.snapshot.files.some((file) => file.startsWith(prefix));
+}
+
+function directoryFilter(ctx: RuleContext, value: string): boolean {
+    return value
+        .replace(/^\{/, "")
+        .replace(/\}$/, "")
+        .split(",")
+        .every((item) => {
+            const dir = normalizeDir(item.trim());
+            if (dir === "" || dir === ".") {
+                return true;
+            }
+            return dir.includes("*") ? directoryPattern(ctx, dir) : ctx.snapshot.exists(dir);
+        });
+}
+
+function matchesFilter(ctx: RuleContext, packages: Set<string>, raw: string): boolean {
+    let value = raw
+        .replace(/^!/, "")
+        .replace(/^\.\.\./, "")
+        .replace(/\.\.\.$/, "")
+        .replace(/^\^/, "");
+    if (value === "" || value.includes("$")) {
+        return true;
+    }
+    if (/\[[^\]]+\]/.test(value)) {
+        return true;
+    }
+    if (/^[./{[]/.test(value)) {
+        return directoryFilter(ctx, value);
+    }
+    if (value.includes("*")) {
+        const pattern = new RegExp("^" + value.split("*").map(escapeRegExp).join(".*") + "$");
+        return [...packages].some((name) => pattern.test(name));
+    }
+    return packages.has(value);
+}
+
 /** CI-001: workflows exist, keep their trigger and jobs, and call scripts and packages that exist. */
 function checkWorkflows(ctx: RuleContext): RuleIssue[] {
     const files = workflowFiles(ctx);
@@ -49,7 +161,6 @@ function checkWorkflows(ctx: RuleContext): RuleIssue[] {
                 issues.push({ path: file, line: 1, message: `Workflow has no top-level ${key}: key`, anchor: key });
             }
         }
-        const dirs = [...text.matchAll(WORKING_DIR)].map((match) => match[1].replace(/^\.\//, "").replace(/\/$/, ""));
         for (const match of text.matchAll(LOCAL_USES)) {
             if (!ctx.snapshot.exists(match[1])) {
                 issues.push({
@@ -61,22 +172,21 @@ function checkWorkflows(ctx: RuleContext): RuleIssue[] {
                 });
             }
         }
-        for (const match of text.matchAll(NODE_RUN)) {
-            const script = match[1].replace(/^\.\//, "");
-            const candidates = [script, ...dirs.map((dir) => dir + "/" + script)];
-            if (!candidates.some((path) => ctx.snapshot.exists(path))) {
+        for (const ref of scriptRefs(text)) {
+            const path = ref.dir ? ref.dir + "/" + ref.script : ref.script;
+            if (!ctx.snapshot.exists(path)) {
                 issues.push({
                     path: file,
-                    line: lineOf(text, match.index),
-                    message: `Workflow runs missing script ${script}`,
-                    evidence: script,
-                    anchor: script,
+                    line: ref.line,
+                    message: `Workflow runs missing script ${ref.script}`,
+                    evidence: path,
+                    anchor: ref.script,
                 });
             }
         }
         for (const match of text.matchAll(PNPM_FILTER)) {
-            const name = match[1].replace(/\.\.\.$/, "");
-            if (name.includes("$") || packages.has(name)) {
+            const name = match[1];
+            if (matchesFilter(ctx, packages, name)) {
                 continue;
             }
             issues.push({

@@ -30,6 +30,10 @@ export type RuleContext = {
     changed: string[];
     exemptions: Exemption[];
     readAtBase: (path: string) => string | undefined;
+    /** False when no base revision resolved, so expiry and diff checks stay conservative. */
+    baseKnown?: boolean;
+    /** Exemptions read from the base revision; only these can ever exempt a finding. */
+    exemptionsAtBase?: Exemption[];
 };
 
 /** One registered rule: stable id, declared severity, description, criteria summary and check. */

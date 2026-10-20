@@ -8,6 +8,12 @@ const TS_IMPORT = /(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*)[
 const PY_FROM = /^\s*from\s+([.\w]+)\s+import\b/;
 const PY_IMPORT = /^\s*import\s+([\w.]+(?:\s*,\s*[\w.]+)*)/;
 const TS_CANDIDATES = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+const ESM_SWAPS: Record<string, string[]> = {
+    ".js": [".ts", ".tsx"],
+    ".jsx": [".tsx"],
+    ".mjs": [".mts"],
+    ".cjs": [".cts"],
+};
 
 export function isSource(path: string): boolean {
     return SOURCE_EXTENSIONS.includes(posix.extname(path));
@@ -58,6 +64,17 @@ function firstExisting(snapshot: Snapshot, candidates: string[]): string | undef
     return undefined;
 }
 
+function typescriptCandidates(base: string): string[] {
+    const ext = posix.extname(base);
+    const swapped = (ESM_SWAPS[ext] ?? []).map((replacement) => base.slice(0, -ext.length) + replacement);
+    return [
+        base,
+        ...swapped,
+        ...TS_CANDIDATES.map((item) => base + item),
+        ...TS_CANDIDATES.map((item) => base + "/index" + item),
+    ];
+}
+
 function resolveTypeScript(snapshot: Snapshot, from: string, spec: string): string | undefined {
     if (!spec.startsWith(".")) {
         return undefined;
@@ -66,25 +83,46 @@ function resolveTypeScript(snapshot: Snapshot, from: string, spec: string): stri
     if (base.startsWith("..")) {
         return undefined;
     }
-    return firstExisting(snapshot, [
-        base,
-        ...TS_CANDIDATES.map((ext) => base + ext),
-        ...TS_CANDIDATES.map((ext) => base + "/index" + ext),
-    ]);
+    return firstExisting(snapshot, typescriptCandidates(base));
+}
+
+function pythonBases(from: string): string[] {
+    const bases: string[] = [];
+    let base = posix.dirname(from);
+    while (base !== "." && base !== "") {
+        bases.push(base);
+        base = posix.dirname(base);
+    }
+    bases.push("");
+    return bases;
 }
 
 function resolvePython(snapshot: Snapshot, from: string, spec: string): string | undefined {
-    const match = /^(\.+)(.*)$/.exec(spec);
+    const match = /^(\.*)(.*)$/.exec(spec);
     if (!match) {
         return undefined;
     }
-    let base = posix.dirname(from);
-    for (let level = 1; level < match[1].length; level++) {
-        base = posix.dirname(base);
-    }
+    const dots = match[1].length;
     const tail = match[2].replace(/\./g, "/");
-    const target = tail ? posix.join(base, tail) : base;
-    return firstExisting(snapshot, [target + ".py", target + "/__init__.py"]);
+    if (dots > 0) {
+        let base = posix.dirname(from);
+        for (let level = 1; level < dots; level++) {
+            base = posix.dirname(base);
+        }
+        const target = tail ? posix.join(base, tail) : base;
+        return firstExisting(snapshot, [target + ".py", target + "/__init__.py"]);
+    }
+    if (tail === "") {
+        return undefined;
+    }
+    for (const base of pythonBases(from)) {
+        const target = base === "" ? tail : base + "/" + tail;
+        const hit = firstExisting(snapshot, [target + ".py", target + "/__init__.py"]);
+        if (hit) {
+            return hit;
+        }
+    }
+    return undefined;
 }
 
 /** Resolve one import to a tracked file; package imports resolve to undefined. */

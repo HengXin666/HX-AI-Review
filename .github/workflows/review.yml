@@ -80,6 +80,10 @@ jobs:
               id: l0
               continue-on-error: true
               run: node "$TOOL/context-cr/src/cli.ts" l0
+            - name: 3b rules engine (deterministic, exemption aware)
+              id: rules
+              continue-on-error: true
+              run: node "$TOOL/context-cr/src/cli.ts" rules
             - name: 4 context_scope
               id: scope
               run: node "$TOOL/context-cr/src/cli.ts" scope
@@ -110,4 +114,9 @@ jobs:
               if: steps.l0.outcome == 'failure'
               run: |
                   echo "L0 found blocking Error findings; see the report artifact."
+                  exit 1
+            - name: Fail on rules Error after exemptions
+              if: steps.rules.outcome == 'failure'
+              run: |
+                  echo "Rules engine found blocking Error findings; see scripts/.hx_code_quality/reports/rules.md."
                   exit 1

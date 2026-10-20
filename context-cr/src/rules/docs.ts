@@ -1,7 +1,7 @@
 import { posix } from "node:path";
 import { isExcluded } from "../config.ts";
 import { lineOf } from "../l0/snapshot.ts";
-import { withoutFences } from "./markdown.ts";
+import { withoutCode } from "./markdown.ts";
 import type { Rule, RuleContext, RuleIssue } from "./types.ts";
 
 const LINK = /!?\[[^\]]*\]\(\s*([^)\s]*)(?:\s+"[^"]*")?\s*\)/g;
@@ -34,7 +34,8 @@ function resolveTarget(file: string, raw: string): string | undefined {
     const resolved = target.startsWith("/")
         ? posix.normalize(target.slice(1))
         : posix.normalize(posix.join(posix.dirname(file), target));
-    return resolved;
+    const clean = resolved.replace(/^\.\//, "").replace(/\/+$/, "");
+    return clean === "" ? "." : clean;
 }
 
 /** DOC-001: every relative markdown link resolves to a tracked file or directory. */
@@ -44,7 +45,7 @@ function checkDocLinks(ctx: RuleContext): RuleIssue[] {
         if (!isDoc(file) || isExcluded(ctx.config, file)) {
             continue;
         }
-        const text = withoutFences(ctx.snapshot.read(file) ?? "");
+        const text = withoutCode(ctx.snapshot.read(file) ?? "");
         for (const match of text.matchAll(LINK)) {
             const raw = match[1].replace(/^<|>$/g, "");
             const line = lineOf(text, match.index);
@@ -56,7 +57,7 @@ function checkDocLinks(ctx: RuleContext): RuleIssue[] {
                 continue;
             }
             const target = resolveTarget(file, raw);
-            if (target === undefined) {
+            if (target === undefined || target === ".") {
                 continue;
             }
             if (target.startsWith("..")) {

@@ -1,6 +1,7 @@
 import { posix } from "node:path";
 import { ERROR, WARNING } from "../constants.ts";
 import { isExcluded } from "../config.ts";
+import { lineOf } from "../l0/snapshot.ts";
 import { API_DIRS, DATA_SOURCE_PACKAGES, DIRECTORY_FILE_LIMIT, ENTRY_FILES } from "./constants.ts";
 import { parseImports, resolveImport, sourceFiles } from "./imports.ts";
 import type { Rule, RuleContext, RuleIssue } from "./types.ts";
@@ -29,19 +30,41 @@ function edges(ctx: RuleContext): Edge[] {
     return list;
 }
 
+type ImplPath = { root: string };
+
+function implPath(path: string): ImplPath | undefined {
+    const segments = path.split("/");
+    const index = segments.indexOf("impl");
+    if (index < 0 || index === segments.length - 1) {
+        return undefined;
+    }
+    return { root: segments.slice(0, index).join("/") };
+}
+
+function inDir(root: string, name: string): string {
+    return root === "" ? name : root + "/" + name;
+}
+
 function implRoots(ctx: RuleContext): string[] {
     const roots = new Set<string>();
     for (const file of sourceFiles(ctx.snapshot, (path) => isExcluded(ctx.config, path))) {
-        const index = file.lastIndexOf("/impl/");
-        if (index > 0) {
-            roots.add(file.slice(0, index));
+        const found = implPath(file);
+        if (found) {
+            roots.add(found.root);
         }
     }
     return [...roots].sort();
 }
 
+function rootMatches(root: string, path: string): boolean {
+    if (root !== "") {
+        return path === root || path.startsWith(root + "/");
+    }
+    return path === "" || !path.includes("/") || path.startsWith("impl/");
+}
+
 function moduleRootOf(path: string, roots: string[]): string | undefined {
-    const hits = roots.filter((root) => path === root || path.startsWith(root + "/"));
+    const hits = roots.filter((root) => rootMatches(root, path));
     hits.sort((a, b) => b.length - a.length);
     return hits[0];
 }
@@ -51,26 +74,22 @@ function checkImplLayering(ctx: RuleContext): RuleIssue[] {
     const roots = implRoots(ctx);
     const issues: RuleIssue[] = [];
     for (const root of roots) {
-        const hasEntry = ENTRY_FILES.some((name) => ctx.snapshot.read(root + "/" + name) !== undefined);
+        const hasEntry = ENTRY_FILES.some((name) => ctx.snapshot.read(inDir(root, name)) !== undefined);
         if (!hasEntry) {
             issues.push({
-                path: root + "/impl",
+                path: inDir(root, "impl"),
                 line: 1,
-                message: `Module ${root} has impl/ but no public entry`,
+                message: `Module ${root || "repository root"} has impl/ but no public entry`,
                 evidence: ENTRY_FILES.join(", "),
             });
         }
     }
     for (const edge of edges(ctx)) {
-        const index = edge.target.lastIndexOf("/impl");
-        if (index < 0) {
+        const target = implPath(edge.target);
+        if (!target) {
             continue;
         }
-        const after = edge.target.slice(index + "/impl".length);
-        if (after !== "" && !after.startsWith("/")) {
-            continue;
-        }
-        const targetRoot = edge.target.slice(0, index);
+        const targetRoot = target.root;
         const importerRoot = moduleRootOf(edge.file, roots) ?? posix.dirname(edge.file);
         if (importerRoot === targetRoot) {
             continue;
@@ -78,7 +97,7 @@ function checkImplLayering(ctx: RuleContext): RuleIssue[] {
         issues.push({
             path: edge.file,
             line: edge.line,
-            message: `Cross-module import of ${targetRoot}/impl from ${importerRoot}`,
+            message: `Cross-module import of ${inDir(targetRoot, "impl")} from ${importerRoot || "repository root"}`,
             evidence: edge.spec,
         });
     }
@@ -251,19 +270,51 @@ function isDataSource(spec: string): boolean {
     );
 }
 
+const CONTAINER_DIRS = ["services", "apps", "packages", "libs", "modules"];
+
+function apiModuleRoot(path: string, roots: string[]): string {
+    const known = moduleRootOf(path, roots);
+    const segments = path.split("/");
+    const container = segments.length > 2 && CONTAINER_DIRS.includes(segments[0]);
+    if (container && (known === undefined || known === "")) {
+        return segments.slice(0, 2).join("/");
+    }
+    return known ?? "";
+}
+
 function isApiLayer(path: string, roots: string[]): boolean {
-    if (path.includes("/impl/")) {
+    if (implPath(path)) {
         return false;
     }
-    const segments = posix.dirname(path).split("/");
+    const root = apiModuleRoot(path, roots);
+    const dir = posix.dirname(path);
+    const relative = root === "" ? dir : dir === root ? "" : dir.slice(root.length + 1);
+    const segments = relative === "" || relative === "." ? [] : relative.split("/");
     if (segments.some((segment) => API_DIRS.includes(segment))) {
         return true;
     }
-    const root = moduleRootOf(path, roots);
-    return root !== undefined && posix.dirname(path) === root && ENTRY_FILES.includes(posix.basename(path));
+    return dir === root && ENTRY_FILES.includes(posix.basename(path));
 }
 
-const SQL = /["'`][^"'`]*\b(SELECT|INSERT INTO|UPDATE|DELETE FROM)\b/;
+const SQL_KEYWORD = /\b(SELECT|INSERT\s+INTO|UPDATE|DELETE\s+FROM)\b/;
+const STRING_SPAN = /(["'`])(?:\\.|(?!\1)[\s\S])*?\1/g;
+
+function sqlIssues(file: string, text: string): RuleIssue[] {
+    const issues: RuleIssue[] = [];
+    for (const span of text.matchAll(STRING_SPAN)) {
+        const keyword = SQL_KEYWORD.exec(span[0]);
+        if (!keyword || keyword.index === undefined) {
+            continue;
+        }
+        issues.push({
+            path: file,
+            line: lineOf(text, (span.index ?? 0) + keyword.index),
+            message: "API layer holds SQL instead of calling a data source interface",
+            evidence: span[0].trim().replace(/\s+/g, " ").slice(0, 80),
+        });
+    }
+    return issues;
+}
 
 /** ARCH-004: the API layer imports no data-source package and holds no SQL. */
 function checkDataSourceSeparation(ctx: RuleContext): RuleIssue[] {
@@ -285,16 +336,7 @@ function checkDataSourceSeparation(ctx: RuleContext): RuleIssue[] {
                 evidence: "move the concrete source behind impl/",
             });
         }
-        text.split(/\r?\n/).forEach((line, index) => {
-            if (SQL.test(line)) {
-                issues.push({
-                    path: file,
-                    line: index + 1,
-                    message: "API layer holds SQL instead of calling a data source interface",
-                    evidence: line.trim().slice(0, 80),
-                });
-            }
-        });
+        issues.push(...sqlIssues(file, text));
     }
     return issues;
 }
