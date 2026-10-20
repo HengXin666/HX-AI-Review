@@ -27,6 +27,7 @@ export type RuleContext = {
     snapshot: Snapshot;
     config: RepoConfig;
     base: string;
+    baseKnown: boolean;
     changed: string[];
     exemptions: Exemption[];
     readAtBase: (path: string) => string | undefined;

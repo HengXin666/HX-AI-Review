@@ -9,6 +9,7 @@ import { changedFiles, diffText, headSha, patchFiles, showFile, tryGit } from ".
 import { fetchInit, splitSecret } from "./init/client.ts";
 import type { InitConfig } from "./init/client.ts";
 import { runL0 } from "./l0/index.ts";
+import { runRulesStep } from "./rules/run.ts";
 import type { Approved } from "./l0/index.ts";
 import { worktreeSnapshot } from "./l0/snapshot.ts";
 import { renderComment } from "./publish/comment.ts";
@@ -84,7 +85,9 @@ function baseline(root: string, base: string): Approved[] {
 
 export function stepL0(root: string): Finding[] {
     const state = initState(root);
-    const findings = runL0(worktreeSnapshot(root), loadConfig(root), baseline(root, state.event.base));
+    const l0 = runL0(worktreeSnapshot(root), loadConfig(root), baseline(root, state.event.base));
+    const rules = runRulesStep(root, state.event.base);
+    const findings = [...l0, ...rules.report.findings];
     save(root, L0_FILE, { findings } satisfies L0State);
     return findings;
 }

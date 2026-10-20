@@ -136,18 +136,29 @@ function packageDependencies(text: string): string[] {
 
 function pythonDependencies(text: string): string[] {
     const names: string[] = [];
-    let inDeps = false;
+    let section = "";
+    let inArray = false;
     for (const line of text.split(/\r?\n/)) {
-        if (/^\s*\[/.test(line)) {
-            inDeps = /dependencies/.test(line);
+        const header = /^\s*\[([^\]]+)\]/.exec(line);
+        if (header) {
+            section = header[1];
+            inArray = false;
             continue;
         }
-        if (!inDeps) {
+        if (section === "project" && /^\s*(?:optional-)?dependencies\s*=/.test(line)) {
+            inArray = line.includes("[") && !line.includes("]");
+            const matches = line.matchAll(/["']([A-Za-z0-9_.-]+)/g);
+            for (const match of matches) names.push(match[1]);
             continue;
         }
-        const match = /^\s*["']([A-Za-z0-9_.-]+)/.exec(line);
-        if (match) {
-            names.push(match[1]);
+        if (inArray) {
+            if (line.includes("]")) inArray = false;
+            const match = /["']([A-Za-z0-9_.-]+)/.exec(line);
+            if (match) names.push(match[1]);
+        }
+        if (/^tool\.poetry\.(?:group\.[^.]+\.)?dependencies$/.test(section)) {
+            const match = /^\s*([A-Za-z0-9_.-]+)\s*=/.exec(line);
+            if (match && match[1] !== "python") names.push(match[1]);
         }
     }
     return names;
@@ -179,7 +190,7 @@ function dependenciesOf(path: string, text: string): string[] {
 
 /** STYLE-004: a dependency absent from the base revision needs a human decision. */
 function checkDependencies(ctx: RuleContext): RuleIssue[] {
-    if (ctx.base === "") {
+    if (!ctx.baseKnown) {
         return [];
     }
     const issues: RuleIssue[] = [];

@@ -34,16 +34,15 @@ function parseExemption(value: unknown, index: number): Exemption {
 }
 
 /** Read the repository exemption file; a malformed entry is an error, never a silent skip. */
+export function loadExemptionsText(text: string): Exemption[] {
+    const raw = JSON.parse(text) as { exemptions?: unknown };
+    if (!Array.isArray(raw.exemptions)) throw new Error(`${EXEMPTION_FILE}: exemptions must be an array`);
+    return raw.exemptions.map((item, index) => parseExemption(item, index));
+}
+
 export function loadExemptions(root: string): Exemption[] {
     const file = join(root, EXEMPTION_FILE);
-    if (!existsSync(file)) {
-        return [];
-    }
-    const raw = JSON.parse(readFileSync(file, UTF8)) as { exemptions?: unknown };
-    if (!Array.isArray(raw.exemptions)) {
-        throw new Error(`${EXEMPTION_FILE}: exemptions must be an array`);
-    }
-    return raw.exemptions.map((item, index) => parseExemption(item, index));
+    return existsSync(file) ? loadExemptionsText(readFileSync(file, UTF8)) : [];
 }
 
 function matches(entryPath: string, path: string): boolean {
@@ -68,7 +67,7 @@ export function exemptionRef(ctx: RuleContext, ruleId: string, path: string): Ex
     if (!entry) {
         return null;
     }
-    const expired = entry.expiresOnChange && isChanged(ctx.changed, entry.path);
+    const expired = !ctx.baseKnown || (entry.expiresOnChange && isChanged(ctx.changed, entry.path));
     return {
         path: entry.path,
         reason: entry.reason,
