@@ -1,0 +1,21 @@
+name = "hx-context-review"
+main = "worker/index.ts"
+compatibility_date = "2026-10-11"
+account_id = "1783b3f87c780c3fbca6dab5aaed19a7"
+workers_dev = true
+
+[assets]
+directory = ".deploy/assets"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "hx-context-review"
+database_id = "14f895ee-8398-4bb4-b715-9e989e5a6dec"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "BLOBS"
+bucket_name = "hx-context-review"
