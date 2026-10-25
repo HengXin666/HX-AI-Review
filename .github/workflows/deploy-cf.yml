@@ -55,7 +55,10 @@ jobs:
                   HX_D1_NAME: ${{ vars.HX_D1_NAME }}
                   HX_R2_BUCKET: ${{ vars.HX_R2_BUCKET }}
                   HX_PAGES_PROJECT: ${{ vars.HX_PAGES_PROJECT }}
+                  HX_PAGES_DOMAIN: ${{ vars.HX_PAGES_DOMAIN }}
                   HX_OVERVIEW_URL: ${{ vars.HX_OVERVIEW_URL }}
+                  HX_ADMIN_USER: ${{ vars.HX_ADMIN_USER }}
+                  HX_ADMIN_PASSWORD: ${{ secrets.HX_ADMIN_PASSWORD }}
                   DEPLOY_SHA: ${{ github.sha }}
                   DEPLOY_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
               run: pnpm run deploy

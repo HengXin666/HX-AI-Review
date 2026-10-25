@@ -26,9 +26,10 @@ Settings -> Secrets and variables -> Actions.
 | `HX_ACCESS_AUD` | variable | 部署后 | Access 应用的 AUD tag |
 | `HX_ACCESS_TEAM_DOMAIN` | variable | 部署后 | 例如 `myteam.cloudflareaccess.com` |
 | `HX_ADMIN_USER` | variable | 否 | 总览页密码登录用户名, 默认 `admin` |
-| `HX_ADMIN_PASSWORD` | variable | 否 | 总览页密码, 默认 `hx-context-review`. 部署后应改掉 |
+| `HX_ADMIN_PASSWORD` | secret | 否 | 总览页密码, 默认 `hx-context-review`. 写成 secret 而不是 variable, 因为 workflow 变量在运行页面上可见 |
 | `HX_WORKER_NAME`, `HX_D1_NAME`, `HX_R2_BUCKET`, `HX_PAGES_PROJECT` | variable | 否 | 资源名, 默认都是 `hx-context-review` |
-| `HX_OVERVIEW_URL` | variable | 否 | 总览页地址 (自定义域名时填). 不填时从 Cloudflare API 读取 Pages 项目的实际域名 (项目名被占用时会带随机后缀) |
+| `HX_PAGES_DOMAIN` | variable | 否 | Pages 自定义域名, 例如 `cr.woa.qzz.io`. 部署时调用 Pages API 把域名挂到项目上, 并检查该域名所属 zone 在本账号内; DNS 记录仍需在 zone 里建一次 (见第 4 步) |
+| `HX_OVERVIEW_URL` | variable | 否 | 总览页地址, 用了 `HX_PAGES_DOMAIN` 就填 `https://<域名>`, 写进 Worker 的 OVERVIEW_URL 与部署摘要. 不填时从 Cloudflare API 读取 Pages 项目的实际域名 (项目名被占用时会带随机后缀) |
 
 ## 3. 运行部署
 
@@ -39,15 +40,21 @@ Actions -> deploy-cf -> Run workflow:
 
 部署顺序: 先跑 typecheck 与测试; 创建或复用 Pages 项目并读取其实际域名 (写入 Worker 的 OVERVIEW_URL); 再创建或复用 D1, 生成带真实 database_id 与部署信息 (commit, 时间, 运行链接) 的 wrangler 配置; 应用 D1 迁移; 创建或复用 R2 bucket, 部署 Worker, 再幂等重放一次 rule_results 回填 (补上迁移完成到新 Worker 生效之间旧 Worker 写入的命中); 构建并部署 Pages. 运行摘要 (Summary) 会列出 Worker 地址 (即业务仓库的 `HX_CTX_ENDPOINT`) 与总览页地址.
 
-## 4. 配置 Access (首次部署后做一次)
+## 4. 绑定自定义域名
+
+用 `HX_PAGES_DOMAIN` 时, 部署会调用 `POST /accounts/<id>/pages/projects/<project>/domains` 把域名挂到 Pages 项目上 (已挂过就复用), 并向上逐级查 zone, 找不到所属 zone 直接失败. 之后在 zone 里补一条 DNS 记录: `CNAME <子域> -> <project>.pages.dev`, 开启代理; Pages 会在证书签发后接管, 状态从 "Initializing" 变为 "Active". 记录建好后再跑一次部署, 摘要里的 Pages 地址就是自定义域名.
+
+## 5. 配置 Access (首次部署后做一次)
 
 1. Zero Trust -> Access -> Applications 新建 Self-hosted 应用, 域名为总览页地址 (`<project>.pages.dev` 或你的自定义域名), 策略只允许管理员.
 2. 把该应用的 AUD tag 与团队域名写进仓库变量 `HX_ACCESS_AUD`, `HX_ACCESS_TEAM_DOMAIN`.
 3. 再运行一次 deploy-cf, `target` 选 `worker`.
 
+没配 Access 时, 总览页也能用 `HX_ADMIN_USER` / `HX_ADMIN_PASSWORD` 登录, 但那只是单口令: 没有身份校验, 也没有 Access 的审计日志. 对公网域名建议把 Access 配上, 或至少把口令换成强口令.
+
 Worker 本身 (`*.workers.dev`) 不需要套 Access: `/init`, `/runs`, `/feedback` 用 HX_CTX_TOKEN 鉴权. `/api/*` 优先校验 Access JWT; 没有 Access 身份时, 若 Worker 配置了 `ADMIN_USER` 与 `ADMIN_PASSWORD` (部署变量 `HX_ADMIN_USER` / `HX_ADMIN_PASSWORD`, 默认 `admin` / `hx-context-review`), 可用 `POST /api/session` 换取 HttpOnly cookie `hxctx_admin`. 两者都没有时 fail closed, 一律 403. 默认密码写在生成的 Worker vars 里, 生产环境请用上面的变量覆盖.
 
-## 5. 在总览页完成配置
+## 6. 在总览页完成配置
 
 打开总览页:
 
@@ -66,7 +73,7 @@ cd cf-admin
 CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... pnpm run deploy
 ```
 
-## 6. 发布可复用 workflow 版本
+## 7. 发布可复用 workflow 版本
 
 调用方引用 `review.yml@v1`. 在本仓库 main 上打 tag:
 
