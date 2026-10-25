@@ -39,12 +39,16 @@ export function App() {
     const [filter, setFilter] = useState<KindFilter>("all");
 
     const fail = useCallback((err: Error) => {
-        setError(err.message);
         setLoading(false);
+        // 403 is not a failure, it is "not logged in yet": showing it as an error would put a scary red
+        // banner on the login screen, which is the correct state for a first visit.
         if (isUnauthenticated(err)) {
+            setError(null);
             setPhase("login");
             setData(null);
+            return;
         }
+        setError(err.message);
     }, []);
 
     const reload = useCallback(() => {
