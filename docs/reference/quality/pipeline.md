@@ -89,8 +89,8 @@ workflow_call (业务仓库调用, 本仓库自身不跑)
 |---|---|---|
 | HC-CONTEXT | Error | 含 README.md 或 AGENTS.md 的目录两者成对, AGENTS.md 少于 150 行 |
 | HC-BUDGET | Error | 任一目录的祖先 AGENTS 链加技能注入上界不超过 65536 字节 (被 exclude 的路径从不注入, 不计入) |
-| HC-DOCNAME | Error | `docs/` 下目录与文件名小写 kebab, 无 v2 或日期副本 (decisions 除外); README/AGENTS 等固定名只豁免文件名 |
-| CX-DEADREF | Error / Warning | 上下文文件里的 Markdown 链接失效为 Error, 反引号路径失效为 Warning; 围栏代码块内不算 |
+| HC-DOCNAME | Error | `docs/` 下文档文件的目录与文件名小写 kebab, 无 v2 或日期副本 (decisions 除外); README/AGENTS 等固定名只豁免文件名. 只判文档扩展名 (md/mdx/yaml): `docs/` 里同时放站点源码 (tsx/html/css/svg) 不算违规. 非 ASCII 名与带序号的分节名 (`001-计佬常識`, `002-KMP`) 豁免, 因为 kebab 约束的是 ASCII 词分隔符, 不是要求文档用英文写 |
+| CX-DEADREF | Error / Warning | 上下文文件里的 Markdown 链接失效为 Error, 反引号路径失效为 Warning; 围栏代码块内不算. 只由点组成的一段 (`...`) 是省略号占位, 不按路径解析 |
 | CX-SKILL | Error | SKILL.md front matter 的 name 与目录名一致且有 description (兼容 CRLF) |
 | CX-ORPHAN | Warning | `docs/` 下没有任何上下文文件引用的文档 |
 
