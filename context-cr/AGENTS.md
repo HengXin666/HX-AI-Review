@@ -4,7 +4,8 @@ runner 侧代码. 设计见 [docs/architecture/context-cr.md](../docs/architectu
 
 ## 规则
 
-- L0 (`src/l0/`) 是唯一能产出 Error 的地方. 新增规则: 写 checker, 在 `src/l0/index.ts` 注册, 在 `src/constants.ts` 的 `RULE` 登记 ID, 在 `test/l0.test.ts` 加正反例, 并更新 [docs/reference/report-contract.md](../docs/reference/report-contract.md).
+- L0 (`src/l0/`) 是唯一能产出 Error 的地方, 且只在 `kind === "context"` 时运行. 新增规则: 写 checker, 在 `src/l0/index.ts` 注册, 在 `src/constants.ts` 的 `RULE` 登记 ID, 在 `test/l0.test.ts` 加正反例, 并更新 [docs/reference/report-contract.md](../docs/reference/report-contract.md).
+- 一次运行只跑一种 CR (`context` 或 `code`), 事实源是 `src/contract/kind.ts`. 新增按 kind 分叉的行为时, scope, 提示词, 规则命名空间与产物四处要一起看; scope 的 kind 与 `InitConfig.kind` 不一致必须失败关闭, 不能拿另一套提示词硬审.
 - 语义不确定的情况只发 Warning, 不按关键词猜测升级为 Error.
 - 每条 L0 规则独立运行, 一条崩溃变成 tool-error, 不能让其他规则短路.
 - AI 阶段只经 `src/review/agent.ts` 的 `AgentRunner` 端口调用模型; `src/review/pi.ts` 是唯一 import pi SDK 的文件.
@@ -14,7 +15,7 @@ runner 侧代码. 设计见 [docs/architecture/context-cr.md](../docs/architectu
 - 改 `src/review/` 或 `src/scope/` 前先读 [docs/architecture/agent-review.md](../docs/architecture/agent-review.md), 并在同一次改动里更新它.
 - api_key 只存在于 RUNNER_TEMP 下的 0600 key 文件 (review 读后即删), 本地运行时可选的 `HX_CTX_API_KEY` 环境变量, 以及 review 进程内; 不写进 `$GITHUB_ENV`, 报告或其他状态文件. `::add-mask::` 前按 workflow command 规则转义 `%`.
 - 运行状态只写 `src/state.ts` 管理的 RUNNER_TEMP 目录, 不写进被审仓库; publish 只信任带本次 nonce 的 AI 结果.
-- 补丁只有在只改动被报告的上下文文件时才可推送; 补丁分支失败不能阻断入库.
+- 补丁只有在只改动被报告的上下文文件时才可推送; 补丁分支失败不能阻断入库. `kind === "code"` 的运行永不推送补丁分支: `report_finding` 在 code 下没有 patch 参数, publish 也整段跳过.
 - 重复出现 3 次及以上的字面量放 `src/constants.ts`.
 
 ## 验证

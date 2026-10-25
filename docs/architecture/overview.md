@@ -29,8 +29,8 @@ GitHub (计算)                                       Cloudflare (配置 / 存�
 | Actions runner (一次运行)     |   (3) POST /runs    |  POST /runs  POST /feedback   |
 | 1 checkout fetch-depth 0     | -----------------> |  更新 last_sha 与预算          |
 | 2 init  (mask api_key)       |                    +------+--------------+-------+
-| 3 L0 确定性检查 (Error)       |                           v              v
-| 4 context_scope              |                    +-----------+  +--------------+
+| 3 L0 (仅 context, Error)     |                           v              v
+| 4 scope (context/code)       |                    +-----------+  +--------------+
 | 5 pi finder -> verifier ------+--(2) 直连 api_url   | D1 rows   |  | R2 报告/会话   |
 | 6 入库 + 回写                 |       |             +-----------+  | /补丁          |
 +------------------------------+       v             总览页 Pages + Access         |
@@ -41,7 +41,7 @@ GitHub (计算)                                       Cloudflare (配置 / 存�
 |---|---|---|
 | 调用方 workflow | 业务仓库 `.github/workflows/*.yml` | 约 10 行, 只声明触发事件, 引用可复用 workflow, 传 HX_CTX_TOKEN |
 | 可复用 workflow | [.github/workflows/review.yml](../../.github/workflows/review.yml) | 6 个步骤, 3 个输入 (`endpoint`, `tool-ref`, `kind`), concurrency 串行与防抖, 权限 contents/pull-requests write |
-| runner CLI | [context-cr/](../../context-cr/README.md) | init, l0, scope, review, publish 五个子命令; scope 与 review 按 kind 分派 |
+| runner CLI | [context-cr/](../../context-cr/README.md) | init, l0, rules, scope, review, publish 六个流水线子命令 (另有 local, test, run); scope 与 review 按 kind 分派 |
 | 配置与入库 Worker | [cf-admin/worker/](../../cf-admin/worker/index.ts) | /init, /spend, /runs, /feedback, /api/*; 按 kind 过滤运行, 发现与规则聚合 |
 | 存储 | D1 + R2 | D1: repos, runs, findings (三者都带 kind), feedback, budget, suppressions; R2: MD/JSON 报告, pi 会话 JSONL, 补丁 |
 | 总览页 | [cf-admin/pages/](../../cf-admin/pages/src/App.tsx) | 部署状态, 仓库登记与开关/模式/kind/预算, provider 管理, 最近运行, 待处理发现, 一键合入补丁, 驳回原因回流, context / code 切换. 构建产物作为 Worker 静态资源一起部署, 与 API 同域 |

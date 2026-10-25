@@ -20,7 +20,7 @@ Worker 服务两种 CR: 一次运行带一个 `kind` (`context` 或 `code`), 仓
 | `GET /api/rules` | Access 或会话 cookie | 按规则 id 与严重级聚合 rule_results; `repo`, `severity`, `kind`, `limit` 四个查询参数分别限定仓库, 等级, CR 种类与返回条数 |
 | `GET /api/status` | Cloudflare Access | 部署的 commit, 时间, 运行链接, Access 是否配置 |
 | `POST /api/repos` | Access | 登记仓库, 返回一次性明文 token |
-| `PATCH /api/repos/{owner}/{repo}` | Access | 开关, 模式 (full/l0), provider, 模型分级, 月预算 |
+| `PATCH /api/repos/{owner}/{repo}` | Access | 开关, 模式 (full/l0), kind (context/code/both), provider, 模型分级, 月预算 |
 | `POST /api/repos/{owner}/{repo}/rotate-token` | Access | 轮换 token |
 | `PUT /api/providers/{name}` | Access | api_url, api 类型, key 所在 secret 名, 上下文窗口, 每百万 token 输入/输出价格 |
 | `GET /api/findings/{id}/patch` | Access | 从 R2 取补丁 |
@@ -34,6 +34,7 @@ Worker 服务两种 CR: 一次运行带一个 `kind` (`context` 或 `code`), 仓
 - 缺省: `/init` 不带 `kind` 时, 仓库只服务 `code` 就取 `code`, 否则取 `context`; `POST /runs` 不带 `kind` 时取 `context` (这是升级前所有 runner 发的东西).
 - 拒绝而不是改默认: 仓库只服务一种时请求另一种返回 400 (`repository is registered for context reviews, not code`), 因为跑错一种却照常计费, 比直接报错更难发现. 非法取值同样 400.
 - `last_sha` 只对 context 有意义: `/init` 只在 `kind=context` 时下发 `lastSha`, `POST /runs` 只在 `kind=context` 且是 push 且 `complete` 不为 false 时推进它. 代码 CR 不读也不写这个游标, 否则一次代码审查会把上下文覆盖率悄悄跳过一段.
+- `mode=l0` 与 `kind=code` 互斥: 前者表示 "只跑确定性检查, 不调模型", 而代码 CR 没有确定性阶段, 这一对组合既不检查也不审查却照样上报状态. `/init` 直接 400 并说明该改哪一项 (`mode` 改 full, 或把仓库登记成 context), 而不是下发一份跑不出任何东西的配置.
 
 ## /init 的 L0-only 判定
 
