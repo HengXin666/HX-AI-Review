@@ -179,6 +179,23 @@ export function SidebarNavItemButton(
     return null;
 }
 
+/** The library's single icon entry: a component, an Iconify class string, or any node. */
+export function IconSlot(_props: { source?: unknown; className?: string; size?: string | number }): ReactNode {
+    return null;
+}
+
+export function MotionSelect(_props: {
+    value: string;
+    onValueChange: (value: string) => void;
+    options: readonly { value: string; label: ReactNode; disabled?: boolean; title?: string }[];
+    placeholder?: string;
+    disabled?: boolean;
+    triggerClassName?: string;
+    "aria-label"?: string;
+}): ReactNode {
+    return null;
+}
+
 export function CodeBlock(_props: {
     code: string;
     lang?: string;

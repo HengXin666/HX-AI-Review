@@ -11,6 +11,7 @@ import {
     CardTitle,
     DataTable,
     Input,
+    MotionSelect,
 } from "@hx/ui";
 import type { DataTableColumn } from "@hx/ui";
 import type { Provider, ProviderInput } from "../api.ts";
@@ -32,7 +33,13 @@ type Parsed = { name: string; input: Partial<ProviderInput> } | { error: string 
  * Invalid numbers are an error, never a silent 0: a zero price disables budgets. Empty optional fields
  * are left out so the Worker keeps the stored value (or its default for a new provider).
  */
-function readForm(form: HTMLFormElement, known: Provider[]): Parsed {
+const API_ITEMS = [
+    { value: "keep", label: "协议: 保持 (新增为 openai-completions)" },
+    { value: "openai-completions", label: "openai-completions" },
+    { value: "anthropic-messages", label: "anthropic-messages" },
+];
+
+function readForm(form: HTMLFormElement, known: Provider[], api: string): Parsed {
     const data = new FormData(form);
     const text = (key: string) => String(data.get(key) ?? "").trim();
     const name = text("name");
@@ -41,8 +48,7 @@ function readForm(form: HTMLFormElement, known: Provider[]): Parsed {
         return { error: "名称只能包含字母, 数字, '.', '_' 或 '-'" };
     }
     const input: Partial<ProviderInput> = {};
-    // Empty select = keep the stored protocol on update (the Worker defaults a new provider to openai-completions).
-    const api = text("api");
+    // "keep" means leave the stored protocol alone on update (the Worker defaults a new provider).
     if (api === "openai-completions" || api === "anthropic-messages") {
         input.api = api;
     }
@@ -81,9 +87,11 @@ type Props = { providers: Provider[]; onSave: (name: string, input: Partial<Prov
 /** Model providers. The key itself is a Worker secret set by the deploy workflow; only its presence shows. */
 export function Providers({ providers, onSave }: Props) {
     const [error, setError] = useState<string | null>(null);
+    // Controlled because the select is a Radix widget: it does not submit a form field.
+    const [api, setApi] = useState("keep");
     const submit = (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
-        const parsed = readForm(event.currentTarget, providers);
+        const parsed = readForm(event.currentTarget, providers, api);
         if ("error" in parsed) {
             setError(parsed.error);
             return;
@@ -157,16 +165,13 @@ export function Providers({ providers, onSave }: Props) {
                         className="w-60"
                         aria-label="api_url"
                     />
-                    <select
-                        name="api"
+                    <MotionSelect
                         aria-label="协议"
-                        defaultValue=""
-                        className="h-8 rounded-lg border border-border bg-card px-2 text-[length:var(--fs-xs)] text-foreground"
-                    >
-                        <option value="">协议: 保持 (新增为 openai-completions)</option>
-                        <option value="openai-completions">openai-completions</option>
-                        <option value="anthropic-messages">anthropic-messages</option>
-                    </select>
+                        value={api}
+                        onValueChange={setApi}
+                        options={API_ITEMS}
+                        triggerClassName="h-8 w-72 text-[length:var(--fs-xs)]"
+                    />
                     <Input
                         name="keySecret"
                         placeholder="PROVIDER_DEFAULT_KEY"

@@ -1,4 +1,15 @@
 import type { ReactNode } from "react";
+import {
+    BarChart3,
+    BookText,
+    FileClock,
+    FolderGit2,
+    LayoutDashboard,
+    ServerCog,
+    Sparkles,
+    TriangleAlert,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { AppFrame, Badge, Button, NavTabs, PageHeader, SegmentedControl, SidebarNavItemButton } from "@hx/ui";
 import type { Overview } from "./api.ts";
 import { dateTime, shortSha } from "./format.ts";
@@ -8,18 +19,24 @@ import type { KindFilter } from "./kind.ts";
 /** One entry of the left rail. "overview" is the dashboard; the rest are the detail screens. */
 export type SectionId = "overview" | "runs" | "findings" | "repos" | "providers" | "rules" | "prompts" | "deploy";
 
-export type NavEntry = { id: SectionId; label: string; badge?: string };
+export type NavEntry = { id: SectionId; label: string; icon: LucideIcon; badge?: string };
 
+/** Each entry carries an icon so the rail is scannable; eight labels alone looked alike. */
 export function navEntries(openFindings: number): NavEntry[] {
     return [
-        { id: "overview", label: "总览" },
-        { id: "runs", label: "运行记录" },
-        { id: "findings", label: "待处理发现", badge: openFindings > 0 ? String(openFindings) : undefined },
-        { id: "repos", label: "仓库" },
-        { id: "providers", label: "模型供应商" },
-        { id: "rules", label: "规则统计" },
-        { id: "prompts", label: "提示词附录" },
-        { id: "deploy", label: "部署" },
+        { id: "overview", label: "总览", icon: LayoutDashboard },
+        { id: "runs", label: "运行记录", icon: FileClock },
+        {
+            id: "findings",
+            label: "待处理发现",
+            icon: TriangleAlert,
+            badge: openFindings > 0 ? String(openFindings) : undefined,
+        },
+        { id: "repos", label: "仓库", icon: FolderGit2 },
+        { id: "providers", label: "模型供应商", icon: ServerCog },
+        { id: "rules", label: "规则统计", icon: BarChart3 },
+        { id: "prompts", label: "提示词附录", icon: BookText },
+        { id: "deploy", label: "部署", icon: Sparkles },
     ];
 }
 
@@ -91,6 +108,7 @@ export function Shell({ data, entries, section, filter, onFilter, onSection, onL
                                 item={{
                                     id: entry.id,
                                     label: entry.label,
+                                    icon: entry.icon,
                                     active: entry.id === section,
                                     badge: entry.badge ? { text: entry.badge, variant: "count" } : undefined,
                                 }}
@@ -112,6 +130,7 @@ export function Shell({ data, entries, section, filter, onFilter, onSection, onL
                         items={entries.map((entry) => ({
                             id: entry.id,
                             label: entry.label,
+                            icon: entry.icon,
                             badge: entry.badge ? <Badge variant="secondary">{entry.badge}</Badge> : undefined,
                         }))}
                         value={section}

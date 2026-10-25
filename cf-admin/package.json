@@ -15,6 +15,7 @@
     },
     "dependencies": {
         "@hx/ui": "github:HengXin666/HX-UI#768cc36be38851396fbefe4e3f5f69dcefa42e7b",
+        "lucide-react": "^1.48.0",
         "react": "19.3.0",
         "react-dom": "19.3.0"
     },

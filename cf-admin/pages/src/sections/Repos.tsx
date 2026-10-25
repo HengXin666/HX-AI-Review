@@ -1,6 +1,17 @@
 import { useState } from "react";
 import type { FocusEvent, FormEvent } from "react";
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle, DataTable, Input, Switch } from "@hx/ui";
+import {
+    Badge,
+    Button,
+    Card,
+    CardContent,
+    CardHeader,
+    CardTitle,
+    DataTable,
+    Input,
+    MotionSelect,
+    Switch,
+} from "@hx/ui";
 import type { DataTableColumn } from "@hx/ui";
 import type { Repo, RepoInput } from "../api.ts";
 import { repoKindOf } from "../api.ts";
@@ -27,21 +38,22 @@ function budgetBlur(repo: Repo, onChange: (patch: Partial<Repo>) => void) {
     };
 }
 
+const KIND_ITEMS = KIND_OPTIONS.map((option) => ({ value: option, label: repoKindLabel(option) }));
+const MODE_ITEMS = [
+    { value: "full", label: "full" },
+    { value: "l0", label: "l0" },
+];
+
 /** Kind is a repo-level choice: one review, or both. A single run is still always one kind. */
 function kindSelect(repo: Repo, onChange: (patch: Partial<Repo>) => void) {
     return (
-        <select
+        <MotionSelect
             aria-label="CR 类型"
-            className="h-7 rounded-lg border border-border bg-card px-2 text-[length:var(--fs-xs)] text-foreground"
             value={repoKindOf(repo.kind)}
-            onChange={(event) => onChange({ kind: event.target.value as Repo["kind"] })}
-        >
-            {KIND_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                    {repoKindLabel(option)}
-                </option>
-            ))}
-        </select>
+            onValueChange={(value) => onChange({ kind: value as Repo["kind"] })}
+            options={KIND_ITEMS}
+            triggerClassName="h-7 w-28 text-[length:var(--fs-xs)]"
+        />
     );
 }
 
@@ -55,6 +67,8 @@ type Props = {
 export function Repos({ repos, onChange, onCreate, onRotate }: Props) {
     const [token, setToken] = useState<{ repo: string; value: string } | null>(null);
     const [error, setError] = useState<string | null>(null);
+    // The select is a controlled Radix widget, not a form field, so the chosen kind lives in state.
+    const [newKind, setNewKind] = useState<RepoInput["kind"] & string>("context");
     const create = async (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
         const form = event.currentTarget;
@@ -74,10 +88,11 @@ export function Repos({ repos, onChange, onCreate, onRotate }: Props) {
             finderModel: text("finderModel"),
             verifierModel: text("verifierModel"),
             budgetUsd: budget,
-            kind: (text("kind") || "context") as RepoInput["kind"],
+            kind: newKind as RepoInput["kind"],
         };
         const value = await onCreate(input);
         form.reset();
+        setNewKind("context");
         setToken(value ? { repo: input.name, value } : null);
     };
     const rotate = async (name: string) => {
@@ -117,15 +132,13 @@ export function Repos({ repos, onChange, onCreate, onRotate }: Props) {
             header: "模式",
             width: "6rem",
             render: (repo) => (
-                <select
+                <MotionSelect
                     aria-label="运行模式"
-                    className="h-7 rounded-lg border border-border bg-card px-2 text-[length:var(--fs-xs)] text-foreground"
                     value={repo.mode}
-                    onChange={(event) => onChange(repo.name, { mode: event.target.value as Repo["mode"] })}
-                >
-                    <option value="full">full</option>
-                    <option value="l0">l0</option>
-                </select>
+                    onValueChange={(value) => onChange(repo.name, { mode: value as Repo["mode"] })}
+                    options={MODE_ITEMS}
+                    triggerClassName="h-7 w-24 text-[length:var(--fs-xs)]"
+                />
             ),
         },
         {
@@ -148,13 +161,13 @@ export function Repos({ repos, onChange, onCreate, onRotate }: Props) {
                         {usd(repo.spentUsd)}
                     </span>
                     <span className="text-muted-foreground">/</span>
-                    <input
+                    <Input
                         type="number"
                         min={0}
                         step={1}
                         aria-label={`${repo.name} 月度预算`}
                         defaultValue={repo.budgetUsd}
-                        className="w-16 rounded-lg border border-border bg-transparent px-1.5 text-right"
+                        className="h-7 w-20 px-1.5 text-right text-[length:var(--fs-xs)]"
                         onBlur={budgetBlur(repo, (patch) => onChange(repo.name, patch))}
                     />
                     <span className="text-[length:var(--fs-2xs)] text-muted-foreground">USD</span>
@@ -225,18 +238,13 @@ export function Repos({ repos, onChange, onCreate, onRotate }: Props) {
                         inputMode="decimal"
                         aria-label="月度预算"
                     />
-                    <select
-                        name="kind"
+                    <MotionSelect
                         aria-label="CR 类型"
-                        defaultValue="context"
-                        className="h-8 rounded-lg border border-border bg-card px-2 text-[length:var(--fs-xs)] text-foreground"
-                    >
-                        {KIND_OPTIONS.map((option) => (
-                            <option key={option} value={option}>
-                                {repoKindLabel(option)}
-                            </option>
-                        ))}
-                    </select>
+                        value={newKind}
+                        onValueChange={(value) => setNewKind(value as Repo["kind"] & string)}
+                        options={KIND_ITEMS}
+                        triggerClassName="h-8 w-28 text-[length:var(--fs-xs)]"
+                    />
                     <Button type="submit" variant="primary">
                         登记仓库
                     </Button>

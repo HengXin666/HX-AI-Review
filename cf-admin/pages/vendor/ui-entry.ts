@@ -21,4 +21,6 @@ export { NavTabs } from "../../node_modules/@hx/ui/src/layout/NavTabs.tsx";
 export { PageHeader } from "../../node_modules/@hx/ui/src/layout/PageHeader.tsx";
 export { SegmentedControl } from "../../node_modules/@hx/ui/src/layout/SegmentedControl.tsx";
 export { SidebarNavItemButton } from "../../node_modules/@hx/ui/src/layout/SidebarNav.tsx";
+export { IconSlot } from "../../node_modules/@hx/ui/src/layout/Icon.tsx";
+export { MotionSelect } from "../../node_modules/@hx/ui/src/layout/MotionSelect.tsx";
 export { StatCard, StatGrid } from "../../node_modules/@hx/ui/src/layout/StatCard.tsx";
