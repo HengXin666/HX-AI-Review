@@ -44,7 +44,19 @@ jobs:
 - `kind` 缺省就是 `context`, 写出来是为了让读者一眼看到这次审的是哪一种.
 - `endpoint` 是部署摘要里的 Worker 地址; 也可以不写, 改用仓库变量 `HX_CTX_ENDPOINT`.
 - 来自 fork 的 PR 不运行 review: 它拿不到 secrets, 也不能往本仓库推补丁分支.
-- 被调用的 workflow 需要 `contents: write` 与 `pull-requests: write`, 用于推补丁分支和评论. 如果组织默认 token 是只读, 在调用方 job 上加同样的 permissions.
+- 被调用的 workflow 需要 `contents: write` 与 `pull-requests: write`, 用于推补丁分支和评论.
+
+**必须在调用方 workflow 顶层显式写 `permissions`**, 不要依赖仓库默认值:
+
+```yaml
+permissions:
+    contents: write
+    pull-requests: write
+```
+
+仓库默认 token 是只读时, 这一项没法隐式继承. 后果不是一条有用的报错, 而是 `startup_failure`: 没有 job, 没有日志, 什么都看不到. 实测 8 个仓库里只有默认值为 `write` 的那一个能跑, 其余全部静默失败.
+
+排查方法: 对比 `gh api repos/{owner}/{repo}/actions/permissions/workflow` 的 `default_workflow_permissions`. 两种修法都行 —— 改仓库默认值为 `write`, 或者在调用方 workflow 里显式声明; 后者更稳, 因为它随代码走, 换仓库不会丢.
 
 ### 两种 CR 各配一个 job
 
