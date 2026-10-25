@@ -157,8 +157,11 @@ async function findZone(hostname: string): Promise<Zone | undefined> {
     return undefined;
 }
 
-/** Attach HX_PAGES_DOMAIN to the Pages project. Idempotent: an already attached hostname is reused. */
-async function ensurePagesDomain(project: string, hostname: string): Promise<string> {
+/**
+ * Attach HX_PAGES_DOMAIN to the Pages project and point a proxied CNAME at the project host. Idempotent:
+ * an already attached hostname and an already correct record are both reused.
+ */
+async function ensurePagesDomain(project: string, hostname: string): Promise<{ zone: string; dns: string }> {
     const zone = await findZone(hostname);
     if (!zone) {
         throw new Error(`no Cloudflare zone found for ${hostname}: add the domain to this account first`);
@@ -178,7 +181,40 @@ async function ensurePagesDomain(project: string, hostname: string): Promise<str
             throw new Error(`attaching ${hostname} to ${project} failed: ${response.status} ${detail.slice(0, 300)}`);
         }
     }
-    return zone.name;
+    const dns = await ensureDnsRecord(zone.id, hostname, `${project}.pages.dev`);
+    return { zone: zone.name, dns };
+}
+
+/** Point the custom hostname at the Pages project. An existing record is left alone and reported. */
+async function ensureDnsRecord(zoneId: string, hostname: string, target: string): Promise<string> {
+    const base = `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`;
+    const headers = {
+        authorization: `Bearer ${env("CLOUDFLARE_API_TOKEN")}`,
+        "content-type": "application/json",
+    };
+    const existing = await fetch(`${base}?name=${encodeURIComponent(hostname)}`, { headers });
+    if (!existing.ok) {
+        throw new Error(`DNS record lookup failed for ${hostname}: ${existing.status}`);
+    }
+    const records = (await existing.json()) as { result?: { type: string; content: string }[] };
+    const record = records.result?.[0];
+    if (record) {
+        return record.type === "CNAME" && record.content === target
+            ? "reused"
+            : `left alone (existing ${record.type} -> ${record.content})`;
+    }
+    const response = await fetch(base, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ type: "CNAME", name: hostname, content: target, proxied: true }),
+    });
+    if (!response.ok) {
+        const detail = await response.text();
+        throw new Error(
+            `creating the CNAME ${hostname} -> ${target} failed: ${response.status} ${detail.slice(0, 300)}`,
+        );
+    }
+    return "created";
 }
 
 function toml(value: string): string {
@@ -288,8 +324,8 @@ async function main(): Promise<void> {
         wrangler(["pages", "deploy", "--project-name", s.pagesProject, "--branch", "main"], { cwd: PAGES_DIR });
         report.push(`- Pages: ${s.overviewUrl || s.pagesProject}`);
         if (s.pagesDomain) {
-            const zone = await ensurePagesDomain(s.pagesProject, s.pagesDomain);
-            report.push(`- Pages custom domain: ${s.pagesDomain} (zone ${zone}, attach the CNAME from Pages once)`);
+            const { zone, dns } = await ensurePagesDomain(s.pagesProject, s.pagesDomain);
+            report.push(`- Pages custom domain: ${s.pagesDomain} (zone ${zone}, CNAME ${dns})`);
         }
     }
     if (worker && !s.overviewUrl) {
