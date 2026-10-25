@@ -112,6 +112,18 @@ skill 注入上界 = 所有 skill 的 front matter (常驻 L1) + 最大的 `conc
 
 豁免只认 base: 根目录豁免文件里只有与 base 版本逐字段一致的条目才能让发现保持 exempt; 工作区新增或修改的条目按 expired 处理, 对应 Error 照常阻断, 改动豁免文件本身还会产出 EXEMPT-001 Warning 交人工确认. base 解析失败时改用空树计算变更, 所有豁免按 expired 处理, 并产出阻断级 tool-error, 不允许在无法判断变更时放行.
 
+## 规则注册表只在 context 运行
+
+`rules` 步骤 (第 3b 步) 跑的是"上下文文件是否与代码一致"的判据, 属于上下文 CR. `kind === "code"` 时它直接输出 `rules: skipped` 并返回 0, 不跑任何规则.
+
+不这么做的后果是实测过的: 一个 578 条命中的仓库在 code job 里把 `HC-*` / `CX-*` 全跑了一遍, 既报了一次没人要的审查, 又因为超过 `POST /runs` 的 500 条上限而整次入库失败, 运行记录与花费一起丢掉.
+
+`cli.ts` 的 `runKind()` 决定这一步走哪条路: 显式 `--kind` 优先, 否则读 `init` 写进 state 的 config, 最后才是契约默认的 context. 读 state 而不是环境变量, 是为了让没有 `/init` 的本地运行走同一条路径.
+
+## 入库上限
+
+`POST /runs` 一次最多收 500 条发现 (`MAX_FINDINGS`). 历史积压大的仓库会超过这个数, 而让整个请求失败会连带丢掉运行记录, 报告与花费. `stepPublish` 的 `capFindings()` 因此按严重性截断: 先留 Error (它才是能阻断合并的那一类), 再按 `sortFindings` 已定的顺序补 Warning, 截断结果是确定的而不是随意的. 完整列表仍在报告里, 随同一次请求存进 R2.
+
 ## context_scope
 
 对每个变更路径 (改名同时看新旧名, 删除也算):

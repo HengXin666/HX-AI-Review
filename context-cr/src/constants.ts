@@ -34,6 +34,8 @@ export const AGENTS_MAX_BYTES = 16384;
 export const BUDGET_MAX_BYTES = 65536;
 export const DETAIL_LIMIT = 10;
 export const DIFF_MAX_BYTES = 60000;
+/** POST /runs rejects more than this many findings, so the runner caps its payload to match. */
+export const INGEST_FINDING_LIMIT = 500;
 export const DEFAULT_MAX_CANDIDATES = 12;
 /** Context bytes shown to one finder session; more files are split into further sessions. */
 export const CONTEXT_BATCH_BYTES = 40000;

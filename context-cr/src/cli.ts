@@ -9,6 +9,7 @@ import { isBlocking } from "./contract/report.ts";
 import { runRulesStep } from "./rules/run.ts";
 import { runLocal } from "./local/run.ts";
 import { runSuite } from "./local/suite/run.ts";
+import { load } from "./state.ts";
 import { stepInit, stepL0, stepPublish, stepReview, stepScope } from "./steps.ts";
 
 const USAGE = `usage: hx-context-review <command> [--root <dir>] [--base <ref>] [--kind context|code] [--format findings]
@@ -26,6 +27,19 @@ commands:
 --kind defaults to the /init answer; without /init (local runs) it defaults to context.`;
 
 type Args = { command: string; root: string; format?: string; base?: string; kind?: CrKind };
+
+/**
+ * The kind this invocation performs. An explicit --kind wins; otherwise the state written by init, and
+ * only then the contract default. Reading state rather than the environment keeps local runs, where
+ * there is no /init, on the same path as CI.
+ */
+function runKind(root: string, explicit: CrKind | undefined): CrKind {
+    if (explicit) {
+        return explicit;
+    }
+    const config = load<{ kind?: unknown }>(root, "config");
+    return config?.kind === "code" ? "code" : "context";
+}
 
 function parseArgs(argv: string[]): Args {
     const [command, ...rest] = argv;
@@ -108,6 +122,12 @@ async function main(argv: string[]): Promise<number> {
             return 0;
         }
         case "rules": {
+            // The rule registry judges whether the context files still match the code, so it belongs to a
+            // context CR. Running it under kind=code would file HC-*/CX-* findings against a diff review.
+            if (runKind(args.root, args.kind) === "code") {
+                process.stdout.write("rules: skipped (code CR has no deterministic stage)\n");
+                return 0;
+            }
             const rulesRun = runRulesStep(args.root);
             const counts = rulesRun.report.counts;
             process.stdout.write(
@@ -118,7 +138,8 @@ async function main(argv: string[]): Promise<number> {
         case "run": {
             await stepInit(args.root);
             const l0 = stepL0(args.root);
-            const rulesRun = runRulesStep(args.root);
+            const codeRun = runKind(args.root, args.kind) === "code";
+            const rulesRun = codeRun ? { report: { counts: { blocking: 0 } } } : runRulesStep(args.root);
             stepScope(args.root);
             await stepReview(args.root);
             await stepPublish(args.root);
