@@ -191,6 +191,7 @@ test("a later pull request run resolves missing L0 findings but not unchecked CX
         repoId: repo.id,
         prNumber: 9,
         runId: "r2",
+        kind: "context",
         seen: ["keep"],
         aiRechecked: false,
     });
@@ -316,4 +317,60 @@ test("the same file path in two repositories counts as two files", async () => {
     const stats = await store.ruleStats({}, 10);
     assert.equal(stats.total, 2);
     assert.equal(stats.byRule[0].files, 2);
+});
+
+test("a context round never resolves a code finding it did not look at", async () => {
+    const db = migrated();
+    const store = new D1Store(d1(db));
+    const repo = await store.createRepo("o/both-kinds", "hash", { kind: "both", mode: "full" });
+    const finding = (id: string, runId: string, kind: "context" | "code", fingerprint: string) => ({
+        id,
+        runId,
+        repoId: repo.id,
+        kind,
+        fingerprint,
+        ruleId: kind === "code" ? "CX-AI" : "HC-CONTEXT",
+        severity: "warning",
+        path: "a.ts",
+        line: 1,
+        message: "m",
+        evidence: "e",
+        patchKey: null,
+        status: "open" as const,
+    });
+    const run = (id: string, kind: "context" | "code") => ({
+        id,
+        repoId: repo.id,
+        kind,
+        sha: id,
+        baseSha: "base",
+        event: "pull_request",
+        prNumber: 7,
+        status: "warned",
+        l0Only: false,
+        errors: 0,
+        warnings: 1,
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0,
+        durationMs: 1,
+        patchBranch: null,
+        createdAt: "2026-10-11T00:00:00.000Z",
+    });
+    await store.insertRun(run("ctx1", "context"), [finding("ctx1-0", "ctx1", "context", "ctx-fp")]);
+    await store.insertRun(run("code1", "code"), [finding("code1-0", "code1", "code", "code-fp")]);
+
+    // The context round reports its own fingerprint only. The code finding is absent from that list, but
+    // the context review never saw it, so it must stay open: it was not re-checked, only out of scope.
+    await store.resolveRound({
+        repoId: repo.id,
+        prNumber: 7,
+        runId: "ctx1",
+        kind: "context",
+        seen: ["ctx-fp"],
+        aiRechecked: true,
+    });
+
+    const status = (id: string) => (db.prepare("SELECT status FROM findings WHERE id = ?").get(id) as Row).status;
+    assert.equal(status("code1-0"), "open");
 });
