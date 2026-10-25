@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { loadConfig } from "./config.ts";
-import { AI_FILE, ENV, INIT_FILE, L0_FILE, SCOPE_FILE, SESSION_FILE, UTF8 } from "./constants.ts";
+import { AI_FILE, ENV, INGEST_FINDING_LIMIT, INIT_FILE, L0_FILE, SCOPE_FILE, SESSION_FILE, UTF8 } from "./constants.ts";
 import { EMPTY_USAGE } from "./contract/finding.ts";
 import type { Finding, Patch, Usage } from "./contract/finding.ts";
 import { CONTEXT_KIND, parseKind } from "./contract/kind.ts";
@@ -28,6 +28,24 @@ import type { CodeScope } from "./scope/code.ts";
 import { computeScope } from "./scope/index.ts";
 import type { ContextScope } from "./scope/index.ts";
 import { dropKey, load, required, resetState, save, setOutput, stateFile, storeKey, takeKey } from "./state.ts";
+
+/**
+ * POST /runs accepts at most INGEST_FINDING_LIMIT findings. A repository with a large pre-existing
+ * backlog can exceed that, and letting the request fail loses the run, its report and its cost: the
+ * Worker never sees it and the overview shows nothing. Keep the most severe findings instead; the full
+ * list already lives in the report, which is stored in R2 by the same request.
+ *
+ * Errors come first because they are what can block a merge, and within a severity the order is the one
+ * sortFindings produced, so the truncation is deterministic rather than arbitrary.
+ */
+function capFindings(findings: Finding[]): Finding[] {
+    if (findings.length <= INGEST_FINDING_LIMIT) {
+        return findings;
+    }
+    const errors = findings.filter((item) => item.severity === "error");
+    const warnings = findings.filter((item) => item.severity !== "error");
+    return [...errors, ...warnings].slice(0, INGEST_FINDING_LIMIT);
+}
 
 type InitState = { nonce: string; config: InitConfig; startedAt: number; head: string; event: EventInfo };
 type L0State = { findings: Finding[] };
@@ -329,7 +347,7 @@ export async function stepPublish(root: string): Promise<number> {
             durationMs: report.durationMs,
             usage: report.usage,
             counts: report.counts,
-            findings: report.findings,
+            findings: capFindings(report.findings),
             patches: report.patches,
             patchBranch,
             budgetClaim: state.config.budgetClaim,

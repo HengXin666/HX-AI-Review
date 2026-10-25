@@ -83,6 +83,12 @@ code CR 不单独给 diff 留额度: hunk 本身就是 diff, 不再把整份 dif
 
 只读工具区分 "git 失败" 与 "空结果": `find` 与 `ls` 解析的是 `git ls-tree` 输出, 失败时不再把错误文本当文件名解析 (否则会回答 "No files." / "Empty or not a directory.", 让模型以为仓库里没有这些文件), 而是回 `git error: ...`; `grep` 无匹配仍返回 "No matches.". 上下文正文用 `git show HEAD:<path>` 从被审提交读取; 符号链接或读不到的文件不审, 记入 not reviewed. 这样大仓库不会把几十个文件塞进一个会话, 导致模型只看前面几个.
 
+### 入库上限
+
+`POST /runs` 一次最多收 500 条发现, 由 cf-admin 的 `MAX_FINDINGS` 决定. runner 侧对应 `INGEST_FINDING_LIMIT`, `stepPublish` 的 `capFindings()` 在超过时按严重性截断: 先留 Error (它才是能阻断合并的那一类), 再按 `sortFindings` 已定的顺序补 Warning.
+
+截断而不是让请求失败, 是因为失败的代价远大于丢几条明细: 整次运行记录, 报告与花费都会一起丢掉, 总览上看不到这次运行. 完整列表仍在报告里, 随同一次请求存进 R2.
+
 ### 3. finder: 找候选
 
 - 模型: `/init` 下发的 finder 档 (通常是便宜的小模型), 因为它要读很多内容, 产出只是候选. 两种 kind 用同一个档位.
