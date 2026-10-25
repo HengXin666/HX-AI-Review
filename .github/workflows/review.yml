@@ -82,7 +82,9 @@ jobs:
               env:
                   HX_CTX_TOKEN: ${{ secrets.HX_CTX_TOKEN }}
               run: node "$TOOL/context-cr/src/cli.ts" init
-            - name: 3 L0 deterministic checks
+            # Deterministic checks judge whether the context files still match the code, so they belong to
+            # context CR only. The runner skips them for kind=code and publishes an empty L0 result.
+            - name: 3 L0 deterministic checks (context kind only)
               id: l0
               continue-on-error: true
               run: node "$TOOL/context-cr/src/cli.ts" l0
@@ -90,7 +92,8 @@ jobs:
               id: rules
               continue-on-error: true
               run: node "$TOOL/context-cr/src/cli.ts" rules
-            - name: 4 context_scope
+            # Dispatches by kind: the context ancestor chain plus reverse references, or the diff hunks.
+            - name: 4 scope
               id: scope
               run: node "$TOOL/context-cr/src/cli.ts" scope
             - name: 5 pi finder -> verifier (reads and deletes the key file)

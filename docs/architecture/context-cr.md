@@ -58,6 +58,8 @@ runner 侧的三条规则:
 - `/init` 响应里的 `kind` 优先, 因为 Worker 知道仓库默认值. 只有响应缺这个字段时才回退到本次请求的 kind, 而不是固定回退到 `context`; 否则旧 Worker 会把一次 code 请求悄悄跑成 context CR.
 - `scope.json` 带 kind. review 步发现 scope 的 kind 与配置不一致时直接失败关闭 (错误信息为 `a <scope> scope cannot be reviewed as <config>`), 不调用任何模型: 用另一套提示词与规则审这份 scope, 会把上下文发现记成代码缺陷.
 
+`review.yml` 的第 4 步在文件里仍叫 `4 context_scope`, 但它按 kind 分派: context 走 `computeScope`, code 走 `computeCodeScope`, 输出 `empty` 的含义也随之变成 "没有上下文文件" 或 "没有可报的新增行". 步骤名是历史包袱, 改它会让已有运行日志与文档对不上, 所以先留名不改行为.
+
 L0 (第 3 步) 只在 context 运行里真正执行, 见上表. 规则引擎 (第 3b 步, ARCH/STYLE/DOC/CTX/CI) 是仓库级确定性检查, 不看 kind, 两种运行都会跑, 所以一次 code job 仍可能因为 `ARCH-001` 之类的仓库规则变红; 那是代码结构问题, 与 "上下文是否过时" 不是一回事. 上报时 L0 发现 (code 下为空) 与该运行的 AI 发现一并入库, 记在该运行的 kind 下; `last_sha` 只由 context 运行推进, 因为它是 "上下文已审到哪" 的游标.
 
 ## 审核区间
@@ -138,7 +140,7 @@ skill 注入上界 = 所有 skill 的 front matter (常驻 L1) + 最大的 `conc
 - 编排在 `context-cr/src/review/index.ts`, 只依赖 `AgentRunner` 端口; `context-cr/src/review/pi.ts` 用 pi SDK 实现该端口, 并负责每会话的轮数与时长上限.
 - `runReview` 按 scope 的 kind 分派到 `runContextReview` 或 `runCodeReview`; kind 与 scope 不一致时失败关闭, 一次模型会话都不开.
 - 两套提示词: context 用 `FINDER_SYSTEM` / `VERIFIER_SYSTEM`, code 用 `CODE_FINDER_SYSTEM` / `CODE_VERIFIER_SYSTEM`. 操作者附录 (`prompts.finder` / `prompts.verifier`) 对两套都生效, 都不能提高等级.
-- 分批: context 按带行号的正文 (`batchDocs`) 计, code 按 hunk 的 header 加 body (`batchHunks`) 计, 预算同为 `CONTEXT_BATCH_BYTES` 与 `MIN_BATCH_BYTES`. code 不把整份 diff 塞进提示词, hunk 本身就是 diff, 所以 `steps.ts` 给 code 传空 diff.
+- 分批: context 按带行号的正文 (`batchDocs`) 用 `budgets.doc` 计, code 按 hunk 的 header 加 body (`batchHunks`) 用 `budgets.diff` 计. code 不把整份 diff 塞进提示词, hunk 本身就是 diff, 所以 `steps.ts` 给 code 传空 diff.
 - `report_finding` 在 code 下没有 `patch` 参数: 代码 CR 只给建议文本, 不产补丁, 也就不可能推送分支. 拒掉这个字段是为了不让模型把轮次花在写一份注定被丢弃的补丁上.
 - 确定性闸门也分两套: context 要求 path 是本批的上下文文件且行号存在 (`gate`); code 要求 path 属于本批且 line 是本批某个 hunk 的新增行 (`gateCode`). 抑制表与去重两边一致.
 - `steps.ts` 的 review 步在开会话前调用 `buildEvidencePack` (调用图, 引用方, 最近相关 PR/issue). 失败只记日志, 不把运行标成 incomplete.

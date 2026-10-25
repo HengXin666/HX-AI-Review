@@ -73,7 +73,7 @@ scope (确定性)            diff -> 新增行的 hunk; 没有新增行则 0 次
 
 context CR 的总额再分给 diff (上限 `DIFF_MAX_BYTES` 60000, 下限 `MIN_DIFF_BYTES` 4000) 与上下文正文 (上限 `CONTEXT_BATCH_BYTES` 40000, 下限 `MIN_BATCH_BYTES` 4000). 所以每个 finder 会话看到的上下文正文取 `min(40000, 总额 - diff 预算)`, 按带行号前缀后的实际显示字节计算; 超出时贪心切成多批, 每批一个 finder 会话.
 
-code CR 没有单独的 diff 预算: hunk 本身就是 diff, 不再把整份 diff 塞进提示词 (`steps.ts` 给 code 运行传空 diff). 分批按 `header + body` 的实际显示字节计, 上限取上表的上下文正文额度, 超出时切成多批. 一个 hunk 自身超过额度时独占一批并截断显示, 模型可用 read 工具读其余部分.
+code CR 不单独给 diff 留额度: hunk 本身就是 diff, 不再把整份 diff 塞进提示词 (`steps.ts` 给 code 运行传空 diff). 分批 (`batchHunks`) 按 `header + body` 的实际显示字节计, 用与 context 的 diff 相同的额度 (`budgets.diff`), 超出时切成多批. 单个 hunk 的显示上限从 `budgets.doc` 起按渲染后的提示词余量收缩, 所以一个超长 hunk 只会被截断显示, 不会挤掉同批其他 hunk; 被截掉的部分模型可用 read 工具读.
 
 窗口连 `MIN_PROMPT_BYTES` 都放不下时不再抬高预算 (抬高只会让会话因上下文溢出而失败), 而是按 config 报错: 该区间记为未审, 运行 incomplete, last_sha 不推进.
 
@@ -153,8 +153,9 @@ code CR 没有这一环, 也没有下一步: `stepPublish` 在 `config.kind === 
 | 上限 | 值 | 来源 | 触发时 |
 |---|---|---|---|
 | 每批上下文字节 (context) | min(40000, 上下文窗口剩余额 - diff 预算) | `CONTEXT_BATCH_BYTES`, `MIN_BATCH_BYTES`, `PROMPT_RESERVE_BYTES` | 切成更多 finder 会话 |
-| 每批 hunk 字节 (code) | min(40000, 上下文窗口剩余额) | 同上 | 切成更多 finder 会话 |
+| 每批 hunk 字节 (code) | 与 diff 预算同值: max(4000, min(60000, 上下文窗口剩余额的一半)) | `DIFF_MAX_BYTES`, `MIN_DIFF_BYTES` | 切成更多 finder 会话 |
 | diff 字节 (context) | finder min(60000, 上下文窗口剩余额的一半), verifier 30000, 两者都再按渲染后的提示词余量收缩 | `DIFF_MAX_BYTES`, `MIN_DIFF_BYTES` | 截断, 并说明被截掉的部分工具读不到 (read 只读被审提交) |
+| 单个 hunk 显示字节 (code) | 从上下文正文额度起, 按渲染后的提示词余量收缩 | `CONTEXT_BATCH_BYTES`, `MIN_BATCH_BYTES` | 截断该 hunk, 提示用 read 工具读其余部分 |
 | 每次运行候选总数 | 默认 12 | `/init` 的 `limits.maxCandidates` | 剩余批次记为 not reviewed (报告中列出), 不算失败 |
 | 每会话轮数 | 40 | `SESSION_MAX_TURNS` | 仅当第 40 轮后仍需继续时才中止; 正常结束的最终回答不算超限, 运行记为 incomplete |
 | 每会话时长 | 8 分钟, 且不超过运行剩余时间 | `SESSION_TIMEOUT_MS` | 中止会话, 运行记为 incomplete |
