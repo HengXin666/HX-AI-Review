@@ -20,6 +20,7 @@ type Settings = {
     database: string;
     bucket: string;
     pagesProject: string;
+    pagesDomain: string;
     overviewUrl: string;
     accessAud: string;
     accessTeamDomain: string;
@@ -59,6 +60,7 @@ export function settings(): Settings {
         database: env("HX_D1_NAME", "hx-context-review"),
         bucket: env("HX_R2_BUCKET", "hx-context-review"),
         pagesProject,
+        pagesDomain: env("HX_PAGES_DOMAIN"),
         overviewUrl: env("HX_OVERVIEW_URL"),
         accessAud: env("HX_ACCESS_AUD"),
         accessTeamDomain: env("HX_ACCESS_TEAM_DOMAIN"),
@@ -132,6 +134,51 @@ async function pagesHost(project: string): Promise<string | undefined> {
     }
     const body = (await response.json()) as { result?: PagesProject };
     return body.result?.subdomain;
+}
+
+type Zone = { id: string; name: string };
+
+/** Zone that owns the custom hostname, so the Pages domain can be attached instead of only documented. */
+async function findZone(hostname: string): Promise<Zone | undefined> {
+    const labels = hostname.split(".");
+    for (let index = 1; index < labels.length - 1; index += 1) {
+        const name = labels.slice(index).join(".");
+        const url = `https://api.cloudflare.com/client/v4/zones?name=${encodeURIComponent(name)}`;
+        const response = await fetch(url, { headers: { authorization: `Bearer ${env("CLOUDFLARE_API_TOKEN")}` } });
+        if (!response.ok) {
+            throw new Error(`Zone lookup failed for ${name}: ${response.status}`);
+        }
+        const body = (await response.json()) as { result?: Zone[] };
+        const zone = body.result?.[0];
+        if (zone) {
+            return zone;
+        }
+    }
+    return undefined;
+}
+
+/** Attach HX_PAGES_DOMAIN to the Pages project. Idempotent: an already attached hostname is reused. */
+async function ensurePagesDomain(project: string, hostname: string): Promise<string> {
+    const zone = await findZone(hostname);
+    if (!zone) {
+        throw new Error(`no Cloudflare zone found for ${hostname}: add the domain to this account first`);
+    }
+    const account = env("CLOUDFLARE_ACCOUNT_ID");
+    const base = `https://api.cloudflare.com/client/v4/accounts/${account}/pages/projects/${project}/domains`;
+    const headers = {
+        authorization: `Bearer ${env("CLOUDFLARE_API_TOKEN")}`,
+        "content-type": "application/json",
+    };
+    const response = await fetch(base, { method: "POST", headers, body: JSON.stringify({ name: hostname }) });
+    if (!response.ok) {
+        const list = await fetch(base, { headers });
+        const body = list.ok ? ((await list.json()) as { result?: { name: string }[] }) : {};
+        if (!body.result?.some((domain) => domain.name === hostname)) {
+            const detail = await response.text();
+            throw new Error(`attaching ${hostname} to ${project} failed: ${response.status} ${detail.slice(0, 300)}`);
+        }
+    }
+    return zone.name;
 }
 
 function toml(value: string): string {
@@ -240,6 +287,10 @@ async function main(): Promise<void> {
         execFileSync("pnpm", ["exec", "vite", "build"], { cwd: PAGES_DIR, stdio: "inherit" });
         wrangler(["pages", "deploy", "--project-name", s.pagesProject, "--branch", "main"], { cwd: PAGES_DIR });
         report.push(`- Pages: ${s.overviewUrl || s.pagesProject}`);
+        if (s.pagesDomain) {
+            const zone = await ensurePagesDomain(s.pagesProject, s.pagesDomain);
+            report.push(`- Pages custom domain: ${s.pagesDomain} (zone ${zone}, attach the CNAME from Pages once)`);
+        }
     }
     if (worker && !s.overviewUrl) {
         report.push("", "OVERVIEW_URL is empty: deploy pages (or set HX_OVERVIEW_URL), then redeploy the worker.");
