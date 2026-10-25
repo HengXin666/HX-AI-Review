@@ -13,6 +13,10 @@ Cloudflare 侧 (D1 + 迁移, R2, Worker, Pages 总览页) 用手动触发的工�
 | Workers R2 Storage | Edit |
 | Cloudflare Pages | Edit |
 | Account Settings | Read |
+| Zone | Read |
+| DNS | Edit |
+
+后两项只在用 `HX_PAGES_DOMAIN` 绑自定义域名时需要: 查 zone 与建 CNAME 都走 zone 级接口.
 
 ## 2. 在本仓库配置 secrets 与 variables
 
@@ -42,7 +46,12 @@ Actions -> deploy-cf -> Run workflow:
 
 ## 4. 绑定自定义域名
 
-用 `HX_PAGES_DOMAIN` 时, 部署会调用 `POST /accounts/<id>/pages/projects/<project>/domains` 把域名挂到 Pages 项目上 (已挂过就复用), 并向上逐级查 zone, 找不到所属 zone 直接失败. 之后在 zone 里补一条 DNS 记录: `CNAME <子域> -> <project>.pages.dev`, 开启代理; Pages 会在证书签发后接管, 状态从 "Initializing" 变为 "Active". 记录建好后再跑一次部署, 摘要里的 Pages 地址就是自定义域名.
+用 `HX_PAGES_DOMAIN` 时, 部署在 Pages 部署完成后做两件事, 都可重复执行:
+
+1. 向上逐级查 zone (`/zones?name=`), 找不到所属 zone 直接失败, 不会静默跳过.
+2. 调 `POST /accounts/<id>/pages/projects/<project>/domains` 把域名挂到 Pages 项目上 (已挂过就复用), 再建一条开启代理的 `CNAME <子域> -> <project>.pages.dev`; 已存在且指向正确就复用, 指向别处则原样保留并在摘要里写明.
+
+因此 `CLOUDFLARE_API_TOKEN` 需要额外的 `Zone:Read` 与 `DNS:Edit` 权限. 证书由 Pages 签发, 域名状态从 "Initializing" 变为 "Active" 后才可访问; 摘要里的 Pages 地址此时就是自定义域名.
 
 ## 5. 配置 Access (首次部署后做一次)
 
