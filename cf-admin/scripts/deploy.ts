@@ -139,7 +139,7 @@ async function pagesHost(project: string): Promise<string | undefined> {
 type Zone = { id: string; name: string };
 
 /** Zone that owns the custom hostname, so the Pages domain can be attached instead of only documented. */
-async function findZone(hostname: string): Promise<Zone | undefined> {
+export async function findZone(hostname: string): Promise<Zone | undefined> {
     const labels = hostname.split(".");
     for (let index = 1; index < labels.length - 1; index += 1) {
         const name = labels.slice(index).join(".");
@@ -161,7 +161,7 @@ async function findZone(hostname: string): Promise<Zone | undefined> {
  * Attach HX_PAGES_DOMAIN to the Pages project and point a proxied CNAME at the project host. Idempotent:
  * an already attached hostname and an already correct record are both reused.
  */
-async function ensurePagesDomain(project: string, hostname: string): Promise<{ zone: string; dns: string }> {
+export async function ensurePagesDomain(project: string, hostname: string): Promise<{ zone: string; dns: string }> {
     const zone = await findZone(hostname);
     if (!zone) {
         throw new Error(`no Cloudflare zone found for ${hostname}: add the domain to this account first`);
@@ -186,7 +186,7 @@ async function ensurePagesDomain(project: string, hostname: string): Promise<{ z
 }
 
 /** Point the custom hostname at the Pages project. An existing record is left alone and reported. */
-async function ensureDnsRecord(zoneId: string, hostname: string, target: string): Promise<string> {
+export async function ensureDnsRecord(zoneId: string, hostname: string, target: string): Promise<string> {
     const base = `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`;
     const headers = {
         authorization: `Bearer ${env("CLOUDFLARE_API_TOKEN")}`,
