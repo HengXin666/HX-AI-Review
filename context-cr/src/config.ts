@@ -24,11 +24,21 @@ export type RepoConfig = {
     evidenceIssues: number;
 };
 
+/**
+ * Paths no L0 rule should judge. .agents/notes is written by the agent-notes tooling, so its layout is
+ * that tool's decision: demanding a paired README.md beside a generated AGENTS.md reports a problem the
+ * repository cannot fix by hand.
+ *
+ * .agents/skills is deliberately NOT excluded: HC-BUDGET and CX-SKILL exist to bound what a skill injects,
+ * and skipping the tree would silently disable those rules instead of fixing a false positive.
+ */
+export const DEFAULT_EXCLUDES = [".agents/notes/"];
+
 export const DEFAULT_CONFIG: RepoConfig = {
     skillRoots: [".agents/skills"],
     concurrentSkills: 1,
     orphanRoots: [DOCS_ROOT],
-    exclude: [],
+    exclude: DEFAULT_EXCLUDES,
     scopeIgnore: ["pnpm-lock.yaml", "package-lock.json", "uv.lock", "yarn.lock"],
     virtualPaths: ["scripts/.hx_code_quality/"],
     evidencePrs: 5,

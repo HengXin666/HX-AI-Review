@@ -12,7 +12,12 @@ export type Ref = { from: string; target: string; line: number; kind: RefKind };
 
 const LINK = /\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
 const CODE = /`([^`\s]+)`/g;
-const PATH_LIKE = /^[\w.@-]+(?:\/[\w.@-]+)+\/?$/;
+/**
+ * A path-shaped code span. A segment of only dots (`...`) is excluded on purpose: documentation
+ * writes `.agents/notes/...md` and `config/...` to mean "whatever lives there", and treating that
+ * ellipsis as a literal path reports a missing file the author never named.
+ */
+const PATH_LIKE = /^(?!.*(?:^|\/)\.{2,}[^/]*$)[\w.@-]+(?:\/[\w.@-]+)+\/?$/;
 const EXTERNAL = /^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i;
 const FENCE = /^(`{3,}|~{3,})/;
 
