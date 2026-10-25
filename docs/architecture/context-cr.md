@@ -157,3 +157,24 @@ skill 注入上界 = 所有 skill 的 front matter (常驻 L1) + 最大的 `conc
 - 报告: `scripts/.hx_code_quality/reports/context-review.{md,json}`, 超过 10 条只列数量与类型. 报告带 `kind`, Markdown 开头写明这次审的是哪一种.
 - 补丁分支: 只有 context 运行会推. 只收 verifier 判 correct, 且是单个已有文件的纯文本修改 (不含新建, 删除, 改权限, 改名, 二进制) 的补丁. `hx-ctx/patch-<head 前 12 位>`, 以 head 为基, 提交者 hx-context-review, `--force` 推送, 不碰被审分支. 互相冲突的补丁逐个跳过; 推送失败只记录日志, 不影响入库与评论. code 运行即使某个候选带了补丁也不会推: `stepPublish` 在 `config.kind === "code"` 时跳过整个推送步骤.
 - 评论: push 发 commit comment; PR 找到带 `<!-- hx-context-review -->` 标记的评论就更新, 否则新建. `POST /runs` 返回的 `resolved` 大于 0 时, 评论注明本 PR 上有多少条更早的发现被标成 resolved.
+
+### 评论的视觉结构
+
+评论不是纯文本摘要, 是一张可扫读的报告卡, 由 `src/publish/comment.ts` 渲染:
+
+| 区块 | 内容 |
+|---|---|
+| 标题行 | 等级徽章 + 工具名 + CR 类型 |
+| 作用域行 | 这一种 CR 审什么, 以及 `base...head` |
+| 报告卡 | 结论, 发现条数与规则数, 耗时, 用量 |
+| 等级表 | Error / Warning / 阻断 三行, 各带计数徽章与一句说明 |
+| 明细表 | 不超过 `DETAIL_LIMIT` 条时逐条列出; 超过则只按规则汇总 |
+| 页脚 | 补丁, 报告, 总览链接与版本 |
+
+徽章是内联 SVG data URI, 不是外链图片. 外链会把仓库名泄漏给第三方, 且托管方挂了评论就残; 内联则离线可读, 不依赖任何 CDN.
+
+GitHub 会剥掉评论里的 `<svg>` 元素但保留 `<img>`, 所以图形走 `<img src="data:image/svg+xml,...">` 而不是内联标记. 每个徽章有深色与浅色两个变体, 包在 `<picture>` 里由 `prefers-color-scheme` 选择: 固定一种颜色会在某个主题下看不见.
+
+结构优先于颜色: 每个数字在图片之外还有纯文本, 客户端丢弃图片时仍能读到全部计数.
+
+发现明细写进 HTML 表格单元格, 因此走 `escapeHtml` 而不是 `escapeMd`. 发现内容来自模型读一个不受信任的仓库, 只转义 Markdown 元字符会让 `<img onerror>` 直接生效.
