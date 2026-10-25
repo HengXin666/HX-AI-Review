@@ -193,6 +193,12 @@ export async function ensureDnsRecord(zoneId: string, hostname: string, target: 
         "content-type": "application/json",
     };
     const existing = await fetch(`${base}?name=${encodeURIComponent(hostname)}`, { headers });
+    if (existing.status === 403) {
+        throw new Error(
+            `cannot read DNS records for ${hostname}: the token lacks DNS:Edit (and Zone:Read). Create the CNAME ` +
+                `manually, or add those permissions and redeploy.`,
+        );
+    }
     if (!existing.ok) {
         throw new Error(`DNS record lookup failed for ${hostname}: ${existing.status}`);
     }

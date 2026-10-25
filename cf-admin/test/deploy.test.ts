@@ -106,3 +106,14 @@ test("a missing record is created as a proxied CNAME and reported", async () => 
         { type: "CNAME", name: "cr.woa.qzz.io", content: "hx-context-review.pages.dev", proxied: true },
     ]);
 });
+test("a token without DNS permission names the missing permission, not just 403", async () => {
+    await withFetch(
+        () => new Response(JSON.stringify({ success: false }), { status: 403 }),
+        async () => {
+            await assert.rejects(
+                ensureDnsRecord("zone-1", "cr.woa.qzz.io", "hx-context-review.pages.dev"),
+                /lacks DNS:Edit/,
+            );
+        },
+    );
+});

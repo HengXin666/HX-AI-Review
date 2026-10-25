@@ -51,7 +51,7 @@ Actions -> deploy-cf -> Run workflow:
 1. 向上逐级查 zone (`/zones?name=`), 找不到所属 zone 直接失败, 不会静默跳过.
 2. 调 `POST /accounts/<id>/pages/projects/<project>/domains` 把域名挂到 Pages 项目上 (已挂过就复用), 再建一条开启代理的 `CNAME <子域> -> <project>.pages.dev`; 已存在且指向正确就复用, 指向别处则原样保留并在摘要里写明.
 
-因此 `CLOUDFLARE_API_TOKEN` 需要额外的 `Zone:Read` 与 `DNS:Edit` 权限. 证书由 Pages 签发, 域名状态从 "Initializing" 变为 "Active" 后才可访问; 摘要里的 Pages 地址此时就是自定义域名.
+因此 `CLOUDFLARE_API_TOKEN` 需要额外的 `Zone:Read` 与 `DNS:Edit` 权限. 只有 `Zone:Read` 时域名仍会挂上, 但停在 `pending` (`CNAME record not set`), 脚本会明确报 "the token lacks DNS:Edit". 证书由 Pages 签发, 域名状态变为 "Active" 后才可访问.
 
 zone 解析, 域名挂载与 DNS 记录的三种结果 (复用 / 保留 / 创建) 由 `cf-admin/test/deploy.test.ts` 覆盖, 用替换 `fetch` 的方式跑, 不需要真实凭证.
 
