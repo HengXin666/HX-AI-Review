@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Entry for the reusable workflow. Each subcommand is one step of the v0.3 pipeline.
 import { resolve } from "node:path";
-import { ENV } from "./constants.ts";
+import { ENV, INIT_FILE } from "./constants.ts";
 import { git } from "./git.ts";
 import { parseKind } from "./contract/kind.ts";
 import type { CrKind } from "./contract/kind.ts";
@@ -37,8 +37,9 @@ function runKind(root: string, explicit: CrKind | undefined): CrKind {
     if (explicit) {
         return explicit;
     }
-    const config = load<{ kind?: unknown }>(root, "config");
-    return config?.kind === "code" ? "code" : "context";
+    // init saves the whole InitState under INIT_FILE, so the kind sits one level down at config.kind.
+    const state = load<{ config?: { kind?: unknown } }>(root, INIT_FILE);
+    return state?.config?.kind === "code" ? "code" : "context";
 }
 
 function parseArgs(argv: string[]): Args {
