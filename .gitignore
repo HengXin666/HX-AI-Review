@@ -6,3 +6,6 @@ scripts/.hx_code_quality/
 .dev.vars
 cf-admin/.deploy/
 cf-admin/pages/wrangler.toml
+
+# wrangler r2 object get writes the object path here when run from cf-admin
+cf-admin/runs/
