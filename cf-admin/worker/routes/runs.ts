@@ -304,6 +304,7 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
                       repoId: repo.id,
                       prNumber,
                       runId,
+                      kind,
                       seen: rows().map((item) => item.fingerprint),
                       aiRechecked: !run.l0Only && !incomplete,
                   });

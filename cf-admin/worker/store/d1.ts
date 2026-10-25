@@ -323,8 +323,11 @@ export class D1Store implements Store {
 
     async resolveRound(input: RoundInput) {
         // json_each of an empty array matches nothing, so NOT IN that set keeps every missing fingerprint.
+        // kind is part of the match, not a refinement: a context run only ever saw the context findings, so
+        // it must not resolve a code finding it never looked at. Without this filter the two kinds take
+        // turns resolving each other's findings on every pull request.
         const sql = `UPDATE findings SET status = 'resolved', resolved_by_run = ?1
-            WHERE status = 'open' AND repo_id = ?2 AND run_id != ?4
+            WHERE status = 'open' AND repo_id = ?2 AND run_id != ?4 AND kind = ?7
             AND run_id IN (SELECT id FROM runs WHERE repo_id = ?2 AND pr_number = ?3)
             AND fingerprint NOT IN (SELECT value FROM json_each(?5))
             AND (?6 = 1 OR rule_id != 'CX-AI')`;
@@ -344,6 +347,7 @@ export class D1Store implements Store {
                     input.runId,
                     JSON.stringify(input.seen),
                     input.aiRechecked ? 1 : 0,
+                    input.kind,
                 ),
             rules,
         ]);

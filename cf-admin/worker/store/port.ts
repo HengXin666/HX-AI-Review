@@ -116,6 +116,12 @@ export type RoundInput = {
     repoId: number;
     prNumber: number;
     runId: string;
+    /**
+     * Which review just finished. A round resolves only findings of its own kind: a context run reports
+     * the HC and CX fingerprints and says nothing about the diff findings a code run filed, so without
+     * this filter every code finding on the pull request is resolved by the next context run.
+     */
+    kind: Kind;
     /** Fingerprints reported by the run that just finished. Absent ones on this PR can be resolved. */
     seen: string[];
     /** False when the model stage did not run: AI findings stay open because they were not re-checked. */
