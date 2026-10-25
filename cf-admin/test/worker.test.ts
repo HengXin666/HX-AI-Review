@@ -36,6 +36,83 @@ test("the API still wins over assets on the shared hostname", async () => {
     assert.deepEqual(seen, []);
 });
 
+test("a run defaults to context and a repo registered for code rejects a context run", async () => {
+    const { call, token } = await registered();
+    const plain = await call("GET", "/init?repo=o/r", undefined, token);
+    assert.equal(((await plain.json()) as Record<string, unknown>).kind, "context");
+
+    const asCode = await call("GET", "/init?repo=o/r&kind=code", undefined, token);
+    assert.equal(asCode.status, 400);
+    assert.match(await asCode.text(), /registered for context reviews/);
+
+    assert.equal((await call("PATCH", "/api/repos/o/r", { kind: "both" })).status, 200);
+    const both = await call("GET", "/init?repo=o/r&kind=code", undefined, token);
+    assert.equal(both.status, 200);
+    assert.equal(((await both.json()) as Record<string, unknown>).kind, "code");
+});
+
+test("a code run does not advance last_sha, because it says nothing about the context files", async () => {
+    const { call, token, store } = await registered();
+    await call("PATCH", "/api/repos/o/r", { kind: "both" });
+    const init = (await (await call("GET", "/init?repo=o/r&kind=code", undefined, token)).json()) as Record<
+        string,
+        unknown
+    >;
+    // A code run must not inherit the context cursor either.
+    assert.equal(init.lastSha, undefined);
+
+    const posted = await call(
+        "POST",
+        "/runs",
+        {
+            repo: "o/r",
+            sha: "abc",
+            baseSha: "def",
+            event: "push",
+            kind: "code",
+            complete: true,
+            findings: [
+                {
+                    ruleId: "CODE-AI",
+                    severity: "warning",
+                    path: "src/a.ts",
+                    line: 3,
+                    message: "unchecked null",
+                    evidence: "e",
+                    fingerprint: "fp-code",
+                },
+            ],
+            budgetClaim: init.budgetClaim,
+        },
+        token,
+    );
+    assert.equal(posted.status, 201);
+    assert.equal(store.repos[0].lastSha, null);
+    assert.equal(store.runs[0].kind, "code");
+    assert.equal(store.findings[0].kind, "code");
+});
+
+test("mode l0 with kind code is refused, because a code review has no deterministic stage", async () => {
+    const { call, token } = await registered();
+    await call("PATCH", "/api/repos/o/r", { kind: "both", mode: "l0" });
+    const refused = await call("GET", "/init?repo=o/r&kind=code", undefined, token);
+    assert.equal(refused.status, 400);
+    assert.match(await refused.text(), /mode is l0 but the requested kind is code/);
+    // The context kind is still fine: it does have L0 rules to run.
+    const context = await call("GET", "/init?repo=o/r&kind=context", undefined, token);
+    assert.equal(context.status, 200);
+    assert.equal(((await context.json()) as Record<string, unknown>).l0Only, true);
+});
+
+test("the repo kind is validated and an unknown value is a 400", async () => {
+    const { call } = await registered();
+    assert.equal((await call("PATCH", "/api/repos/o/r", { kind: "nope" })).status, 400);
+    assert.equal(
+        (await call("POST", "/runs", { repo: "o/r", sha: "a", kind: "nope", findings: [] }, undefined)).status,
+        401,
+    );
+});
+
 test("without an assets binding the Worker answers 404 instead of pretending to serve a page", async () => {
     const { call } = setup();
     assert.equal((await call("GET", "/")).status, 404);

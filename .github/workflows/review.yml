@@ -13,6 +13,11 @@ on:
                 type: string
                 required: false
                 default: v1
+            kind:
+                description: Which review to run. context = are the context files still true; code = is the diff sound. Must match the kind the repository is registered for.
+                type: string
+                required: false
+                default: context
         secrets:
             HX_CTX_TOKEN:
                 required: true
@@ -31,7 +36,7 @@ jobs:
             pull-requests: write
         # Serialization and debounce: newer pushes cancel older runs; D1 last_sha keeps the range gap-free.
         concurrency:
-            group: hx-context-review-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+            group: hx-context-review-${{ inputs.kind }}-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
             cancel-in-progress: true
         # The /init budget claim is tied to this group: cancelling an older run in the same group lets the
         # newer one take over its claim, while runs in other groups still contend for the budget.
@@ -39,7 +44,8 @@ jobs:
         env:
             HX_CTX_ENDPOINT: ${{ inputs.endpoint || vars.HX_CTX_ENDPOINT }}
             TOOL: ${{ github.workspace }}/.hx-context-review-tool
-            HX_CTX_GROUP: hx-context-review-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+            HX_CTX_GROUP: hx-context-review-${{ inputs.kind }}-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+            HX_CTX_KIND: ${{ inputs.kind }}
         steps:
             # The AI stage bounds itself by the time left in this job, so it needs the job's own start
             # time: the 20-minute deadline covers only step 5, while checkout, install, init, L0 and

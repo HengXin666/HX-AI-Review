@@ -21,6 +21,7 @@ import type {
 const REPO_COLUMNS: Record<keyof RepoPatch, string> = {
     enabled: "enabled",
     mode: "mode",
+    kind: "kind",
     provider: "provider",
     finderModel: "finder_model",
     verifierModel: "verifier_model",
@@ -133,10 +134,11 @@ export class D1Store implements Store {
     }
 
     async insertRun(r: RunRow, findings: FindingRow[]) {
-        const runSql = `INSERT INTO runs (id, repo_id, sha, base_sha, event, pr_number, status, l0_only, errors, warnings,
-            input_tokens, output_tokens, cost_usd, duration_ms, patch_branch, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-        const findingSql = `INSERT INTO findings (id, run_id, repo_id, fingerprint, rule_id, severity, path, line, message, evidence,
-            patch_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`;
+        const runSql = `INSERT INTO runs (id, repo_id, kind, sha, base_sha, event, pr_number, status, l0_only, errors, warnings,
+            input_tokens, output_tokens, cost_usd, duration_ms, patch_branch, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+        const findingSql = `INSERT INTO findings (id, run_id, repo_id, kind, fingerprint, rule_id, severity, path, line, message, evidence,
+            patch_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`;
         const ruleSql = `INSERT INTO rule_results (finding_id, run_id, rule_id, severity, file, line, status, waived)
             VALUES (?, ?, ?, ?, ?, ?, 'open', 0)`;
         await this.db.batch([
@@ -145,6 +147,7 @@ export class D1Store implements Store {
                 .bind(
                     r.id,
                     r.repoId,
+                    r.kind,
                     r.sha,
                     r.baseSha,
                     r.event,
@@ -167,6 +170,7 @@ export class D1Store implements Store {
                         f.id,
                         f.runId,
                         f.repoId,
+                        f.kind,
                         f.fingerprint,
                         f.ruleId,
                         f.severity,
@@ -357,6 +361,11 @@ export class D1Store implements Store {
         if (filter.severity) {
             where.push("rule_results.severity = ?");
             args.push(filter.severity);
+        }
+        // Rule hits are per run, and the run knows whether it was a context or a code review.
+        if (filter.kind) {
+            where.push("runs.kind = ?");
+            args.push(filter.kind);
         }
         const clause = where.length ? " WHERE " + where.join(" AND ") : "";
         const byRuleSql = `SELECT rule_results.rule_id AS rule_id, COUNT(*) AS total,

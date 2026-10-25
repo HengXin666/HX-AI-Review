@@ -43,6 +43,12 @@ Actions -> deploy-cf -> Run workflow:
 
 部署顺序: 先跑 typecheck 与测试; 创建或复用 D1, 生成带真实 database_id 与部署信息 (commit, 时间, 运行链接) 的 wrangler 配置; 应用 D1 迁移; 创建或复用 R2 bucket; 用 Vite 把总览页构建到 `cf-admin/.deploy/assets`; 部署 Worker (脚本 + 静态资源 + `workers_dev`); 再幂等重放一次 rule_results 回填 (补上迁移完成到新 Worker 生效之间旧 Worker 写入的命中); 最后按 `HX_OVERVIEW_DOMAIN` 注册 zone route. 运行摘要 (Summary) 会列出 Worker 地址 (即业务仓库的 `HX_CTX_ENDPOINT`) 与总览页地址.
 
+### 升级期间不停服
+
+迁移必须排在 Worker 之前, 这条顺序是服务可用的前提. 每个迁移只做加列 (带 DEFAULT) 或建表, 所以迁移跑完之前旧 Worker 照常服务, 迁移跑完之后旧 Worker 遇到新列也能插入 (由 DEFAULT 填充). 反过来先部署新 Worker 会让它查询还不存在的列, 这是唯一会中断的写法, 所以 `scripts/deploy.ts` 的 worker 与 all 都先应用迁移再部署.
+
+回滚同样安全: 旧 Worker 读新 schema 时, 多出来的列不影响 `SELECT *` 的映射, 未知的 kind 值由 `rows.ts` 兜底成 `context`.
+
 ## 4. 绑定自定义域名
 
 总览页和 API 由同一个 Worker 提供, 所以自定义域名只要让 Worker 接管即可. 用 `HX_OVERVIEW_DOMAIN` 时, 部署在 Worker 上线后做两步, 都可重复执行:

@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DETAIL_LIMIT, ERROR, REPORT_DIR, REPORT_NAME, TOOL_NAME, TOOL_VERSION, UTF8 } from "../constants.ts";
+import type { CrKind } from "./kind.ts";
 import { sortFindings } from "./finding.ts";
 import type { Finding, Patch, Usage } from "./finding.ts";
 
@@ -8,6 +9,8 @@ export type ReviewReport = {
     tool: string;
     version: string;
     repo: string;
+    /** What this run reviewed: context files, or the diff itself. */
+    kind: CrKind;
     base: string;
     head: string;
     ok: boolean;
@@ -78,6 +81,7 @@ export function renderMarkdown(report: ReviewReport): string {
     const head = [
         "# " + TOOL_NAME + " report",
         "",
+        `Kind: ${report.kind}`,
         `Range: ${report.base.slice(0, 12)}..${report.head.slice(0, 12)}`,
         `Errors: ${report.counts.error}, warnings: ${report.counts.warning}, blocking: ${report.counts.blocking}`,
         `Patches: ${report.patches.filter((item) => item.applies).length}`,

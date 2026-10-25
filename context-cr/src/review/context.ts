@@ -1,4 +1,5 @@
 // What the models see of each context file: numbered lines, split into byte-bounded finder batches.
+import type { CodeHunk } from "../scope/code.ts";
 import type { ScopeEntry } from "../scope/index.ts";
 
 export type ContextDoc = { path: string; reasons: string[]; lines: string[] };
@@ -61,4 +62,28 @@ export function excerpt(doc: ContextDoc, line: number, radius: number): string {
     const from = Math.max(1, line - radius);
     const to = Math.min(doc.lines.length, line + radius);
     return numbered(doc.lines, from, to);
+}
+/**
+ * Greedy batches of hunks under the same byte budget, so one code finder session never gets more diff than
+ * it can read carefully. A single hunk larger than the budget gets a batch of its own and is shown truncated.
+ */
+export function batchHunks(hunks: CodeHunk[], budget: number): CodeHunk[][] {
+    const batches: CodeHunk[][] = [];
+    let current: CodeHunk[] = [];
+    let size = 0;
+    for (const hunk of hunks) {
+        // Measured as shown: the header, the line numbers and the fence the prompt adds around it.
+        const bytes = Buffer.byteLength(hunk.header + "\n" + hunk.body, "utf8");
+        if (current.length && size + bytes > budget) {
+            batches.push(current);
+            current = [];
+            size = 0;
+        }
+        current.push(hunk);
+        size += bytes;
+    }
+    if (current.length) {
+        batches.push(current);
+    }
+    return batches;
 }

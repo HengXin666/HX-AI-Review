@@ -2,19 +2,22 @@
 
 Cloudflare 侧. Worker 入口 [cf-admin/worker/index.ts](../../cf-admin/worker/index.ts), HTTP 契约 [cf-admin.yaml](../reference/api/cf-admin.yaml). 总体架构见 [overview.md](overview.md).
 
+Worker 服务两种 CR: 一次运行带一个 `kind` (`context` 或 `code`), 仓库登记时声明服务哪种 (`context`, `code` 或 `both`). Worker 不知道也不关心两种 CR 怎么审, 它只按 kind 校验, 分存, 聚合. 取舍原因见 [双模式决策](../decisions/2026-10-25-dual-cr-kind.md).
+
 ## 接口
 
 | 接口 | 鉴权 | 作用 |
 |---|---|---|
 | `GET /healthz` | 无 | 部署存活探针, 返回 `{"status":"ok"}`; 真实测试层用它验证后端可达 |
-| `GET /init` | Bearer HX_CTX_TOKEN | 配置下发: api_url, api_key, api 类型, finder/verifier 模型, 上下文窗口, last_sha, 抑制表, 当前 prompt 附录 |
-| `POST /runs` | Bearer HX_CTX_TOKEN | 入库: findings, 补丁, 耗时, token 用量, MD/JSON 报告, pi 会话 JSONL; 推进 last_sha 与预算; 同一 PR 上未再出现的发现标 resolved |
+| `GET /init` | Bearer HX_CTX_TOKEN | 配置下发: kind, api_url, api_key, api 类型, finder/verifier 模型, 上下文窗口, last_sha (仅 context), 抑制表, 当前 prompt 附录 |
+| `POST /spend` | Bearer HX_CTX_TOKEN | 把本次运行的预算预留标为已开始花费; 只有标记过的预留被接管时才按额度结算 |
+| `POST /runs` | Bearer HX_CTX_TOKEN | 入库: kind, findings, 补丁, 耗时, token 用量, MD/JSON 报告, pi 会话 JSONL; 推进 last_sha (仅 context) 与预算; 同一 PR 上未再出现的发现标 resolved |
 | `POST /feedback` | Bearer HX_CTX_TOKEN | 按指纹采纳或驳回; 驳回必须带原因, 并写入 prompt_notes |
 | `GET /api/overview` | Access 或会话 cookie | 部署信息, 所有仓库, provider (只含 key 是否存在), 最近 50 次运行, 待处理与已解决发现, prompt 版本与驳回笔记 |
 | `POST /api/session` | 无 (登录本身) | 用 Worker 变量里的用户名密码换 hxctx_admin cookie; 未配置凭证时 403 |
 | `DELETE /api/session` | 无 | 清除会话 cookie |
 | `GET /api/prompts`, `POST /api/prompts`, `POST /api/prompts/fold` | Access 或会话 | 列出, 发布或把未折叠的驳回笔记折进下一版附录 |
-| `GET /api/rules` | Access 或会话 cookie | 按规则 id 与严重级聚合 rule_results; `repo`, `severity`, `limit` 三个查询参数分别限定仓库, 等级与返回条数 |
+| `GET /api/rules` | Access 或会话 cookie | 按规则 id 与严重级聚合 rule_results; `repo`, `severity`, `kind`, `limit` 四个查询参数分别限定仓库, 等级, CR 种类与返回条数 |
 | `GET /api/status` | Cloudflare Access | 部署的 commit, 时间, 运行链接, Access 是否配置 |
 | `POST /api/repos` | Access | 登记仓库, 返回一次性明文 token |
 | `PATCH /api/repos/{owner}/{repo}` | Access | 开关, 模式 (full/l0), provider, 模型分级, 月预算 |
@@ -22,6 +25,15 @@ Cloudflare 侧. Worker 入口 [cf-admin/worker/index.ts](../../cf-admin/worker/i
 | `PUT /api/providers/{name}` | Access | api_url, api 类型, key 所在 secret 名, 上下文窗口, 每百万 token 输入/输出价格 |
 | `GET /api/findings/{id}/patch` | Access | 从 R2 取补丁 |
 | `POST /api/findings/{id}/feedback` | Access | 总览页的采纳或驳回 |
+
+## kind 的校验
+
+`kind` 出现在 `/init`, `POST /runs` 与 `PATCH /api/repos` 三处, 规则一致:
+
+- 一次运行只跑一种: 请求里的 kind 只能是 `context` 或 `code`, 仓库的 kind 可以是 `context`, `code` 或 `both`.
+- 缺省: `/init` 不带 `kind` 时, 仓库只服务 `code` 就取 `code`, 否则取 `context`; `POST /runs` 不带 `kind` 时取 `context` (这是升级前所有 runner 发的东西).
+- 拒绝而不是改默认: 仓库只服务一种时请求另一种返回 400 (`repository is registered for context reviews, not code`), 因为跑错一种却照常计费, 比直接报错更难发现. 非法取值同样 400.
+- `last_sha` 只对 context 有意义: `/init` 只在 `kind=context` 时下发 `lastSha`, `POST /runs` 只在 `kind=context` 且是 push 且 `complete` 不为 false 时推进它. 代码 CR 不读也不写这个游标, 否则一次代码审查会把上下文覆盖率悄悄跳过一段.
 
 ## /init 的 L0-only 判定
 
@@ -48,19 +60,21 @@ Cloudflare 侧. Worker 入口 [cf-admin/worker/index.ts](../../cf-admin/worker/i
 
 ## 数据
 
-D1 结构见 [0001_init.sql](../../cf-admin/migrations/0001_init.sql), 预算预留列见 [0002_budget_reservation.sql](../../cf-admin/migrations/0002_budget_reservation.sql), 多轮状态与提示词见 [0003_rounds_prompts.sql](../../cf-admin/migrations/0003_rounds_prompts.sql), 规则维度见 [0004_rule_results.sql](../../cf-admin/migrations/0004_rule_results.sql).
+D1 结构见 [0001_init.sql](../../cf-admin/migrations/0001_init.sql), 预算预留列见 [0002_budget_reservation.sql](../../cf-admin/migrations/0002_budget_reservation.sql), 多轮状态与提示词见 [0003_rounds_prompts.sql](../../cf-admin/migrations/0003_rounds_prompts.sql), 规则维度见 [0004_rule_results.sql](../../cf-admin/migrations/0004_rule_results.sql), kind 维度见 [0005_kind.sql](../../cf-admin/migrations/0005_kind.sql).
 
 | 表 | 内容 |
 |---|---|
 | providers | 名称, api_url, api 类型, key_secret (Worker secret 名), 上下文窗口, 最大输出, 输入/输出单价 |
-| repos | owner/repo (大小写不敏感, COLLATE NOCASE), token SHA-256, 开关, 模式, provider, 模型分级, 月预算, 本月花费, 预算月份, last_sha |
-| runs | 每次运行: sha, base, 事件, PR 号, 状态, Error/Warning 数, token, 花费, 耗时, 补丁分支 |
-| findings | 每条发现: 指纹, 规则, 等级, 位置, 说明, 证据, 补丁 R2 key, 状态 open/accepted/rejected/resolved, resolved_by_run |
+| repos | owner/repo (大小写不敏感, COLLATE NOCASE), token SHA-256, 开关, 模式, kind (context/code/both), provider, 模型分级, 月预算, 本月花费, 预算月份, last_sha |
+| runs | 每次运行: kind (context/code), sha, base, 事件, PR 号, 状态, Error/Warning 数, token, 花费, 耗时, 补丁分支 |
+| findings | 每条发现: kind (从运行继承), 指纹, 规则, 等级, 位置, 说明, 证据, 补丁 R2 key, 状态 open/accepted/rejected/resolved, resolved_by_run |
 | feedback | 每次采纳或驳回: 指纹, 结论, 原因, 来源 (token 或 Access 身份) |
 | suppressions | 驳回的指纹与原因, 下一次 /init 下发给 finder |
 | prompt_versions | 操作者附录: role finder 或 verifier, 版本号, 正文, 说明, 是否当前生效. 追加到 runner 内置系统提示, 不替换 |
 | prompt_notes | 驳回原因, 尚未折进附录时 folded_into 为空 |
-| rule_results | 每个运行的每个规则命中一行: run_id, rule_id, severity, file, line, status, waived; 与 findings 同批写入, 迁移时从 findings 回填 |
+| rule_results | 每个运行的每个规则命中一行: run_id, rule_id, severity, file, line, status, waived; 与 findings 同批写入, 迁移时从 findings 回填. 不存 kind: 命中属于某次运行, 而运行知道自己是哪一种, 聚合时 `JOIN runs` 过滤 |
+
+`0005_kind.sql` 只加带默认值的列, 所以迁移与 Worker 的部署顺序可以任意: 迁移跑完前旧 Worker 照常服务, 跑完后旧 Worker 也能插入 (由 DEFAULT 填充). 既有行按默认值变成 context 运行, 发现再按所属运行回填. 回滚同样安全: 旧 Worker 读新 schema 时多出来的列不影响映射, 未知的 kind 值由 `rows.ts` 兜底成 `context`.
 
 R2 键: `runs/<owner>/<repo>/<runId>/report.md`, `report.json`, `sessions.jsonl`, `patches/<fingerprint>.diff`.
 
@@ -86,7 +100,7 @@ provider 名只允许字母, 数字, `.`, `_`, `-`; 新建 provider 必须显式
 
 `rule_results` 与 findings 同批写入, 每次运行每个规则命中一行. 人工驳回把对应行置 `rejected` 且 `waived = 1`; 同一 PR 的后续提交未再报告时置 `resolved`, 与 findings 的多轮语义一致. `waived` 只表示已判定不处理, 不影响命中计数, 所以聚合能回答"哪条规则最常触发".
 
-`GET /api/rules` 按 rule_id 与 severity 聚合: `total` 与 `waived` 覆盖全部命中, `byRule` 按命中数降序 (最多 `limit` 条), `bySeverity` 给出每个等级的命中数与规则数, `topRule` 是最常触发的规则 id. `repo` 未登记时返回 404 而不是空视图, `severity` 与 `limit` 非法时返回 400. 规则 id 沿用统一命名空间: ARCH, STYLE, DOC, CTX, CI, TEST, META 前缀; 旧数据里的其他 id (如 CX-AI) 照常聚合, 不改写.
+`GET /api/rules` 按 rule_id 与 severity 聚合: `total` 与 `waived` 覆盖全部命中, `byRule` 按命中数降序 (最多 `limit` 条), `bySeverity` 给出每个等级的命中数与规则数, `topRule` 是最常触发的规则 id, `kind` 回显生效的过滤值 (未过滤时为 null). `repo` 未登记时返回 404 而不是空视图, `severity`, `kind` 与 `limit` 非法时返回 400. `kind` 过滤作用于 `runs.kind` (rule_results 不存 kind), 所以一次运行的所有命中作为一个整体被选中或排除. 规则 id 沿用统一命名空间: ARCH, STYLE, DOC, CTX, CI, TEST, META 前缀; 旧数据里的其他 id (如 CX-AI) 照常聚合, 不改写.
 
 迁移文件可重复执行: 建表与索引用 `IF NOT EXISTS`, 回填用 `INSERT OR IGNORE`, 所以重新执行既不会报错也不会重复插入.
 

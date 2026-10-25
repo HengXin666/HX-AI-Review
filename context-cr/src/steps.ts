@@ -3,6 +3,8 @@ import { loadConfig } from "./config.ts";
 import { AI_FILE, ENV, INIT_FILE, L0_FILE, SCOPE_FILE, SESSION_FILE, UTF8 } from "./constants.ts";
 import { EMPTY_USAGE } from "./contract/finding.ts";
 import type { Finding, Patch, Usage } from "./contract/finding.ts";
+import { CONTEXT_KIND, parseKind } from "./contract/kind.ts";
+import type { CrKind } from "./contract/kind.ts";
 import { buildReport, isBlocking, renderMarkdown, writeReport } from "./contract/report.ts";
 import type { ReviewReport } from "./contract/report.ts";
 import { changedFiles, diffText, headSha, patchFiles, showFile, tryGit } from "./git.ts";
@@ -21,6 +23,8 @@ import type { Rejection } from "./review/index.ts";
 import { createPiRunner } from "./review/pi.ts";
 import { resolveBase } from "./scope/base.ts";
 import type { EventInfo } from "./scope/base.ts";
+import { computeCodeScope } from "./scope/code.ts";
+import type { CodeScope } from "./scope/code.ts";
 import { computeScope } from "./scope/index.ts";
 import type { ContextScope } from "./scope/index.ts";
 import { dropKey, load, required, resetState, save, setOutput, stateFile, storeKey, takeKey } from "./state.ts";
@@ -41,6 +45,7 @@ type AiState = {
 
 const LOCAL_CONFIG: InitConfig = {
     repo: "local",
+    kind: CONTEXT_KIND,
     enabled: true,
     l0Only: true,
     api: "openai-completions",
@@ -50,9 +55,24 @@ const LOCAL_CONFIG: InitConfig = {
     suppressions: [],
 };
 
+/**
+ * The workflow's kind input. An unknown value is refused before any network call: guessing would run the
+ * wrong review and still report a status the overview trusts.
+ */
+function requestedKind(): CrKind | undefined {
+    const raw = process.env[ENV.kind];
+    return raw === undefined || raw === "" ? undefined : parseKind(raw);
+}
+
 export async function stepInit(root: string): Promise<InitState> {
     const repo = required(ENV.githubRepository);
-    const response = await fetchInit(required(ENV.endpoint), required(ENV.token), repo, process.env[ENV.group]);
+    const response = await fetchInit(
+        required(ENV.endpoint),
+        required(ENV.token),
+        repo,
+        process.env[ENV.group],
+        requestedKind(),
+    );
     const nonce = resetState(root);
     const { config, apiKey } = splitSecret(response);
     if (apiKey) {
@@ -72,7 +92,12 @@ function initState(root: string): InitState {
         return existing;
     }
     const head = headSha(root);
-    const config = { ...LOCAL_CONFIG, repo: process.env[ENV.githubRepository] ?? "local" };
+    // A local run has no /init, so HX_CTX_KIND (the --kind flag) is the only way to pick a kind.
+    const config = {
+        ...LOCAL_CONFIG,
+        kind: requestedKind() ?? LOCAL_CONFIG.kind,
+        repo: process.env[ENV.githubRepository] ?? "local",
+    };
     return { nonce: "local", config, startedAt: Date.now(), head, event: resolveBase(root, head) };
 }
 
@@ -82,31 +107,60 @@ function baseline(root: string, base: string): Approved[] {
     return text ? (JSON.parse(text) as Approved[]) : [];
 }
 
+/**
+ * L0 rules (HC-*, CX-*) judge whether context files match the code, so they belong to a context CR only.
+ * A code CR has no L0 stage: running them there would label context findings as kind=code and let a stale
+ * AGENTS.md fail a job whose subject is the diff, which are two different concerns. The empty list is
+ * still written, so publish and the CLI read a scope of the same shape for both kinds.
+ */
 export function stepL0(root: string): Finding[] {
     const state = initState(root);
+    if (state.config.kind === "code") {
+        save(root, L0_FILE, { findings: [] } satisfies L0State);
+        return [];
+    }
     const findings = runL0(worktreeSnapshot(root), loadConfig(root), baseline(root, state.event.base));
     save(root, L0_FILE, { findings } satisfies L0State);
     return findings;
 }
 
-export function stepScope(root: string): ContextScope {
+/** What one run reviews, as stored in scope.json: context files for one kind, diff hunks for the other. */
+export type RunScope = ContextScope | CodeScope;
+
+/**
+ * A code CR reads one file's diff at a time: the change list is already NUL-safe, so a path is never parsed
+ * out of a possibly C-quoted diff header.
+ */
+function diffOf(root: string, base: string, head: string, path: string): string {
+    return diffText(root, base, head, [path]);
+}
+
+export function stepScope(root: string): RunScope {
     const state = initState(root);
     const { base } = state.event;
     const changes = changedFiles(root, base, state.head);
-    const snapshot = worktreeSnapshot(root);
-    const scope = computeScope(snapshot, loadConfig(root), changes, base, state.head);
+    const config = loadConfig(root);
+    const scope =
+        state.config.kind === "code"
+            ? computeCodeScope((path) => diffOf(root, base, state.head, path), config, changes, base, state.head)
+            : computeScope(worktreeSnapshot(root), config, changes, base, state.head);
     save(root, SCOPE_FILE, scope);
-    setOutput("empty", scope.contexts.length === 0 ? "true" : "false");
+    setOutput("empty", scopeEmpty(scope) ? "true" : "false");
     return scope;
 }
 
-function reviewExpected(state: InitState, scope: ContextScope | undefined): boolean {
-    return !state.config.l0Only && (scope === undefined || scope.contexts.length > 0);
+/** True when the scope holds nothing to review: no context file, or no added line in the diff. */
+export function scopeEmpty(scope: RunScope): boolean {
+    return scope.kind === "code" ? scope.hunks.length === 0 : scope.contexts.length === 0;
+}
+
+function reviewExpected(state: InitState, scope: RunScope | undefined): boolean {
+    return !state.config.l0Only && (scope === undefined || !scopeEmpty(scope));
 }
 
 export async function stepReview(root: string): Promise<AiState | undefined> {
     const state = initState(root);
-    const scope = load<ContextScope>(root, SCOPE_FILE) ?? stepScope(root);
+    const scope = load<RunScope>(root, SCOPE_FILE) ?? stepScope(root);
     const apiKey = takeKey(root);
     if (!reviewExpected(state, scope)) {
         return undefined;
@@ -115,7 +169,8 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
         throw new Error("no api key from init; run the init step first");
     }
     const run = await createPiRunner(root, state.config, apiKey);
-    const diff = diffText(root, scope.base, scope.head);
+    // The diff is a context-CR input: a code CR is scoped to its hunks and reads the rest with its tools.
+    const diff = scope.kind === "code" ? "" : diffText(root, scope.base, scope.head);
     const endpoint = process.env[ENV.endpoint];
     const token = process.env[ENV.token];
     const claim = state.config.budgetClaim;
@@ -173,6 +228,11 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
     return ai;
 }
 
+/** One line per scope kind, so the report says what was actually in scope. */
+function scopeStage(scope: RunScope): string {
+    return scope.kind === "code" ? `${scope.hunks.length} diff hunk(s)` : `${scope.contexts.length} context file(s)`;
+}
+
 function aiStage(ai: AiState): string {
     const parts = [`${ai.findings.length} confirmed`, `${ai.rejected} rejected`];
     if (ai.notReviewed.length) {
@@ -215,15 +275,17 @@ export async function stepPublish(root: string): Promise<number> {
     dropKey(root);
     const state = initState(root);
     const l0 = load<L0State>(root, L0_FILE) ?? { findings: stepL0(root) };
-    const scope = load<ContextScope>(root, SCOPE_FILE);
+    const scope = load<RunScope>(root, SCOPE_FILE);
     const stored = load<AiState>(root, AI_FILE);
     // Only AI output produced by this run's review step counts; anything else is ignored.
     const ai = stored?.nonce === state.nonce ? stored : undefined;
     // Budget or provider problems mean the range was never reviewed: report incomplete so last_sha stays put.
     const skippedReview = state.config.l0Only && UNREVIEWED_CAUSES.has(state.config.l0Cause ?? "");
     const complete = scope !== undefined && !skippedReview && (!reviewExpected(state, scope) || ai?.complete === true);
+    const code = state.config.kind === "code";
     const report = buildReport({
         repo: state.config.repo,
+        kind: state.config.kind,
         base: state.event.base,
         head: state.head,
         findings: [...l0.findings, ...(ai?.findings ?? [])],
@@ -233,7 +295,7 @@ export async function stepPublish(root: string): Promise<number> {
         durationMs: Date.now() - state.startedAt,
         stages: {
             base: state.event.reason,
-            scope: scope ? `${scope.contexts.length} context file(s)` : "not run",
+            scope: scope ? scopeStage(scope) : "not run",
             ai: state.config.l0Only
                 ? "L0 only: " + (state.config.reason ?? "disabled")
                 : ai
@@ -245,7 +307,9 @@ export async function stepPublish(root: string): Promise<number> {
     });
     writeReport(root, report);
     const target = githubTarget();
-    const patchBranch = target ? safePatchBranch(root, state.head, report, target) : undefined;
+    // A code CR reviews the change instead of writing one: it never pushes a patch branch, even if a
+    // candidate somehow carried a patch.
+    const patchBranch = target && !code ? safePatchBranch(root, state.head, report, target) : undefined;
     const endpoint = process.env[ENV.endpoint];
     const token = process.env[ENV.token];
     let overviewUrl: string | undefined;
@@ -254,11 +318,12 @@ export async function stepPublish(root: string): Promise<number> {
         const sessionsPath = stateFile(root, SESSION_FILE);
         const ingest = await postRun(endpoint, token, {
             repo: state.config.repo,
+            kind: state.config.kind,
             sha: state.head,
             baseSha: state.event.base,
             event: state.event.name,
             prNumber: state.event.prNumber,
-            status: statusOf(report.counts, !scope?.contexts.length, complete),
+            status: statusOf(report.counts, scope === undefined || scopeEmpty(scope), complete),
             complete,
             l0Only: state.config.l0Only,
             durationMs: report.durationMs,

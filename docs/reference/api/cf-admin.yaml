@@ -41,12 +41,23 @@ components:
                 fingerprint: { type: string }
                 diff: { type: string }
                 applies: { type: boolean }
+        Kind:
+            type: string
+            enum: [context, code]
+            description: >-
+                What this run reviews. context checks AI context files (AGENTS.md, README.md, SKILL.md, docs)
+                against the code; code reviews the diff itself. A run is always exactly one kind.
+        RepoKind:
+            type: string
+            enum: [context, code, both]
+            description: Which reviews a repository serves. both means callers may request either kind.
         Init:
             type: object
-            required: [repo, enabled, l0Only, api, models, limits, suppressions]
+            required: [repo, enabled, kind, l0Only, api, models, limits, suppressions]
             properties:
                 repo: { type: string }
                 enabled: { type: boolean }
+                kind: { $ref: "#/components/schemas/Kind" }
                 l0Only: { type: boolean }
                 reason: { type: string }
                 l0Cause:
@@ -78,7 +89,11 @@ components:
                         output: { type: number }
                         cacheRead: { type: number }
                         cacheWrite: { type: number }
-                lastSha: { type: string }
+                lastSha:
+                    type: string
+                    description: >-
+                        The "context reviewed up to here" cursor. Only sent for kind=context, and only a
+                        context run may advance it, because a code review says nothing about the context files.
                 budgetClaim:
                     type: string
                     description: Opaque budget reservation id; echo it on POST /runs so only this run releases it
@@ -108,6 +123,11 @@ components:
             required: [repo, sha, findings]
             properties:
                 repo: { type: string }
+                kind:
+                    $ref: "#/components/schemas/Kind"
+                    description: >-
+                        Defaults to context, which is what every pre-kind runner sent. The repository must serve
+                        this kind, so a workflow wired to the wrong kind is a 400 instead of a mislabelled run.
                 sha: { type: string }
                 baseSha: { type: string }
                 event: { type: string }
@@ -157,6 +177,7 @@ components:
                 name: { type: string, description: "owner/repo, case-insensitive" }
                 enabled: { type: boolean }
                 mode: { type: string, enum: [full, l0] }
+                kind: { $ref: "#/components/schemas/RepoKind" }
                 provider: { type: string, pattern: "^[A-Za-z0-9._-]{1,64}$" }
                 finderModel: { type: string }
                 verifierModel: { type: string }
@@ -169,6 +190,7 @@ components:
             properties:
                 enabled: { type: boolean }
                 mode: { type: string, enum: [full, l0] }
+                kind: { $ref: "#/components/schemas/RepoKind" }
                 provider: { type: string, pattern: "^[A-Za-z0-9._-]{1,64}$" }
                 finderModel: { type: string }
                 verifierModel: { type: string }

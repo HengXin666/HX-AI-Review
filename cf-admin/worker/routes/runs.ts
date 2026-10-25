@@ -1,7 +1,7 @@
 import { repoFromToken } from "../auth.ts";
 import { HttpError, field, json, month, readJson } from "../http.ts";
 import type { Deps } from "../http.ts";
-import type { FindingRow, ProviderRow, RunRow } from "../store/port.ts";
+import type { FindingRow, Kind, ProviderRow, RepoKind, RunRow } from "../store/port.ts";
 
 const MD = "text/markdown; charset=utf-8";
 const JSON_TYPE = "application/json";
@@ -11,7 +11,7 @@ const MAX_FINDINGS = 500;
 const MILLION = 1_000_000;
 const STATUSES = new Set(["passed", "warned", "failed", "skipped", "incomplete"]);
 
-type InFinding = Omit<FindingRow, "id" | "runId" | "repoId" | "patchKey" | "status"> & { origin: string };
+type InFinding = Omit<FindingRow, "id" | "runId" | "repoId" | "kind" | "patchKey" | "status"> & { origin: string };
 type InPatch = { fingerprint: string; diff: string };
 
 // Omitted fields take their default; a present field of the wrong type or range is a 400, never coerced.
@@ -63,6 +63,21 @@ function flag(value: unknown, what: string, fallback: boolean): boolean {
         throw new HttpError(400, `${what} must be a boolean`);
     }
     return value;
+}
+
+/**
+ * Validate the kind a run reports. Absent means context (what every pre-kind runner sends); a repo that
+ * serves only one kind rejects the other, so a workflow wired to the wrong kind fails instead of silently
+ * running and charging for a review nobody asked for.
+ */
+function kindOf(raw: string, served: RepoKind): Kind {
+    if (raw !== "context" && raw !== "code") {
+        throw new HttpError(400, "kind must be context or code");
+    }
+    if (served !== "both" && served !== raw) {
+        throw new HttpError(400, `repository is registered for ${served} reviews, not ${raw}`);
+    }
+    return raw;
 }
 
 function object(value: unknown, what: string): Record<string, unknown> {
@@ -207,6 +222,8 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
         throw new HttpError(403, "token belongs to a different repository");
     }
     const sha = field(body, "sha");
+    // A run is one kind; absent means context so older runners keep their behaviour. The repo must serve it.
+    const kind = kindOf(text(body.kind, "kind") ?? "context", repo.kind);
     const list = findings(body.findings);
     // Validated before any write: a malformed claim must not fail after the run row already exists.
     const budgetClaim = text(body.budgetClaim, "budgetClaim") ?? "";
@@ -238,6 +255,7 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
     const run: RunRow = {
         id: runId,
         repoId: repo.id,
+        kind,
         sha,
         baseSha: text(body.baseSha, "baseSha") ?? "",
         event: text(body.event, "event") ?? "unknown",
@@ -262,6 +280,7 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
                 id: `${runId}-${index}`,
                 runId,
                 repoId: repo.id,
+                kind,
                 patchKey: patchKeys.get(item.fingerprint) ?? null,
                 status: "open",
             }));
@@ -296,8 +315,9 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
     // The claim id from /init: charge records spend always, but frees only this run's own claim, so a
     // run that was refused the budget and published L0 results cannot release the holder's claim.
     await deps.store.charge(repo.id, costUsd, month(now), budgetClaim);
-    // last_sha tracks the pushed history only, and only once the AI stage really finished for this range.
-    if (run.event === "push" && prNumber === null && !incomplete) {
+    // last_sha is the "context reviewed up to here" cursor. A code review says nothing about whether the
+    // context files are current, so advancing it from a code run would silently skip context coverage.
+    if (kind === "context" && run.event === "push" && prNumber === null && !incomplete) {
         await deps.store.setLastSha(repo.id, sha);
     }
     const overviewUrl = deps.overviewUrl ? `${deps.overviewUrl.replace(/\/$/, "")}/#/runs/${runId}` : undefined;

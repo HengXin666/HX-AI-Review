@@ -1,5 +1,6 @@
 import { LOCAL_REPORT_NAME } from "../constants.ts";
 import { EMPTY_USAGE } from "../contract/finding.ts";
+import { CONTEXT_KIND } from "../contract/kind.ts";
 import type { Finding } from "../contract/finding.ts";
 import { buildReport } from "../contract/report.ts";
 import type { ReviewReport } from "../contract/report.ts";
@@ -46,6 +47,8 @@ export function runLocal(root: string, requestedBase?: string): LocalResult {
     const findings: Finding[] = [...codeCheck.run(ctx), ...docsCheck.run(ctx)];
     const report = buildReport({
         repo: root,
+        // The local checks are context checks: they look at the worktree's context files, not at the diff.
+        kind: CONTEXT_KIND,
         base: resolved.base,
         head: tryGit(root, ["rev-parse", "HEAD"])?.trim() ?? "",
         patches: [],
