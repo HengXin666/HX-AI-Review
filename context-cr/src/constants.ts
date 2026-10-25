@@ -58,9 +58,17 @@ export const GIT_TOOL_TIMEOUT_MS = 30000;
  * run fails closed (see Review.session); this bound is also clipped by the review deadline.
  */
 export const SPEND_MARK_TIMEOUT_MS = 30000;
-/** Per model session: a session that loops or hangs is aborted and the run reported incomplete. */
+/**
+ * Per model session: a session that loops or hangs is aborted and the run reported incomplete.
+ *
+ * The timeout has to fit one session's real work, not just guard against a hang. A code finder reads
+ * hunks with its tools and then reasons over them; measured against a slow provider that took 480s for a
+ * single hunk and timed out, discarding a review that had already cost 177k input tokens. The run
+ * deadline below is still the real bound on total spend, and Review.session clips each session to what is
+ * left of it, so raising this cannot extend a run past RUN_DEADLINE_MS.
+ */
 export const SESSION_MAX_TURNS = 40;
-export const SESSION_TIMEOUT_MS = 8 * 60 * 1000;
+export const SESSION_TIMEOUT_MS = 15 * 60 * 1000;
 /** Whole AI review, kept under the 30-minute job timeout so publish still runs and spend is still charged. */
 export const RUN_DEADLINE_MS = 20 * 60 * 1000;
 /** The reusable workflow's job timeout, and the slice publish needs at the end of it. */

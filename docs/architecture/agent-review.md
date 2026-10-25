@@ -164,7 +164,8 @@ code CR 没有这一环, 也没有下一步: `stepPublish` 在 `config.kind === 
 | 单个 hunk 显示字节 (code) | 从上下文正文额度起, 按渲染后的提示词余量收缩 | `CONTEXT_BATCH_BYTES`, `MIN_BATCH_BYTES` | 截断该 hunk, 提示用 read 工具读其余部分 |
 | 每次运行候选总数 | 默认 12 | `/init` 的 `limits.maxCandidates` | 剩余批次记为 not reviewed (报告中列出), 不算失败 |
 | 每会话轮数 | 40 | `SESSION_MAX_TURNS` | 仅当第 40 轮后仍需继续时才中止; 正常结束的最终回答不算超限, 运行记为 incomplete |
-| 每会话时长 | 8 分钟, 且不超过运行剩余时间 | `SESSION_TIMEOUT_MS` | 中止会话, 运行记为 incomplete |
+| 每会话时长 | 15 分钟, 且不超过运行剩余时间 | `SESSION_TIMEOUT_MS` | 中止会话, 运行记为 incomplete |
+| 每会话时长为什么是 15 分钟 | 要放得下一次会话的真实工作量, 不只是防挂死 | 同上 | code finder 用工具读 hunk 再推理: 实测在慢 provider 上单个 hunk 跑到 480 秒即超时, 一次已花掉 177k 输入 token 的审查被整份丢弃. 总花费仍由下面的运行截止时间约束, `Review.session` 把每个会话裁剪到剩余时间内, 所以调大这一项不会让运行越过 `RUN_DEADLINE_MS` |
 | 整个 AI 审查时长 | min(20 分钟, job 剩余时间 - 发布预留) | `RUN_DEADLINE_MS`, `JOB_TIMEOUT_MS`, `PUBLISH_RESERVE_MS` | 不再开新会话, 运行记为 incomplete; 截止时间按 job 剩余时间 (workflow 传入的 `HX_CTX_STARTED_AT`) 扣除 checkout/install/init/L0/scope 的耗时和 2 分钟发布预留, 保证在 job 的 30 分钟超时前进入 publish, 花费照常计入预算 |
 | 每次运行花费 | 本次运行可用额度 | `/init` 的 `limits.maxRunUsd` (无上限时为 null) | 不再开新会话, 运行记为 incomplete; 只在开会话前检查已累计花费, 所以单个会话仍可能使本次花费略超该值 |
 | 预留开始花费 | 第一次会话前上报一次 | `POST /spend` (`ReviewDeps.onSpend`), 上限 min(30 秒, 运行剩余时间) | 上报失败, 超时 (abort) 或预留已被接管 (409) 都中止审查, 且之后每个 finder 批次与 verifier 会话都不再启动 (状态而非会话序号决定), 运行记为 incomplete; 该预留被接管时按额度结算, 未上报则按 0 结算. 上报后重新读取时限, 等待标记的时间不会让会话越过时限 |
