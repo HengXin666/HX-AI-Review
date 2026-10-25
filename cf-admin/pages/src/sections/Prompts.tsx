@@ -1,8 +1,24 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle, EmptyState, Input, Textarea } from "@hx/ui";
+import {
+    Badge,
+    Button,
+    Card,
+    CardContent,
+    CardHeader,
+    CardTitle,
+    EmptyState,
+    Input,
+    MotionSelect,
+    Textarea,
+} from "@hx/ui";
 import { api } from "../api.ts";
 import type { PromptNote, PromptVersion } from "../api.ts";
+
+const ROLE_ITEMS = [
+    { value: "finder", label: "finder" },
+    { value: "verifier", label: "verifier" },
+];
 
 type Props = {
     prompts: PromptVersion[];
@@ -58,15 +74,13 @@ export function Prompts({ prompts, notes, onDone, onError }: Props) {
                 )}
                 <form onSubmit={publish} className="flex flex-col gap-2 border-t border-border/50 pt-3">
                     <div className="flex flex-wrap items-center gap-2">
-                        <select
+                        <MotionSelect
                             aria-label="角色"
-                            className="h-8 rounded-lg border border-border bg-card px-2 text-[length:var(--fs-xs)] text-foreground"
                             value={role}
-                            onChange={(event) => setRole(event.target.value as "finder" | "verifier")}
-                        >
-                            <option value="finder">finder</option>
-                            <option value="verifier">verifier</option>
-                        </select>
+                            onValueChange={(value) => setRole(value as "finder" | "verifier")}
+                            options={ROLE_ITEMS}
+                            triggerClassName="h-8 w-32 text-[length:var(--fs-xs)]"
+                        />
                         <Input name="note" placeholder="版本说明" className="w-56" aria-label="版本说明" />
                     </div>
                     <Textarea name="body" placeholder="追加在内置系统提示词之后的内容" aria-label="附录正文" required />
