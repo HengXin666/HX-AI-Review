@@ -53,6 +53,8 @@ Actions -> deploy-cf -> Run workflow:
 
 因此 `CLOUDFLARE_API_TOKEN` 需要额外的 `Zone:Read` 与 `DNS:Edit` 权限. 证书由 Pages 签发, 域名状态从 "Initializing" 变为 "Active" 后才可访问; 摘要里的 Pages 地址此时就是自定义域名.
 
+zone 解析, 域名挂载与 DNS 记录的三种结果 (复用 / 保留 / 创建) 由 `cf-admin/test/deploy.test.ts` 覆盖, 用替换 `fetch` 的方式跑, 不需要真实凭证.
+
 ## 5. 配置 Access (首次部署后做一次)
 
 1. Zero Trust -> Access -> Applications 新建 Self-hosted 应用, 域名为总览页地址 (`<project>.pages.dev` 或你的自定义域名), 策略只允许管理员.
