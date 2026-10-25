@@ -5,13 +5,18 @@ import { FakeBlobs, FakeStore } from "./fake-store.ts";
 
 export const ORIGIN = "https://cf.test";
 
-export function setup(admin: string | null = "me@test", credentials?: { user: string; password: string }) {
+export function setup(
+    admin: string | null = "me@test",
+    credentials?: { user: string; password: string },
+    assets?: Fetcher,
+) {
     const store = new FakeStore();
     const blobs = new FakeBlobs();
     let counter = 0;
     const deps: Deps = {
         store,
         blobs,
+        assets,
         secret: (name) => (name === "KEY_DEFAULT" ? "sk-live" : undefined),
         admin: async () => admin,
         credentials,

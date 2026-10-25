@@ -3,6 +3,44 @@ import { test } from "node:test";
 import { verifyAccess } from "../worker/auth.ts";
 import { ORIGIN, registered, setup } from "./harness.ts";
 
+test("non-API GETs go to the assets binding, so the overview and the API share one hostname", async () => {
+    const seen: string[] = [];
+    const assets = {
+        fetch: async (request: Request) => {
+            seen.push(new URL(request.url).pathname);
+            return new Response("<!doctype html><div id=root></div>", {
+                headers: { "content-type": "text/html" },
+            });
+        },
+    } as unknown as Fetcher;
+    const { call } = setup("me@test", undefined, assets);
+    const page = await call("GET", "/");
+    assert.equal(page.status, 200);
+    assert.match(await page.text(), /id=root/);
+    const deep = await call("GET", "/runs/42");
+    assert.equal(deep.status, 200);
+    assert.deepEqual(seen, ["/", "/runs/42"]);
+});
+
+test("the API still wins over assets on the shared hostname", async () => {
+    const seen: string[] = [];
+    const assets = {
+        fetch: async (request: Request) => {
+            seen.push(new URL(request.url).pathname);
+            return new Response("asset");
+        },
+    } as unknown as Fetcher;
+    const { call } = setup("me@test", undefined, assets);
+    assert.equal((await call("GET", "/api/overview")).status, 200);
+    assert.equal((await call("GET", "/healthz")).status, 200);
+    assert.deepEqual(seen, []);
+});
+
+test("without an assets binding the Worker answers 404 instead of pretending to serve a page", async () => {
+    const { call } = setup();
+    assert.equal((await call("GET", "/")).status, 404);
+});
+
 test("init returns api_url, key and model tiers only for a valid token", async () => {
     const { call, token } = await registered();
     assert.equal((await call("GET", "/init?repo=o/r")).status, 401);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ensureDnsRecord, ensurePagesDomain, findZone } from "../scripts/deploy.ts";
+import { ensureWorkerRoute, findZone } from "../scripts/deploy.ts";
 
 type Call = { url: string; method: string; body?: unknown };
 
@@ -54,16 +54,7 @@ test("a hostname with no owned zone is undefined, not an exception", async () =>
     );
 });
 
-test("a missing zone fails the deploy instead of skipping the attach", async () => {
-    await withFetch(
-        () => json([]),
-        async () => {
-            await assert.rejects(ensurePagesDomain("hx-context-review", "cr.example.com"), /no Cloudflare zone found/);
-        },
-    );
-});
-
-test("an existing matching CNAME is reused and a mismatching one is left alone", async () => {
+test("an existing route to the same Worker is reused instead of duplicated", async () => {
     const posts: unknown[] = [];
     await withFetch(
         (call) => {
@@ -71,24 +62,16 @@ test("an existing matching CNAME is reused and a mismatching one is left alone",
                 posts.push(call.body);
                 return json({});
             }
-            return json([{ type: "CNAME", content: "hx-context-review.pages.dev" }]);
+            return json([{ pattern: "cr.woa.qzz.io/*", script: "hx-context-review" }]);
         },
         async () => {
-            assert.equal(await ensureDnsRecord("zone-1", "cr.woa.qzz.io", "hx-context-review.pages.dev"), "reused");
+            assert.equal(await ensureWorkerRoute("zone-1", "cr.woa.qzz.io", "hx-context-review"), "reused");
         },
     );
     assert.deepEqual(posts, []);
-
-    await withFetch(
-        () => json([{ type: "A", content: "192.0.2.1" }]),
-        async () => {
-            const outcome = await ensureDnsRecord("zone-1", "cr.woa.qzz.io", "hx-context-review.pages.dev");
-            assert.match(outcome, /left alone \(existing A -> 192\.0\.2\.1\)/);
-        },
-    );
 });
 
-test("a missing record is created as a proxied CNAME and reported", async () => {
+test("a missing route is created and reported", async () => {
     const bodies: unknown[] = [];
     await withFetch(
         (call) => {
@@ -99,21 +82,25 @@ test("a missing record is created as a proxied CNAME and reported", async () => 
             return json([]);
         },
         async () => {
-            assert.equal(await ensureDnsRecord("zone-1", "cr.woa.qzz.io", "hx-context-review.pages.dev"), "created");
+            assert.equal(await ensureWorkerRoute("zone-1", "cr.woa.qzz.io", "hx-context-review"), "created");
         },
     );
-    assert.deepEqual(bodies, [
-        { type: "CNAME", name: "cr.woa.qzz.io", content: "hx-context-review.pages.dev", proxied: true },
-    ]);
+    assert.deepEqual(bodies, [{ pattern: "cr.woa.qzz.io/*", script: "hx-context-review" }]);
 });
-test("a token without DNS permission names the missing permission, not just 403", async () => {
+
+test("a route pointing at another Worker is replaced, not silently kept", async () => {
+    const bodies: unknown[] = [];
     await withFetch(
-        () => new Response(JSON.stringify({ success: false }), { status: 403 }),
+        (call) => {
+            if (call.method === "POST") {
+                bodies.push(call.body);
+                return json({});
+            }
+            return json([{ pattern: "cr.woa.qzz.io/*", script: "some-other-worker" }]);
+        },
         async () => {
-            await assert.rejects(
-                ensureDnsRecord("zone-1", "cr.woa.qzz.io", "hx-context-review.pages.dev"),
-                /lacks DNS:Edit/,
-            );
+            assert.equal(await ensureWorkerRoute("zone-1", "cr.woa.qzz.io", "hx-context-review"), "created");
         },
     );
+    assert.deepEqual(bodies, [{ pattern: "cr.woa.qzz.io/*", script: "hx-context-review" }]);
 });

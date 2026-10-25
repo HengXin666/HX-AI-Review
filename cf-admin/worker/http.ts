@@ -11,18 +11,22 @@ export type Env = {
     /** Overview login. Both must be set; they are Worker vars, not a Pages secret. */
     ADMIN_USER?: string;
     ADMIN_PASSWORD?: string;
-    /** Public overview Pages URL used in links written back to GitHub. */
+    /** Public overview URL used in links written back to GitHub. */
     OVERVIEW_URL?: string;
     /** Written by the deploy workflow so the overview page can show what is running. */
     DEPLOY_SHA?: string;
     DEPLOYED_AT?: string;
     DEPLOY_RUN_URL?: string;
+    /** Static assets binding for the overview SPA; absent in tests and when deployed without assets. */
+    ASSETS?: Fetcher;
     [secret: string]: unknown;
 };
 
 export type Deps = {
     store: Store;
     blobs: BlobStore;
+    /** Serves the overview SPA for paths the API does not own; absent means no page is served. */
+    assets?: Fetcher;
     secret(name: string): string | undefined;
     /** Returns the Access identity (email) or null when the request is not authenticated. */
     admin(request: Request): Promise<string | null>;

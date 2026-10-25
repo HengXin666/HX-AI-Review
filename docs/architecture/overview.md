@@ -37,8 +37,8 @@ GitHub (计算)                                       Cloudflare (配置 / 存�
 | runner CLI | [context-cr/](../../context-cr/README.md) | init, l0, scope, review, publish 五个子命令 |
 | 配置与入库 Worker | [cf-admin/worker/](../../cf-admin/worker/index.ts) | /init, /runs, /feedback, /api/* |
 | 存储 | D1 + R2 | D1: repos, runs, findings, feedback, budget, suppressions; R2: MD/JSON 报告, pi 会话 JSONL, 补丁 |
-| 总览页 | [cf-admin/pages/](../../cf-admin/pages/src/App.tsx) | 部署状态, 仓库登记与开关/模式/预算, provider 管理, 最近运行, 待处理发现, 一键合入补丁, 驳回原因回流 |
-| 一键部署 | [.github/workflows/deploy-cf.yml](../../.github/workflows/deploy-cf.yml) | 手动触发: D1 + 迁移, R2, Worker, Pages, 可选写入模型 key secret |
+| 总览页 | [cf-admin/pages/](../../cf-admin/pages/src/App.tsx) | 部署状态, 仓库登记与开关/模式/预算, provider 管理, 最近运行, 待处理发现, 一键合入补丁, 驳回原因回流. 构建产物作为 Worker 静态资源一起部署, 与 API 同域 |
+| 一键部署 | [.github/workflows/deploy-cf.yml](../../.github/workflows/deploy-cf.yml) | 手动触发: D1 + 迁移, R2, Worker (含总览页静态资源与自定义域名路由), 可选写入模型 key secret |
 
 详细设计: [context-cr.md](context-cr.md) 与 [cf-admin.md](cf-admin.md).
 
