@@ -18,32 +18,63 @@ export type Verdict = { verdict: "confirmed" | "rejected"; reason: string; patch
 /** Deterministic gate result: undefined accepts the candidate, a string is the reason to refuse it. */
 export type AcceptCandidate = (candidate: Candidate) => string | undefined;
 
+/** The report tool's parameters. Code CR has no patch field: nothing is pushed for a code finding. */
+function parametersFor(code: boolean) {
+    const shared = {
+        path: Type.String({
+            description: code
+                ? "Repository-relative path of the file the diff changed"
+                : "Repository-relative path of the stale context file",
+        }),
+        line: Type.Integer({
+            minimum: 1,
+            description: code ? "New-side line number shown in the hunk listing" : "Line in that file",
+        }),
+        title: Type.String({ description: "Short summary, under 80 characters" }),
+        message: Type.String({
+            description: code
+                ? "The defect and the input, state or timing that triggers it, plus the suggested fix"
+                : "What is wrong and why it misleads an agent",
+        }),
+        evidence: Type.String({
+            description: code
+                ? "The added line and the code proving it wrong, with paths"
+                : "Code or diff lines proving the mismatch, with paths",
+        }),
+    };
+    return code
+        ? Type.Object(shared)
+        : Type.Object({
+              ...shared,
+              patch: Type.Optional(Type.String({ description: "git unified diff that fixes the context file" })),
+          });
+}
+
 /**
  * The finder's only write channel: it cannot edit files, it reports candidates. Candidates are gated
  * before they count, so suppressed, duplicate or out-of-batch reports cannot consume the cap and hide
  * real findings. `callLimit` separately bounds total calls, so a finder cannot loop on rejections.
+ *
+ * Code CR reports through the same tool without the patch field: a code CR never pushes a branch, so a
+ * patch from it could only be dropped. Refusing it keeps the model from spending turns writing one.
  */
-export function reportFindingTool(
+function findingTool(
     sink: Candidate[],
     limit: number,
-    accept?: AcceptCandidate,
-    callLimit = REPORT_CALL_LIMIT,
+    accept: AcceptCandidate | undefined,
+    callLimit: number,
+    code: boolean,
 ): ToolSpec {
     let calls = 0;
     return {
         name: REPORT_FINDING_TOOL,
         label: "Report finding",
-        description:
-            "Report one place where an AI context file (AGENTS.md, README.md, SKILL.md, docs) no longer " +
-            "matches the code after this diff. Optionally include a unified diff patch fixing the context file.",
-        parameters: Type.Object({
-            path: Type.String({ description: "Repository-relative path of the stale context file" }),
-            line: Type.Integer({ minimum: 1, description: "Line in that file" }),
-            title: Type.String({ description: "Short summary, under 80 characters" }),
-            message: Type.String({ description: "What is wrong and why it misleads an agent" }),
-            evidence: Type.String({ description: "Code or diff lines proving the mismatch, with paths" }),
-            patch: Type.Optional(Type.String({ description: "git unified diff that fixes the context file" })),
-        }),
+        description: code
+            ? "Report one defect in a line this diff added or changed. Describe the fix in the message; " +
+              "a code review never pushes a patch branch."
+            : "Report one place where an AI context file (AGENTS.md, README.md, SKILL.md, docs) no longer " +
+              "matches the code after this diff. Optionally include a unified diff patch fixing the context file.",
+        parameters: parametersFor(code),
         execute(params) {
             calls++;
             if (calls > callLimit) {
@@ -58,7 +89,7 @@ export function reportFindingTool(
                 title: String(params.title),
                 message: String(params.message),
                 evidence: String(params.evidence),
-                patch: typeof params.patch === "string" && params.patch.trim() ? params.patch : undefined,
+                patch: !code && typeof params.patch === "string" && params.patch.trim() ? params.patch : undefined,
             };
             const reason = accept?.(candidate);
             if (reason !== undefined) {
@@ -69,6 +100,25 @@ export function reportFindingTool(
             return `Recorded finding ${sink.length}.`;
         },
     };
+}
+
+export function reportFindingTool(
+    sink: Candidate[],
+    limit: number,
+    accept?: AcceptCandidate,
+    callLimit = REPORT_CALL_LIMIT,
+): ToolSpec {
+    return findingTool(sink, limit, accept, callLimit, false);
+}
+
+/** Code CR variant: same gate and cap, no patch field, because nothing is ever pushed for a code finding. */
+export function reportCodeFindingTool(
+    sink: Candidate[],
+    limit: number,
+    accept?: AcceptCandidate,
+    callLimit = REPORT_CALL_LIMIT,
+): ToolSpec {
+    return findingTool(sink, limit, accept, callLimit, true);
 }
 
 /** The verifier must commit to one verdict; absence of a verdict counts as rejected. */

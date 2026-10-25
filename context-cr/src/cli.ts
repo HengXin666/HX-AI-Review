@@ -1,26 +1,31 @@
 #!/usr/bin/env node
 // Entry for the reusable workflow. Each subcommand is one step of the v0.3 pipeline.
 import { resolve } from "node:path";
+import { ENV } from "./constants.ts";
 import { git } from "./git.ts";
+import { parseKind } from "./contract/kind.ts";
+import type { CrKind } from "./contract/kind.ts";
 import { isBlocking } from "./contract/report.ts";
 import { runRulesStep } from "./rules/run.ts";
 import { runLocal } from "./local/run.ts";
 import { runSuite } from "./local/suite/run.ts";
 import { stepInit, stepL0, stepPublish, stepReview, stepScope } from "./steps.ts";
 
-const USAGE = `usage: hx-context-review <command> [--root <dir>] [--base <ref>] [--format findings]
+const USAGE = `usage: hx-context-review <command> [--root <dir>] [--base <ref>] [--kind context|code] [--format findings]
 commands:
   init      GET /init, mask api_key, export it to the job env
   l0        deterministic L0 checks; exit 1 on new Error findings
   local     diff-only local checks against the worktree; exit 1 on blocking findings
-  scope     diff -> ancestor AGENTS chain + reverse references; output empty=true|false
+  scope     context: diff -> ancestor AGENTS chain + reverse references; code: the diff's added lines
   review    pi finder -> verifier on the scope (skipped when empty or L0-only)
   publish   write MD/JSON, POST /runs, push patch branch, commit/PR comment
   rules     run the deterministic rule registry; exit 1 on blocking findings
   run       init, l0, rules, scope, review and publish in one process
-  test      run one test category/tier from the local suite`;
+  test      run one test category/tier from the local suite
 
-type Args = { command: string; root: string; format?: string; base?: string };
+--kind defaults to the /init answer; without /init (local runs) it defaults to context.`;
+
+type Args = { command: string; root: string; format?: string; base?: string; kind?: CrKind };
 
 function parseArgs(argv: string[]): Args {
     const [command, ...rest] = argv;
@@ -34,12 +39,18 @@ function parseArgs(argv: string[]): Args {
             args.base = value;
         } else if (flag === "--format" && value === "findings") {
             args.format = value;
+        } else if (flag === "--kind") {
+            args.kind = parseKind(value);
         } else {
             throw new Error(`unknown option ${flag}`);
         }
         i++;
     }
     args.root = git(resolve(args.root), ["rev-parse", "--show-toplevel"]).trim();
+    if (args.kind) {
+        // Local runs have no /init: the flag is the only way to pick a kind before the state file exists.
+        process.env[ENV.kind] = args.kind;
+    }
     return args;
 }
 
@@ -78,7 +89,11 @@ async function main(argv: string[]): Promise<number> {
         }
         case "scope": {
             const scope = stepScope(args.root);
-            process.stdout.write(`scope: ${scope.changed.length} changed, ${scope.contexts.length} context file(s)\n`);
+            const what =
+                scope.kind === "code"
+                    ? `${scope.hunks.length} diff hunk(s)`
+                    : `${scope.contexts.length} context file(s)`;
+            process.stdout.write(`scope: ${scope.changed.length} changed, ${what}\n`);
             return 0;
         }
         case "review": {

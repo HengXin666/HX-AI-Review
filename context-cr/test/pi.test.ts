@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { Type } from "typebox";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
+import { CONTEXT_KIND } from "../src/contract/kind.ts";
 import type { InitConfig } from "../src/init/client.ts";
 import { join } from "node:path";
 import { SessionError } from "../src/review/agent.ts";
@@ -82,6 +83,7 @@ test("pi runner reaches api_url directly and executes report_finding", async () 
     const port = (server.address() as AddressInfo).port;
     const config: InitConfig = {
         repo: "o/r",
+        kind: CONTEXT_KIND,
         enabled: true,
         l0Only: false,
         apiUrl: `http://127.0.0.1:${port}/v1`,
@@ -129,6 +131,7 @@ test("a provider error ends the session with a SessionError that keeps the trans
     const port = (server.address() as AddressInfo).port;
     const config: InitConfig = {
         repo: "o/r",
+        kind: CONTEXT_KIND,
         enabled: true,
         l0Only: false,
         apiUrl: `http://127.0.0.1:${port}/v1`,
@@ -177,6 +180,7 @@ test("a session timeout aborts an in-flight tool instead of waiting out the git 
     const port = (server.address() as AddressInfo).port;
     const config: InitConfig = {
         repo: "o/r",
+        kind: CONTEXT_KIND,
         enabled: true,
         l0Only: false,
         apiUrl: `http://127.0.0.1:${port}/v1`,

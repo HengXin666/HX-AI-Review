@@ -72,6 +72,7 @@ export class FakeStore implements Store {
             tokenHash,
             enabled: true,
             mode: "full",
+            kind: "context",
             provider: "default",
             finderModel: "",
             verifierModel: "",

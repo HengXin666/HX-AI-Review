@@ -1,7 +1,7 @@
 // GET /api/rules: rule and severity totals over the rule dimension table.
 import { HttpError, json } from "../http.ts";
 import type { Deps } from "../http.ts";
-import type { RuleFilter, RuleSeverity } from "../store/port.ts";
+import type { Kind, RuleFilter, RuleSeverity } from "../store/port.ts";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -41,12 +41,24 @@ async function repoIdOf(deps: Deps, value: string | null): Promise<number | unde
     return repo.id;
 }
 
+/** Omitted means both kinds, so an operator who never filters still sees every rule hit. */
+function kindOf(value: string | null): Kind | undefined {
+    if (value === null || value === "") {
+        return undefined;
+    }
+    if (value !== "context" && value !== "code") {
+        throw new HttpError(400, 'kind must be "context" or "code"');
+    }
+    return value;
+}
+
 export async function handleRules(request: Request, deps: Deps): Promise<Response> {
     const params = new URL(request.url).searchParams;
     const repo = params.get("repo");
     const severity = severityOf(params.get("severity"));
+    const kind = kindOf(params.get("kind"));
     const limit = limitOf(params.get("limit"));
-    const filter: RuleFilter = { repoId: await repoIdOf(deps, repo), severity };
+    const filter: RuleFilter = { repoId: await repoIdOf(deps, repo), severity, kind };
     const stats = await deps.store.ruleStats(filter, limit);
-    return json({ repo: repo || null, severity: severity ?? null, limit, ...stats });
+    return json({ repo: repo || null, severity: severity ?? null, kind: kind ?? null, limit, ...stats });
 }

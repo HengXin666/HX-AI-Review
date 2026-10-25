@@ -8,7 +8,14 @@ import { ancestorDirs, baseName, inDir, isContextFile } from "../l0/snapshot.ts"
 import type { Snapshot } from "../l0/snapshot.ts";
 
 export type ScopeEntry = { path: string; reasons: string[] };
-export type ContextScope = { base: string; head: string; changed: string[]; contexts: ScopeEntry[] };
+/** `kind` is the discriminant that tells a context scope from a code scope. */
+export type ContextScope = {
+    kind: "context";
+    base: string;
+    head: string;
+    changed: string[];
+    contexts: ScopeEntry[];
+};
 
 /** Reverse reference index: referenced path (file or directory) -> context files pointing at it. */
 export type RefIndex = Record<string, string[]>;
@@ -89,5 +96,5 @@ export function computeScope(
     const contexts = [...entries.entries()]
         .map(([path, reasons]) => ({ path, reasons: [...reasons].sort() }))
         .sort((a, b) => a.path.localeCompare(b.path));
-    return { base, head, changed: [...new Set(changed)].sort(), contexts };
+    return { kind: "context", base, head, changed: [...new Set(changed)].sort(), contexts };
 }

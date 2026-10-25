@@ -1,6 +1,10 @@
 // Storage port. routes/ only see these interfaces; d1.ts is the real D1/R2 adapter, tests use a fake.
 
 export type Mode = "full" | "l0";
+/** Which review a run performs: context (are the context files still true?) or code (is the diff sound?). */
+export type Kind = "context" | "code";
+/** A repo may serve one review or both; a single run is always exactly one kind. */
+export type RepoKind = Kind | "both";
 export type FindingStatus = "open" | "accepted" | "rejected" | "resolved";
 export type Verdict = "accepted" | "rejected";
 export type PromptRole = "finder" | "verifier";
@@ -10,6 +14,7 @@ export type RepoRow = {
     name: string;
     enabled: boolean;
     mode: Mode;
+    kind: RepoKind;
     provider: string;
     finderModel: string;
     verifierModel: string;
@@ -20,7 +25,7 @@ export type RepoRow = {
 };
 
 export type RepoPatch = Partial<
-    Pick<RepoRow, "enabled" | "mode" | "provider" | "finderModel" | "verifierModel" | "budgetUsd">
+    Pick<RepoRow, "enabled" | "mode" | "kind" | "provider" | "finderModel" | "verifierModel" | "budgetUsd">
 >;
 
 export type ProviderRow = {
@@ -41,6 +46,7 @@ export type ProviderRow = {
 export type RunRow = {
     id: string;
     repoId: number;
+    kind: Kind;
     sha: string;
     baseSha: string;
     event: string;
@@ -61,6 +67,8 @@ export type FindingRow = {
     id: string;
     runId: string;
     repoId: number;
+    /** Inherited from the run, so the overview can filter findings by kind without a join. */
+    kind: Kind;
     fingerprint: string;
     ruleId: string;
     severity: string;
@@ -99,7 +107,7 @@ export type RuleAggregate = {
     topRule: string | null;
 };
 
-export type RuleFilter = { repoId?: number; severity?: RuleSeverity };
+export type RuleFilter = { repoId?: number; severity?: RuleSeverity; kind?: Kind };
 
 export type Suppression = { fingerprint: string; reason: string };
 export type FeedbackInput = { repoId: number; fingerprint: string; verdict: Verdict; reason: string; source: string };

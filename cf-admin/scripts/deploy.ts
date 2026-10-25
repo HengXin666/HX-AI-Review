@@ -242,6 +242,10 @@ async function main(): Promise<void> {
         report.push(`- D1: ${s.database} (${databaseId})`);
         wrangler(["d1", "migrations", "apply", s.database, "--remote", "--config", config]);
         report.push("- migrations: applied");
+        // Ordering matters for availability: every migration adds columns with a DEFAULT or whole tables, so
+        // the old Worker keeps serving while migrations run, and the new Worker is only deployed once the
+        // schema it expects exists. Deploying first would leave the new code querying columns that are not
+        // there yet, which is the only direction that breaks a live site.
         if (worker) {
             tryWrangler(["r2", "bucket", "create", s.bucket]);
             // The SPA is built into the assets directory the Worker config points at, so one deploy ships both.

@@ -1,9 +1,27 @@
 // Client for the Worker admin API. Same origin: Access sets the identity cookie for both Pages and /api.
 
+/** Which review a run performs: context (are the context files still true?) or code (is the diff sound?). */
+export type Kind = "context" | "code";
+/** A repo may serve one review or both; a single run is always exactly one kind. */
+export type RepoKind = Kind | "both";
+
+/**
+ * Rows written before the kind column existed are context runs, and an unknown value must not widen
+ * the meaning. The Worker already normalizes this, but the page may talk to an older deployment.
+ */
+export function kindOf(value: unknown): Kind {
+    return value === "code" ? "code" : "context";
+}
+
+export function repoKindOf(value: unknown): RepoKind {
+    return value === "code" || value === "both" ? value : "context";
+}
+
 export type Repo = {
     name: string;
     enabled: boolean;
     mode: "full" | "l0";
+    kind?: RepoKind;
     finderModel: string;
     verifierModel: string;
     budgetUsd: number;
@@ -14,10 +32,13 @@ export type Repo = {
 export type Run = {
     id: string;
     repo: string;
+    kind?: Kind;
     sha: string;
+    baseSha?: string;
     event: string;
     prNumber: number | null;
     status: string;
+    l0Only?: boolean;
     errors: number;
     warnings: number;
     costUsd: number;
@@ -29,11 +50,13 @@ export type Run = {
 export type Finding = {
     id: string;
     repo: string;
+    kind?: Kind;
     ruleId: string;
     severity: string;
     path: string;
     line: number;
     message: string;
+    evidence?: string;
     patchKey: string | null;
     status?: string;
     fingerprint?: string;
@@ -114,7 +137,10 @@ export type Overview = {
 };
 
 export type ProviderInput = Omit<Provider, "name" | "keyPresent">;
-export type RepoInput = Pick<Repo, "name" | "finderModel" | "verifierModel" | "budgetUsd"> & { provider: string };
+export type RepoInput = Pick<Repo, "name" | "finderModel" | "verifierModel" | "budgetUsd"> & {
+    provider: string;
+    kind?: RepoKind;
+};
 
 export class ApiError extends Error {
     status: number;

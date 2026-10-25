@@ -2,9 +2,11 @@
 import type {
     FindingRow,
     FindingStatus,
+    Kind,
     PromptNote,
     PromptVersion,
     ProviderRow,
+    RepoKind,
     RepoRow,
     RuleSeverity,
     RuleSummary,
@@ -14,12 +16,23 @@ import type {
 
 export type Row = Record<string, unknown>;
 
+/** A row written before the kind column existed is a context run; an unknown value must not widen it. */
+function kindOf(value: unknown): Kind {
+    return value === "code" ? "code" : "context";
+}
+
+/** A repo serves one review or both; an unknown value falls back to the historical behaviour. */
+function repoKindOf(value: unknown): RepoKind {
+    return value === "code" || value === "both" ? value : "context";
+}
+
 export function repo(row: Row): RepoRow {
     return {
         id: Number(row.id),
         name: String(row.name),
         enabled: Number(row.enabled) === 1,
         mode: row.mode === "l0" ? "l0" : "full",
+        kind: repoKindOf(row.kind),
         provider: String(row.provider),
         finderModel: String(row.finder_model),
         verifierModel: String(row.verifier_model),
@@ -50,6 +63,7 @@ export function run(row: Row): RunRow & { repo: string } {
         id: String(row.id),
         repoId: Number(row.repo_id),
         repo: String(row.repo ?? ""),
+        kind: kindOf(row.kind),
         sha: String(row.sha),
         baseSha: String(row.base_sha),
         event: String(row.event),
@@ -73,6 +87,7 @@ export function finding(row: Row): FindingRow & { repo: string } {
         runId: String(row.run_id),
         repoId: Number(row.repo_id),
         repo: String(row.repo ?? ""),
+        kind: kindOf(row.kind),
         fingerprint: String(row.fingerprint),
         ruleId: String(row.rule_id),
         severity: String(row.severity),

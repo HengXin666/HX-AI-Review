@@ -20,13 +20,23 @@ import { isPlainEdit } from "../git.ts";
 import { addUsage, EMPTY_USAGE, fingerprint, makeFinding } from "../contract/finding.ts";
 import type { Finding, Patch, Usage } from "../contract/finding.ts";
 import type { InitConfig, PromptAddendum } from "../init/client.ts";
+import type { CodeHunk, CodeScope } from "../scope/code.ts";
 import type { ContextScope } from "../scope/index.ts";
 import { SessionError } from "./agent.ts";
 import type { AgentRequest, AgentResult, AgentRunner } from "./agent.ts";
-import { batchDocs, loadDocs } from "./context.ts";
+import { batchDocs, batchHunks, loadDocs } from "./context.ts";
 import type { ContextDoc } from "./context.ts";
-import { FINDER_SYSTEM, VERIFIER_SYSTEM, finderPrompt, verifierPrompt } from "./prompts.ts";
-import { reportFindingTool, reportVerdictTool } from "./tools.ts";
+import {
+    CODE_FINDER_SYSTEM,
+    CODE_VERIFIER_SYSTEM,
+    FINDER_SYSTEM,
+    VERIFIER_SYSTEM,
+    codeFinderPrompt,
+    codeVerifierPrompt,
+    finderPrompt,
+    verifierPrompt,
+} from "./prompts.ts";
+import { reportCodeFindingTool, reportFindingTool, reportVerdictTool } from "./tools.ts";
 import type { Candidate, Verdict } from "./tools.ts";
 
 export type ReviewDeps = {
@@ -64,12 +74,16 @@ export type ReviewResult = {
     notReviewed: string[];
 };
 
-function toFinding(candidate: Candidate, reason: string): Finding {
+/**
+ * One candidate as a Finding. Code CR uses its own rule namespace so the overview and the report can tell a
+ * defect in the diff from a stale context file, and so feedback on one never suppresses the other.
+ */
+function toFinding(candidate: Candidate, reason: string, ruleId: string = RULE.ai): Finding {
     const message = candidate.title + ": " + candidate.message;
     const evidence = reason ? candidate.evidence + "\nVerifier: " + reason : candidate.evidence;
-    const finding = makeFinding(RULE.ai, WARNING, candidate.path, candidate.line, message, evidence);
-    // Anchor on path + title so the same stale statement keeps its fingerprint across runs and feedback.
-    return { ...finding, fingerprint: fingerprint(RULE.ai, candidate.path, candidate.title, "") };
+    const finding = makeFinding(ruleId, WARNING, candidate.path, candidate.line, message, evidence);
+    // Anchor on path + title so the same defect keeps its fingerprint across runs and feedback.
+    return { ...finding, fingerprint: fingerprint(ruleId, candidate.path, candidate.title, "") };
 }
 
 type Queued = { candidate: Candidate; doc: ContextDoc; fingerprint: string };
@@ -269,6 +283,7 @@ function gate(review: Review, candidate: Candidate, batch: ContextDoc[], seen: S
     return { item: { candidate, doc: doc as ContextDoc, fingerprint: id } } satisfies GateResult;
 }
 
+/** Context CR: one verifier session per surviving candidate, judging the claim and its patch. */
 async function verify(
     review: Review,
     config: InitConfig,
@@ -314,11 +329,150 @@ async function verify(
 }
 
 /**
- * finder -> gate -> verifier. AI output is Warning only; Error stays with L0. Context files are split into
- * byte-bounded batches, one finder session each; every surviving candidate gets its own fresh verifier
- * session that tries to refute it, and only confirmed candidates are kept.
+ * Code CR: one fresh verifier per candidate, same refutation discipline. No patch is ever produced or
+ * judged, so a code finding can never become a pushed branch.
  */
-export async function runReview(config: InitConfig, scope: ContextScope, deps: ReviewDeps): Promise<ReviewResult> {
+async function verifyCode(review: Review, config: InitConfig, item: QueuedCode, promptBudget: number): Promise<void> {
+    const { candidate, hunk } = item;
+    const prompt = codeVerifierPrompt(candidate, hunk, promptBudget);
+    if (prompt === undefined) {
+        review.fail(`verifier prompt for ${candidate.path}:${candidate.line} exceeds the context window`);
+        review.reject(candidate, "candidate too large for the context window");
+        return;
+    }
+    const verdicts: Verdict[] = [];
+    const ran = await review.session({
+        role: "verifier",
+        model: config.models.verifier,
+        system: systemPrompt(CODE_VERIFIER_SYSTEM, config.prompts?.verifier),
+        prompt,
+        tools: [reportVerdictTool(verdicts)],
+    });
+    if (!ran) {
+        return;
+    }
+    const verdict = verdicts[verdicts.length - 1];
+    if (verdict?.verdict !== "confirmed") {
+        review.reject(candidate, verdict ? "verifier: " + verdict.reason : "verifier gave no verdict");
+        return;
+    }
+    review.result.findings.push(toFinding(candidate, verdict.reason, RULE.codeAi));
+}
+
+type QueuedCode = { candidate: Candidate; hunk: CodeHunk; fingerprint: string };
+
+/**
+ * Deterministic gate for code CR: the candidate must name a file and an added line of its own batch. A line
+ * the diff did not add, a path outside the batch, a suppression and a duplicate never cost a verifier.
+ */
+function gateCode(
+    review: Review,
+    candidate: Candidate,
+    batch: CodeHunk[],
+    seen: Set<string>,
+    suppressed: Set<string>,
+): { item: QueuedCode } | { reason: string } {
+    const id = toFinding(candidate, "", RULE.codeAi).fingerprint;
+    // A file can appear in several hunks of one batch: any hunk that added this line accepts it.
+    const hunk = batch.find((item) => item.path === candidate.path && item.lines.includes(candidate.line));
+    const anyPath = batch.some((item) => item.path === candidate.path);
+    const reason = !anyPath
+        ? "not a file of this batch"
+        : !hunk
+          ? `line ${candidate.line} is not a line this diff added to ${candidate.path}`
+          : suppressed.has(id)
+            ? "suppressed by earlier feedback"
+            : seen.has(id)
+              ? "duplicate of another candidate"
+              : undefined;
+    if (reason !== undefined) {
+        review.reject(candidate, reason);
+        return { reason };
+    }
+    seen.add(id);
+    return { item: { candidate, hunk: hunk as CodeHunk, fingerprint: id } };
+}
+
+/**
+ * Code CR: finder -> gate -> verifier over the diff's hunks. Findings are Warning only and never carry a
+ * patch, because a code CR reviews the change instead of writing one.
+ */
+async function runCodeReview(config: InitConfig, scope: CodeScope, deps: ReviewDeps): Promise<ReviewResult> {
+    const review = new Review(config, deps);
+    const suppressed = new Set(config.suppressions.map((item) => item.fingerprint));
+    const seen = new Set<string>();
+    const queue: QueuedCode[] = [];
+    const budgets = promptBudgets(config);
+    if (!budgets) {
+        review.fail(
+            `model context window of ${config.limits.contextWindow} tokens leaves no room for a review prompt ` +
+                `(maxTokens ${config.limits.maxTokens}); raise the provider contextWindow or lower maxTokens`,
+        );
+        return review.result;
+    }
+    for (const batch of batchHunks(scope.hunks, budgets.diff)) {
+        const left = config.limits.maxCandidates - queue.length;
+        if (left <= 0) {
+            // Re-running would hit the same cap, so this is reported, not treated as an incomplete run.
+            review.result.notReviewed.push(...batch.map((hunk) => hunk.path + " (candidate limit)"));
+            continue;
+        }
+        const sink: Candidate[] = [];
+        const accept = (candidate: Candidate): string | undefined => {
+            const outcome = gateCode(review, candidate, batch, seen, suppressed);
+            if ("reason" in outcome) {
+                return outcome.reason;
+            }
+            queue.push(outcome.item);
+            return undefined;
+        };
+        const prompt = codeFinderPrompt(scope, batch, config.suppressions, budgets, deps.evidence ?? "");
+        if (prompt === undefined) {
+            review.fail(`finder prompt for ${batch.map((hunk) => hunk.path).join(", ")} exceeds the context window`);
+            review.result.notReviewed.push(...batch.map((hunk) => hunk.path + " (prompt exceeds context window)"));
+            continue;
+        }
+        const ran = await review.session({
+            role: "finder",
+            model: config.models.finder,
+            system: systemPrompt(CODE_FINDER_SYSTEM, config.prompts?.finder),
+            prompt,
+            tools: [reportCodeFindingTool(sink, left, accept)],
+        });
+        if (!ran) {
+            continue;
+        }
+    }
+    for (const item of queue) {
+        await verifyCode(review, config, item, budgets.prompt);
+    }
+    return review.result;
+}
+
+/**
+ * finder -> gate -> verifier, dispatched by kind. AI output is Warning only; Error stays with L0. Context CR
+ * batches context files and may propose a patch; code CR batches the diff's hunks and never pushes anything.
+ */
+export async function runReview(
+    config: InitConfig,
+    scope: ContextScope | CodeScope,
+    deps: ReviewDeps,
+): Promise<ReviewResult> {
+    if (scope.kind !== config.kind) {
+        // A scope left by another kind's run cannot be reviewed under this kind's prompts, rules and
+        // product: reviewing it anyway would file context findings as code defects. Fail closed instead.
+        const review = new Review(config, deps);
+        review.fail(`a ${scope.kind} scope cannot be reviewed as ${config.kind}; re-run the scope step`);
+        return review.result;
+    }
+    return scope.kind === "code" ? runCodeReview(config, scope, deps) : runContextReview(config, scope, deps);
+}
+
+/**
+ * Context CR: finder -> gate -> verifier over context files. Every surviving candidate gets its own fresh
+ * verifier session that tries to refute it, and only confirmed candidates are kept.
+ */
+async function runContextReview(config: InitConfig, scope: ContextScope, deps: ReviewDeps): Promise<ReviewResult> {
     const review = new Review(config, deps);
     const suppressed = new Set(config.suppressions.map((item) => item.fingerprint));
     const seen = new Set<string>();

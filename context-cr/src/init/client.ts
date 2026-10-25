@@ -1,3 +1,6 @@
+import { CONTEXT_KIND, parseKind } from "../contract/kind.ts";
+import type { CrKind } from "../contract/kind.ts";
+
 export type ModelApi = "openai-completions" | "anthropic-messages";
 export type Suppression = { fingerprint: string; reason: string };
 /** Operator addendum from the overview. It is appended to the built-in system prompt, never a replacement. */
@@ -6,6 +9,8 @@ export type PromptAddendum = { version: number; body: string };
 /** Shape returned by the CF Worker GET /init. The api key never reaches a file, only the env. */
 export type InitConfig = {
     repo: string;
+    /** What this run reviews: "context" checks context files, "code" reviews the diff itself. */
+    kind: CrKind;
     enabled: boolean;
     /** True when the repo is disabled or over budget: only L0 runs, no model credentials sent. */
     l0Only: boolean;
@@ -135,7 +140,11 @@ function promptsOf(value: unknown): NonNullable<InitConfig["prompts"]> {
     return { finder: addendumOf(row.finder, "prompts.finder"), verifier: addendumOf(row.verifier, "prompts.verifier") };
 }
 
-export function parseInit(raw: unknown): InitResponse {
+/**
+ * Parse a /init body. `fallbackKind` is the kind this run asked for: an older Worker omits the field, and
+ * defaulting to "context" there would silently run a context CR for a caller that asked for a code CR.
+ */
+export function parseInit(raw: unknown, fallbackKind: CrKind = CONTEXT_KIND): InitResponse {
     const data = raw as Record<string, unknown>;
     const models = (data.models ?? {}) as Record<string, unknown>;
     const limits = (data.limits ?? {}) as Record<string, unknown>;
@@ -143,6 +152,8 @@ export function parseInit(raw: unknown): InitResponse {
     const l0Only = data.l0Only === true;
     const result: InitResponse = {
         repo: text(data.repo, "repo"),
+        // The Worker's answer wins: it knows the repository default. Only a missing field falls back.
+        kind: parseKind(data.kind, fallbackKind),
         enabled: data.enabled !== false,
         l0Only,
         reason: typeof data.reason === "string" ? data.reason : undefined,
@@ -184,9 +195,19 @@ export function parseInit(raw: unknown): InitResponse {
     return result;
 }
 
-export async function fetchInit(endpoint: string, token: string, repo: string, group?: string): Promise<InitResponse> {
+export async function fetchInit(
+    endpoint: string,
+    token: string,
+    repo: string,
+    group?: string,
+    kind?: CrKind,
+): Promise<InitResponse> {
     const url = new URL("/init", endpoint);
     url.searchParams.set("repo", repo);
+    if (kind) {
+        // The caller workflow's kind input; the Worker answers with the kind it actually scheduled.
+        url.searchParams.set("kind", kind);
+    }
     if (group) {
         // Identifies the runs GitHub may have cancelled to start this one; see the Worker's reservation.
         url.searchParams.set("group", group);
@@ -195,7 +216,7 @@ export async function fetchInit(endpoint: string, token: string, repo: string, g
     if (!response.ok) {
         throw new Error(`GET /init failed with ${response.status}: ${(await response.text()).slice(0, 200)}`);
     }
-    return parseInit(await response.json());
+    return parseInit(await response.json(), kind ?? CONTEXT_KIND);
 }
 
 /** Split the secret out so it is masked and exported only through the environment. */

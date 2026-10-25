@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { EMPTY_USAGE } from "../src/contract/finding.ts";
+import { CONTEXT_KIND } from "../src/contract/kind.ts";
 import { buildReport, summarize } from "../src/contract/report.ts";
 import { truncate } from "../src/review/prompts.ts";
 import type { InitConfig } from "../src/init/client.ts";
@@ -11,6 +12,7 @@ import type { ContextScope } from "../src/scope/index.ts";
 
 const config: InitConfig = {
     repo: "o/r",
+    kind: CONTEXT_KIND,
     enabled: true,
     l0Only: false,
     apiUrl: "http://model.invalid",
@@ -23,6 +25,7 @@ const config: InitConfig = {
 };
 
 const scope: ContextScope = {
+    kind: "context",
     base: "b",
     head: "h",
     changed: ["api/user.ts"],
@@ -252,6 +255,7 @@ test("display rule: more than 10 findings lists counts only", () => {
     assert.ok(summarize(findings.slice(0, 10)).includes("| warning |"));
     const report = buildReport({
         repo: "o/r",
+        kind: CONTEXT_KIND,
         base: "b",
         head: "h",
         findings,

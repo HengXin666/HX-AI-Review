@@ -20,10 +20,14 @@ hx-context-review 与 hx-agent-code 使用同一份报告契约: 同样的 Findi
 ## 等级来源
 
 - Error 只来自 L0 确定性检查. 只有 `origin: new` 的 Error 让 job 失败.
-- AI 阶段 (finder -> verifier) 只产出 Warning (`CX-AI`) 与补丁, 永远不让 job 失败.
+- AI 阶段 (finder -> verifier) 只产出 Warning (`CX-AI` 或 `CODE-AI`) 与补丁, 永远不让 job 失败.
 - 规则自身崩溃产出 `tool-error` Error, 不能当作空诊断通过.
+- 一次运行只跑一种 kind (`context` 或 `code`), 见 [双模式决策](../decisions/2026-10-25-dual-cr-kind.md).
+  kind 决定用哪套 scope 与提示词, 不改变 Error/Warning 的等级语义.
 
 ## 规则表
+
+### 上下文 CR (`kind: context`)
 
 | ID | 等级 | 阶段 |
 |---|---|---|
@@ -34,6 +38,21 @@ hx-context-review 与 hx-agent-code 使用同一份报告契约: 同样的 Findi
 | CX-SKILL | Error | L0 |
 | CX-ORPHAN | Warning | L0 |
 | CX-AI | Warning | AI |
+
+### 代码 CR (`kind: code`)
+
+| ID | 等级 | 阶段 | 判据 |
+|---|---|---|---|
+| CODE-AI | Warning | AI | diff 新增或修改的行存在真实缺陷, 且 verifier 无法反驳 |
+
+代码 CR 的 finder 只报可被代码证实的缺陷: 逻辑错误, 边界条件, 错误处理, 并发与资源, 安全边界,
+以及与既有设计相悖. 不报纯风格偏好, 不报未改动代码的既有问题, 不报无法从 diff 与仓库读出证据的猜测.
+它不产出可自动推送的补丁分支: 代码改动需要人判断, 只给建议文本.
+
+### 通用
+
+| ID | 等级 | 阶段 |
+|---|---|---|
 | tool-error | Error | 任一 |
 
 判据详见 [docs/architecture/context-cr.md](../architecture/context-cr.md) 的 L0 规则一节. HC 开头的规则与 hx-agent-code 规则目录同名同义.

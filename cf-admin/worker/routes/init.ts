@@ -1,7 +1,7 @@
 import { repoFromToken } from "../auth.ts";
 import { HttpError, json, month } from "../http.ts";
 import type { Deps } from "../http.ts";
-import type { ProviderRow, RepoRow } from "../store/port.ts";
+import type { Kind, ProviderRow, RepoKind, RepoRow } from "../store/port.ts";
 
 const MAX_CANDIDATES = 12;
 /** A claim older than this is treated as abandoned (job timeout is 30 minutes), so a crashed run cannot block. */
@@ -15,6 +15,27 @@ function spentThisMonth(repo: RepoRow, now: Date): number {
 type L0 = { cause: "disabled" | "mode" | "budget" | "config"; reason: string };
 
 const positiveInt = (value: number) => Number.isSafeInteger(value) && value >= 1;
+
+const KINDS: readonly Kind[] = ["context", "code"];
+
+/**
+ * The kind this run performs. Absent means context, which is what every caller did before kinds existed.
+ * A repo registered for one kind rejects the other, so a misconfigured workflow fails loudly instead of
+ * quietly running the wrong review and charging its budget.
+ */
+function kindParam(raw: string | null, served: RepoKind): Kind {
+    if (raw === null || raw === "") {
+        return served === "code" ? "code" : "context";
+    }
+    const kind = KINDS.find((item) => item === raw);
+    if (!kind) {
+        throw new HttpError(400, `kind must be one of ${KINDS.join(", ")}`);
+    }
+    if (served !== "both" && served !== kind) {
+        throw new HttpError(400, `repository is registered for ${served} reviews, not ${kind}`);
+    }
+    return kind;
+}
 
 async function promptPayload(deps: Deps) {
     const active = await deps.store.activePrompts();
@@ -87,9 +108,23 @@ function l0Reason(repo: RepoRow, now: Date, provider: ProviderRow | null, hasKey
  */
 export async function handleInit(request: Request, deps: Deps): Promise<Response> {
     const repo = await repoFromToken(request, deps);
-    const asked = new URL(request.url).searchParams.get("repo");
+    const params = new URL(request.url).searchParams;
+    const asked = params.get("repo");
     if (asked && asked.toLowerCase() !== repo.name.toLowerCase()) {
         throw new HttpError(403, "token belongs to a different repository");
+    }
+    // A run is exactly one kind. Callers that predate kinds send nothing and get context, which is what
+    // the tool did before; an explicit kind the repo does not serve is a 400 rather than a silent switch.
+    const kind = kindParam(params.get("kind"), repo.kind);
+    // mode=l0 means "deterministic checks only, no model". A code review has no deterministic stage, so the
+    // pair is contradictory: the run would neither check anything nor review anything and still report a
+    // status. Refuse it here, where the operator can see which of the two settings to change.
+    if (kind === "code" && repo.mode === "l0") {
+        throw new HttpError(
+            400,
+            "mode is l0 but the requested kind is code: a code review has no L0 stage, so set mode to full " +
+                "or register the repository for context reviews",
+        );
     }
     const provider = await deps.store.provider(repo.provider);
     const apiKey = provider ? deps.secret(provider.keySecret) : undefined;
@@ -104,6 +139,7 @@ export async function handleInit(request: Request, deps: Deps): Promise<Response
     const base = {
         repo: repo.name,
         enabled: repo.enabled,
+        kind,
         l0Only: l0 !== null,
         reason: l0?.reason,
         l0Cause: l0?.cause,
@@ -124,7 +160,9 @@ export async function handleInit(request: Request, deps: Deps): Promise<Response
             cacheRead: provider?.priceCacheRead ?? 0,
             cacheWrite: provider?.priceCacheWrite ?? 0,
         },
-        lastSha: repo.lastSha ?? undefined,
+        // last_sha is the "context already reviewed up to here" cursor; a code review has no such cursor,
+        // so it must not inherit one and must not advance it either (POST /runs decides that).
+        lastSha: kind === "context" ? (repo.lastSha ?? undefined) : undefined,
         suppressions: await deps.store.suppressions(repo.id),
         prompts: await promptPayload(deps),
         // The runner sends this back on POST /runs; it is what lets that call release this claim.

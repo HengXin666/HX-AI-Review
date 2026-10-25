@@ -1,10 +1,13 @@
 import type { Finding, Patch, Usage } from "../contract/finding.ts";
+import type { CrKind } from "../contract/kind.ts";
 
 export type RunStatus = "passed" | "warned" | "failed" | "skipped" | "incomplete";
 
 /** Body of POST /runs. Large text goes to R2, rows go to D1; the Worker also advances last_sha. */
 export type RunPayload = {
     repo: string;
+    /** What this run reviewed, so the Worker can file the run and its findings under the right kind. */
+    kind: CrKind;
     sha: string;
     baseSha: string;
     event: string;

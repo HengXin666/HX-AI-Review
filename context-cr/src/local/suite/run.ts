@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { ERROR } from "../../constants.ts";
 import { EMPTY_USAGE, makeFinding } from "../../contract/finding.ts";
+import { CONTEXT_KIND } from "../../contract/kind.ts";
 import type { Finding } from "../../contract/finding.ts";
 import { buildReport } from "../../contract/report.ts";
 import type { ReviewReport } from "../../contract/report.ts";
@@ -207,6 +208,7 @@ function writeResult(codeRoot: string, result: TierResult, options: RunOptions):
     const durationMs = result.steps.reduce((sum, step) => sum + step.durationMs, 0);
     const report: ReviewReport = buildReport({
         repo: codeRoot,
+        kind: CONTEXT_KIND,
         base: options.base,
         head: tryGit(codeRoot, ["rev-parse", "HEAD"])?.trim() ?? "",
         patches: [],

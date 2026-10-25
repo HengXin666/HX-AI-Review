@@ -73,12 +73,16 @@ export const RULE = {
     skill: "CX-SKILL",
     orphan: "CX-ORPHAN",
     ai: "CX-AI",
+    /** Code CR findings: the diff itself is wrong, not the context describing it. */
+    codeAi: "CODE-AI",
     tool: "tool-error",
     exemption: "EXEMPT-001",
 } as const;
 
 export const ENV = {
     endpoint: "HX_CTX_ENDPOINT",
+    /** The caller workflow's kind input; /init may answer with a different kind, which wins. */
+    kind: "HX_CTX_KIND",
     token: "HX_CTX_TOKEN",
     /** The workflow's concurrency group, so /init can hand over a claim cancelled by a newer run. */
     group: "HX_CTX_GROUP",

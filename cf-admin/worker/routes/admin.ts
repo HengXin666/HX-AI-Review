@@ -28,6 +28,12 @@ function repoPatch(body: Record<string, unknown>): RepoPatch {
         }
         patch.mode = body.mode;
     }
+    if (body.kind !== undefined) {
+        if (body.kind !== "context" && body.kind !== "code" && body.kind !== "both") {
+            throw bad("kind", '"context", "code" or "both"');
+        }
+        patch.kind = body.kind;
+    }
     if (body.provider !== undefined) {
         if (typeof body.provider !== "string" || !PROVIDER_NAME.test(body.provider)) {
             throw bad("provider", "a provider name (letters, digits, '.', '_', '-')");

@@ -151,6 +151,7 @@ test("a later pull request run resolves missing L0 findings but not unchecked CX
         id,
         runId,
         repoId: repo.id,
+        kind: "context" as const,
         fingerprint,
         ruleId,
         severity: "warning",
@@ -164,6 +165,7 @@ test("a later pull request run resolves missing L0 findings but not unchecked CX
     const run = (id: string) => ({
         id,
         repoId: repo.id,
+        kind: "context" as const,
         sha: id,
         baseSha: "base",
         event: "pull_request",
@@ -218,6 +220,7 @@ test("same-line hits of one rule keep separate rows and feedback touches only it
     const hit = {
         runId: "r1",
         repoId: repo.id,
+        kind: "context" as const,
         ruleId: "HC-CONTEXT",
         severity: "warning",
         path: "src/index.ts",
@@ -231,6 +234,7 @@ test("same-line hits of one rule keep separate rows and feedback touches only it
         {
             id: "r1",
             repoId: repo.id,
+            kind: "context" as const,
             sha: "r1",
             baseSha: "base",
             event: "pull_request",
@@ -276,6 +280,7 @@ test("the same file path in two repositories counts as two files", async () => {
     const run = (id: string, repoId: number) => ({
         id,
         repoId,
+        kind: "context" as const,
         sha: id,
         baseSha: "base",
         event: "push",
@@ -295,6 +300,7 @@ test("the same file path in two repositories counts as two files", async () => {
         id,
         runId,
         repoId,
+        kind: "context" as const,
         fingerprint: "fp",
         ruleId: "HC-CONTEXT",
         severity: "warning",
