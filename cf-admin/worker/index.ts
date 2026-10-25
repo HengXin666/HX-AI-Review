@@ -29,6 +29,11 @@ export function route(request: Request, deps: Deps): Promise<Response> {
     if (pathname.startsWith("/api/")) {
         return handleAdmin(request, deps, pathname.slice(5).split("/").filter(Boolean));
     }
+    // Anything else is the overview SPA. The Worker runs before assets, so it has to hand them over itself;
+    // single-page-app handling turns unknown paths into index.html so client routing works on a deep link.
+    if (deps.assets && (method === "GET" || method === "HEAD")) {
+        return deps.assets.fetch(request);
+    }
     throw new HttpError(404, "not found");
 }
 
@@ -49,6 +54,7 @@ export default {
         const deps: Deps = {
             store: new D1Store(env.DB),
             blobs: new R2Blobs(env.BLOBS),
+            assets: env.ASSETS,
             secret: (name) => (typeof env[name] === "string" ? (env[name] as string) : undefined),
             admin: (req) => verifyAccess(req, env.ACCESS_AUD, env.ACCESS_TEAM_DOMAIN),
             credentials:

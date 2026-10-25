@@ -96,7 +96,7 @@ provider 名只允许字母, 数字, `.`, `_`, `-`; 新建 provider 必须显式
 
 ## 总览页
 
-`cf-admin/pages` 是 React + TS + Vite 单页, 组件来自 `@hx/ui` (open-vetta 设计语言), 部署到 Pages. 页面同源请求 `/api/*`, 由 Pages Function `cf-admin/pages/functions/api/[[path]].ts` 经 service binding 转给 Worker. Access JWT 或会话 cookie 随请求传递, Worker 再次校验. 页面功能:
+`cf-admin/pages` 是 React + TS + Vite 单页, 组件来自 `@hx/ui` (open-vetta 设计语言). 构建产物作为 Worker 的静态资源 (`[assets]`) 一起部署, 与 `/api/*` 同域: Worker 先处理 API 路由, 其余 GET/HEAD 交给 assets binding, 未知路径按 single-page-application 回 `index.html`, 深链接也能直接打开. 所以整个站点是一个 Worker, 自定义域名用 zone route 接管, 不需要 Pages 项目. Access JWT 或会话 cookie 随请求传递, Worker 再次校验. 页面功能:
 
 - 部署状态: 当前 commit, 部署时间, 部署运行日志, Access 是否已配置, 密码登录是否开启, 重新部署入口. 未登录且接口 403 时显示登录表单.
 - 仓库: 登记 (token 只显示一次), 轮换 token, 开关, 模式, 模型分级, 本月花费/预算 (清空预算框不会被当成 0, 会恢复原值), last_sha.

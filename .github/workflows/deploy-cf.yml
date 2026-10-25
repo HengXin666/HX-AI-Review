@@ -1,15 +1,15 @@
 name: deploy-cf
-# Manual one-click deploy of the Cloudflare side (D1 + migrations, R2, Worker, Pages overview).
+# Manual one-click deploy of the Cloudflare side (D1 + migrations, R2, Worker serving the overview SPA as assets).
 # Repository secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, optional HX_PROVIDER_API_KEY.
 # Repository variables (optional): HX_ACCESS_AUD, HX_ACCESS_TEAM_DOMAIN, HX_WORKER_NAME, HX_D1_NAME,
-# HX_R2_BUCKET, HX_PAGES_PROJECT, HX_OVERVIEW_URL.
+# HX_R2_BUCKET, HX_OVERVIEW_DOMAIN, HX_OVERVIEW_URL.
 on:
     workflow_dispatch:
         inputs:
             target:
                 description: What to deploy
                 type: choice
-                options: [all, migrations, worker, pages]
+                options: [all, migrations, worker]
                 default: all
             provider-key-name:
                 description: Worker secret name to (re)set from the HX_PROVIDER_API_KEY secret, e.g. PROVIDER_DEFAULT_KEY. Empty skips.
@@ -54,8 +54,7 @@ jobs:
                   HX_WORKER_NAME: ${{ vars.HX_WORKER_NAME }}
                   HX_D1_NAME: ${{ vars.HX_D1_NAME }}
                   HX_R2_BUCKET: ${{ vars.HX_R2_BUCKET }}
-                  HX_PAGES_PROJECT: ${{ vars.HX_PAGES_PROJECT }}
-                  HX_PAGES_DOMAIN: ${{ vars.HX_PAGES_DOMAIN }}
+                  HX_OVERVIEW_DOMAIN: ${{ vars.HX_OVERVIEW_DOMAIN }}
                   HX_OVERVIEW_URL: ${{ vars.HX_OVERVIEW_URL }}
                   HX_ADMIN_USER: ${{ vars.HX_ADMIN_USER }}
                   HX_ADMIN_PASSWORD: ${{ secrets.HX_ADMIN_PASSWORD }}
