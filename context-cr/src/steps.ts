@@ -25,6 +25,7 @@ import { compareUrl, githubTarget, postPullReview, pushPatchBranch, writeBack } 
 import { adoptGithubActor } from "./publish/app-token.ts";
 import type { GithubTarget } from "./publish/github.ts";
 import { postRun, postSpend, sessionsToJsonl, statusOf } from "./publish/ingest.ts";
+import { loadIntent, renderIntent } from "./review/intent.ts";
 import { runReview } from "./review/index.ts";
 import { buildEvidencePack } from "./review/evidence.ts";
 import type { Rejection } from "./review/index.ts";
@@ -176,7 +177,7 @@ export function stepScope(root: string): RunScope {
     return scope;
 }
 
-/** True when the scope holds nothing to review: no context file, or no added line in the diff. */
+/** True when the scope holds nothing to review: no context file, or no added or removed line. */
 export function scopeEmpty(scope: RunScope): boolean {
     return scope.kind === "code" ? scope.hunks.length === 0 : scope.contexts.length === 0;
 }
@@ -227,10 +228,21 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
     } catch (error) {
         process.stderr.write(`evidence pack skipped: ${error instanceof Error ? error.message : String(error)}\n`);
     }
+    let intent = "";
+    if (scope.kind === "code") {
+        try {
+            // The card is untrusted text. A missing event file or a failed issue lookup still leaves
+            // the commits, and a total failure leaves the review with no card rather than no review.
+            intent = renderIntent(await loadIntent(root, scope.base, scope.head, issueLookup));
+        } catch (error) {
+            process.stderr.write(`intent card skipped: ${error instanceof Error ? error.message : String(error)}\n`);
+        }
+    }
     const result = await runReview(state.config, scope, {
         run,
         diff,
         evidence,
+        intent,
         patchFiles: (patch) => patchFiles(root, patch),
         readFile: (path) => readTracked(root, path),
         // The Worker settles a taken-over claim only if it was marked as spending, so a run cancelled
@@ -290,6 +302,22 @@ function aiStage(ai: AiState): string {
 const UNREVIEWED_CAUSES = new Set(["budget", "config"]);
 
 /** Context files come from the reviewed commit via git, never the filesystem: no .git, no symlink targets. */
+/** Issue title and body for the intent card. No token, or a failed request, leaves the number unfilled. */
+async function issueLookup(number: number): Promise<{ title: string; body: string } | undefined> {
+    const target = githubTarget();
+    if (!target) {
+        return undefined;
+    }
+    const response = await fetch(target.apiUrl + "/repos/" + target.repo + "/issues/" + number, {
+        headers: { authorization: "Bearer " + target.token, accept: "application/vnd.github+json" },
+    });
+    if (!response.ok) {
+        return undefined;
+    }
+    const body = (await response.json()) as { title?: string; body?: string | null };
+    return { title: body.title ?? "", body: body.body ?? "" };
+}
+
 function readTracked(root: string, path: string): string | undefined {
     if (path.split("/").includes(".git")) {
         return undefined;
@@ -320,7 +348,12 @@ function safePatchBranch(root: string, head: string, report: ReviewReport, targe
 async function postCodeReviews(target: GithubTarget, prNumber: number, sha: string, trace: CodeTrace): Promise<void> {
     const notes = trace.checks
         .filter((check) => check.verdict === "confirmed" && check.quote)
-        .map((check) => ({ path: check.path, line: check.line, body: diffLineComment(check) }));
+        .map((check) => ({
+            path: check.path,
+            line: check.line,
+            side: check.side,
+            body: diffLineComment(check),
+        }));
     try {
         await postPullReview(target, prNumber, sha, renderChunkReview(trace), []);
     } catch (error) {

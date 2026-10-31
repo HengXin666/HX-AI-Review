@@ -59,7 +59,8 @@ export function CodeTrace({ repo, id, onClose }: Props) {
                             <li>2. 分块审查 · {new Set(trace.groups.map((group) => group.batch)).size} 批</li>
                             <li>
                                 3. 证据校验 · {trace.checks.filter((check) => check.verdict === "confirmed").length}{" "}
-                                确认 / {trace.checks.filter((check) => check.verdict === "rejected").length} 驳回
+                                确认 / {trace.checks.filter((check) => check.verdict === "rejected").length} 驳回 /{" "}
+                                {trace.checks.filter((check) => check.verdict === "suppressed").length} 预算抑制
                             </li>
                         </ol>
                         {trace.groups.map((group) => (
@@ -70,8 +71,11 @@ export function CodeTrace({ repo, id, onClose }: Props) {
                             >
                                 <summary className="cursor-pointer font-mono">
                                     {group.id} {group.path} · 第 {group.batch} 批 · {group.hunks} hunk · 新增{" "}
-                                    {group.added.slice(0, 8).join(",")}
+                                    {group.added.slice(0, 8).join(",") || "-"}
                                     {group.added.length > 8 ? "…" : ""}
+                                    {group.removed && group.removed.length
+                                        ? ` · 删除 ${group.removed.slice(0, 8).join(",")}${group.removed.length > 8 ? "…" : ""}`
+                                        : ""}
                                 </summary>
                                 <pre className="mt-2 overflow-auto whitespace-pre-wrap font-mono text-[length:var(--fs-2xs)]">
                                     {group.excerpt || "（无 diff 正文）"}
@@ -88,11 +92,18 @@ export function CodeTrace({ repo, id, onClose }: Props) {
                                         className="rounded-lg border border-border/40 px-2 py-1.5"
                                     >
                                         <Badge variant={check.verdict === "confirmed" ? "warning" : "secondary"}>
-                                            {check.verdict === "confirmed" ? "确认" : "驳回"}
+                                            {check.verdict === "confirmed"
+                                                ? "确认"
+                                                : check.verdict === "suppressed"
+                                                  ? "预算抑制"
+                                                  : "驳回"}
                                         </Badge>{" "}
                                         <span className="font-mono">
+                                            {check.side === "LEFT" ? "L" : ""}
                                             {check.path}:{check.line}
                                         </span>{" "}
+                                        {check.grade ? `${check.grade} ` : ""}
+                                        {check.category ? `${check.category} ` : ""}
                                         {check.title}
                                         {check.quote ? (
                                             <pre className="mt-1 whitespace-pre-wrap font-mono text-[length:var(--fs-2xs)]">

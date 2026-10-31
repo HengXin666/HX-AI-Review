@@ -10,6 +10,7 @@
     "scripts": {
         "typecheck": "tsc -p tsconfig.json",
         "test": "node --test test/*.test.ts",
+        "eval": "node src/cli.ts eval",
         "build": "tsc -p tsconfig.json"
     },
     "dependencies": {

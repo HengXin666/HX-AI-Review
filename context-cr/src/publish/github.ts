@@ -119,14 +119,14 @@ export async function writeBack(target: GithubTarget, sha: string, body: string,
     }
 }
 
-export type LineNote = { path: string; line: number; body: string };
+export type LineNote = { path: string; line: number; body: string; side?: "LEFT" | "RIGHT" };
 
 const REVIEW_BODY_MAX = 60000;
 
 /**
  * One pull-request review as the token's account (github-actions[bot], or a GitHub App when the workflow
- * passes an installation token). Comments land on the RIGHT side of the diff, which is the new file.
- * An empty comment list posts a body-only review, so the assembled diff is visible even with no findings.
+ * passes an installation token). Comments land on the side the check names: RIGHT for a new-side line,
+ * LEFT for a deleted line. An empty comment list posts a body-only review.
  */
 export async function postPullReview(
     target: GithubTarget,
@@ -141,7 +141,7 @@ export async function postPullReview(
         payload.comments = comments.map((item) => ({
             path: item.path,
             line: item.line,
-            side: "RIGHT",
+            side: item.side === "LEFT" ? "LEFT" : "RIGHT",
             body: item.body,
         }));
     }

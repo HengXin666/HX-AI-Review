@@ -5,6 +5,17 @@ export type Severity = "error" | "warning";
 export type Origin = "new" | "historical";
 export type ExemptionState = "exempt" | "expired";
 
+/**
+ * Code-review rank. This is not Finding.severity: severity stays `warning` so a code finding
+ * never blocks the job. The rank is what the comment budget sorts on.
+ */
+export const CODE_GRADES = ["critical", "major", "minor", "nit"] as const;
+export type CodeGrade = (typeof CODE_GRADES)[number];
+
+/** What a code finding is about. `other` is the fallback when the model does not name a category. */
+export const CODE_CATEGORIES = ["intent", "breaking", "stability", "security", "other"] as const;
+export type CodeCategory = (typeof CODE_CATEGORIES)[number];
+
 /** Repository exemption that matched a finding, with the state it had for this run. */
 export type ExemptionRef = {
     path: string;
@@ -28,6 +39,19 @@ export type Finding = {
     criteria?: string;
     /** Matching exemption entry, null when no exemption applies. */
     exemption?: ExemptionRef | null;
+    /**
+     * Code CR only. Rank inside Warning. Absent on L0 and context findings.
+     * A missing grade is treated as a nit by the comment budget.
+     */
+    grade?: CodeGrade;
+    /** Code CR only: intent, breaking, stability, security, or other. */
+    category?: CodeCategory;
+    /** Code CR only: 0 to 1, how sure the finder was. */
+    confidence?: number;
+    /** Code CR only: the input, state, or reasoning that makes the defect happen. */
+    repro?: string;
+    /** Code CR only: left is an old-side deleted line, right is a new-side line. */
+    side?: "left" | "right";
 };
 
 /** A unified diff proposed by the AI stage, bound to the finding it fixes. */

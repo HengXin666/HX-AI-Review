@@ -1,0 +1,52 @@
+{
+    "id": "intent-cents",
+    "note": "PR says the charge stays integer cents; the diff divides by 100.",
+    "intent": {
+        "source": "pull_request",
+        "title": "Keep checkout charges in cents",
+        "body": "Do not convert the charge amount. The amount field stays integer cents.",
+        "commits": [
+            {
+                "subject": "adjust charge",
+                "body": ""
+            }
+        ],
+        "issues": [
+            {
+                "number": 12,
+                "title": "Charge must stay integer cents",
+                "body": "Dividing by 100 changes the unit."
+            }
+        ]
+    },
+    "path": "src/pay.ts",
+    "diff": "diff --git a/src/pay.ts b/src/pay.ts\n--- a/src/pay.ts\n+++ b/src/pay.ts\n@@ -1,3 +1,3 @@\n export function charge(cents: number): number {\n-    return cents;\n+    return cents / 100;\n }",
+    "replay": {
+        "finder": [
+            {
+                "path": "src/pay.ts",
+                "line": 2,
+                "side": "right",
+                "title": "charge converted away from cents",
+                "message": "cents / 100 changes the unit the intent card says must stay integer cents",
+                "evidence": "`return cents / 100`",
+                "category": "intent",
+                "grade": "critical",
+                "confidence": 0.93,
+                "repro": "charge(100) returns 1 instead of 100",
+                "requires": "integer cents"
+            }
+        ],
+        "verdicts": {
+            "charge converted away from cents": "confirmed"
+        }
+    },
+    "expect": [
+        {
+            "category": "intent",
+            "grade": "critical",
+            "path": "src/pay.ts",
+            "titleIncludes": "cents"
+        }
+    ]
+}

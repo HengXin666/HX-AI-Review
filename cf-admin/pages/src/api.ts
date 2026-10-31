@@ -50,14 +50,25 @@ export type Run = {
 export type RunReport = {
     kind?: Kind;
     trace?: {
-        groups: { id: string; path: string; hunks: number; added: number[]; batch: number; excerpt: string }[];
+        groups: {
+            id: string;
+            path: string;
+            hunks: number;
+            added: number[];
+            removed?: number[];
+            batch: number;
+            excerpt: string;
+        }[];
         checks: {
             path: string;
             line: number;
             title: string;
-            verdict: "confirmed" | "rejected";
+            verdict: "confirmed" | "rejected" | "suppressed";
             reason: string;
             quote?: string;
+            grade?: string;
+            category?: string;
+            side?: "LEFT" | "RIGHT";
         }[];
     };
 };

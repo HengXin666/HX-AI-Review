@@ -25,7 +25,7 @@ L0 规则 (HC-*, CX-*) 判的是 "上下文文件是否与代码一致", 属于 
 | `context-cr/src/rules/` | 仓库快照, 配置, base 修订与豁免文件 | `Finding[]` + `rules.{md,json}` 报告 |
 | `context-cr/src/scope/base.ts` | GitHub 事件, last_sha | 审核区间基点与原因 |
 | `context-cr/src/scope/index.ts` | 快照, 变更列表, 可选引用索引提示 | `ContextScope` (`kind: "context"`) |
-| `context-cr/src/scope/code.ts` | 每个变更文件的 diff | `CodeScope` (`kind: "code"`, 新增行的 hunk) |
+| `context-cr/src/scope/code.ts` | 每个变更文件的 diff | `CodeScope` (`kind: "code"`, 新增行与删除行的 hunk) |
 | `context-cr/src/review/` | `InitConfig`, `ContextScope` 或 `CodeScope`, diff, `AgentRunner` | 确认后的 Warning, 补丁 (仅 context), 用量, 会话记录 |
 | `context-cr/src/publish/` | 汇总报告 | POST /runs, 补丁分支 (仅 context), 评论. code CR 另在 PR 上更新进度评论, 并提交「分块审查」与「证据校验」两个 review, 确认项落到 diff 行 |
 
@@ -58,7 +58,7 @@ runner 侧的三条规则:
 - `/init` 响应里的 `kind` 优先, 因为 Worker 知道仓库默认值. 只有响应缺这个字段时才回退到本次请求的 kind, 而不是固定回退到 `context`; 否则旧 Worker 会把一次 code 请求悄悄跑成 context CR.
 - `scope.json` 带 kind. review 步发现 scope 的 kind 与配置不一致时直接失败关闭 (错误信息为 `a <scope> scope cannot be reviewed as <config>`), 不调用任何模型: 用另一套提示词与规则审这份 scope, 会把上下文发现记成代码缺陷.
 
-`review.yml` 的第 4 步在文件里仍叫 `4 context_scope`, 但它按 kind 分派: context 走 `computeScope`, code 走 `computeCodeScope`, 输出 `empty` 的含义也随之变成 "没有上下文文件" 或 "没有可报的新增行". 步骤名是历史包袱, 改它会让已有运行日志与文档对不上, 所以先留名不改行为.
+`review.yml` 的第 4 步在文件里仍叫 `4 context_scope`, 但它按 kind 分派: context 走 `computeScope`, code 走 `computeCodeScope`, 输出 `empty` 的含义也随之变成 "没有上下文文件" 或 "没有可报的新增行或删除行". 步骤名是历史包袱, 改它会让已有运行日志与文档对不上, 所以先留名不改行为.
 
 L0 (第 3 步) 只在 context 运行里真正执行, 见上表. 规则引擎 (第 3b 步, ARCH/STYLE/DOC/CTX/CI) 是仓库级确定性检查, 不看 kind, 两种运行都会跑, 所以一次 code job 仍可能因为 `ARCH-001` 之类的仓库规则变红; 那是代码结构问题, 与 "上下文是否过时" 不是一回事. 上报时 L0 发现 (code 下为空) 与该运行的 AI 发现一并入库, 记在该运行的 kind 下; `last_sha` 只由 context 运行推进, 因为它是 "上下文已审到哪" 的游标.
 
@@ -142,10 +142,10 @@ skill 注入上界 = 所有 skill 的 front matter (常驻 L1) + 最大的 `conc
 `context-cr/src/scope/code.ts` 的 `computeCodeScope` 只在 kind 为 `code` 时使用, 同样只读 git, 不调模型:
 
 - 逐个变更文件取其 diff. 路径来自 NUL 安全的变更列表, 不从 diff 头里解析, 所以带引号或非 ASCII 的路径不会被读错.
-- 每个文件按 `@@ -a,b +c,d @@` 切成 hunk. 新增行与上下文行按新文件行号编号; 删除行不编号 (它在被审的新文件里没有位置, 因此永远不能被报告); `\ No newline at end of file` 保留但不编号, 也不结束当前 hunk.
-- 只保留至少有一个新增行的 hunk: 纯删除的 hunk 没有可报的位置. 删除文件与二进制补丁不产生 hunk.
-- `scopeIgnore` 与 `exclude` 中的路径跳过. 结果为空 (diff 里没有新增行) 时 review 步骤被跳过.
-- 每个 `CodeHunk` 带 `path`, `header`, 带新侧行号的 `body`, 以及新增行的行号集合 `lines`. `lines` 是确定性闸门的依据: 报一条 diff 没碰过的行会被拒.
+- 每个文件按 `@@ -a,b +c,d @@` 切成 hunk. 新增行与上下文行按新文件行号编号. 删除行没有新侧行号, 记旧侧行号, 正文里写成 `L<old>`. `\ No newline at end of file` 保留但不编号, 也不结束当前 hunk.
+- 保留至少有一个新增行或一个删除行的 hunk. 纯删除的 hunk 和被删除的文件都审, 报告锚在旧侧行号. 二进制补丁没有 hunk 头, 不产生 hunk.
+- `scopeIgnore` 与 `exclude` 中的路径跳过. 结果为空 (diff 里没有新增行也没有删除行) 时 review 步骤被跳过.
+- 每个 `CodeHunk` 带 `path`, `header`, `body`, 新增行 `lines`, 删除行 `removed`, 以及删除所暴露的上下文行 `exposed`. 闸门只接受这三类位置.
 
 ## finder -> verifier
 
@@ -156,8 +156,9 @@ skill 注入上界 = 所有 skill 的 front matter (常驻 L1) + 最大的 `conc
 - 两套提示词: context 用 `FINDER_SYSTEM` / `VERIFIER_SYSTEM`, code 用 `CODE_FINDER_SYSTEM` / `CODE_VERIFIER_SYSTEM`. 操作者附录 (`prompts.finder` / `prompts.verifier`) 对两套都生效, 都不能提高等级.
 - 分批: context 按带行号的正文 (`batchDocs`) 用 `budgets.doc` 计, code 按 hunk 的 header 加 body (`batchHunks`) 用 `budgets.diff` 计. code 不把整份 diff 塞进提示词, hunk 本身就是 diff, 所以 `steps.ts` 给 code 传空 diff.
 - `report_finding` 在 code 下没有 `patch` 参数: 代码 CR 只给建议文本, 不产补丁, 也就不可能推送分支. 拒掉这个字段是为了不让模型把轮次花在写一份注定被丢弃的补丁上.
-- 确定性闸门也分两套: context 要求 path 是本批的上下文文件且行号存在 (`gate`); code 要求 path 属于本批且 line 是本批某个 hunk 的新增行 (`gateCode`). 抑制表与去重两边一致.
-- `steps.ts` 的 review 步在开会话前调用 `buildEvidencePack` (调用图, 引用方, 最近相关 PR/issue). 失败只记日志, 不把运行标成 incomplete.
+- 确定性闸门也分两套: context 要求 path 是本批的上下文文件且行号存在 (`gate`); code 要求 path 属于本批, 且 line 是新增行, 删除行 (side left) 或删除所暴露的上下文行 (`gateCode`). 抑制表与去重两边一致. code 在 confirmed 之后还有评论预算, 见 [agent-review.md](agent-review.md).
+- `steps.ts` 的 review 步在开会话前调用 `buildEvidencePack` (调用图, 引用方, 最近相关 PR/issue). code 运行同时用 `loadIntent` 读 PR 标题正文, 关联 issue 和 `git log`. 两处失败都只记日志, 不把运行标成 incomplete.
+- 离线评测是 `node context-cr/src/cli.ts eval`, 重放 `context-cr/eval/golden/v1`, 不调模型. 说明见 [code-eval.md](../reference/code-eval.md).
 - `/init` 可带 `prompts.finder` / `prompts.verifier` (`{ version, body }` 或 null). 缺失整个 `prompts` 字段时按旧 Worker 处理; 字段在但形状不对则解析失败. 非空 body 追加到对应系统提示, 不替换内置提示.
 - pi 会话: `ModelRuntime.registerProvider` 注册 api_url 为自定义 provider, `setRuntimeApiKey` 注入 key; `createAgentSession` 使用内存 SessionManager 与 SettingsManager, 自定义 ResourceLoader 不加载任何 AGENTS, skill 或 extension.
 - 上下文文件正文用 `git show HEAD:<path>` 从被审提交读取, 符号链接与 `.git` 下的路径不读 (`context-cr/src/review/context.ts` 负责编号, 分批, 摘录).

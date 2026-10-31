@@ -19,7 +19,7 @@ import {
 import { isPlainEdit } from "../git.ts";
 import { addUsage, EMPTY_USAGE, fingerprint, makeFinding } from "../contract/finding.ts";
 import type { Finding, Patch, Usage } from "../contract/finding.ts";
-import type { CodeTrace, ProgressNote } from "../contract/trace.ts";
+import type { CodeAnchor, CodeTrace, ProgressNote } from "../contract/trace.ts";
 import type { InitConfig, PromptAddendum } from "../init/client.ts";
 import type { CodeHunk, CodeScope } from "../scope/code.ts";
 import type { ContextScope } from "../scope/index.ts";
@@ -27,6 +27,7 @@ import { SessionError } from "./agent.ts";
 import type { AgentRequest, AgentResult, AgentRunner } from "./agent.ts";
 import { batchDocs, loadDocs } from "./context.ts";
 import type { ContextDoc } from "./context.ts";
+import { publishKeys } from "./budget.ts";
 import { groundEvidence, defersToUser } from "./ground.ts";
 import { assembleFileGroups, batchGroups, groupViews } from "./groups.ts";
 import type { DiffGroup } from "./groups.ts";
@@ -62,6 +63,8 @@ export type ReviewDeps = {
     onSpend?: (signal: AbortSignal) => Promise<void>;
     /** Called as a code review assembles groups, reviews a batch, and checks evidence. Failures are ignored. */
     onProgress?: (note: ProgressNote) => Promise<void> | void;
+    /** Rendered intent card for code CR. Untrusted pull-request text. Omitted when there is nothing to claim. */
+    intent?: string;
 };
 
 export type Rejection = { path: string; title: string; reason: string };
@@ -88,10 +91,20 @@ export type ReviewResult = {
  */
 function toFinding(candidate: Candidate, reason: string, ruleId: string = RULE.ai): Finding {
     const message = candidate.title + ": " + candidate.message;
-    const evidence = reason ? candidate.evidence + "\nVerifier: " + reason : candidate.evidence;
+    const repro = candidate.repro && candidate.repro !== candidate.message ? "\nRepro: " + candidate.repro : "";
+    const evidence = (reason ? candidate.evidence + "\nVerifier: " + reason : candidate.evidence) + repro;
     const finding = makeFinding(ruleId, WARNING, candidate.path, candidate.line, message, evidence);
     // Anchor on path + title so the same defect keeps its fingerprint across runs and feedback.
-    return { ...finding, fingerprint: fingerprint(ruleId, candidate.path, candidate.title, "") };
+    // Grade is not part of the fingerprint: a re-grade must not escape an earlier dismissal.
+    return {
+        ...finding,
+        fingerprint: fingerprint(ruleId, candidate.path, candidate.title, ""),
+        ...(candidate.grade ? { grade: candidate.grade } : {}),
+        ...(candidate.category ? { category: candidate.category } : {}),
+        ...(candidate.confidence !== undefined ? { confidence: candidate.confidence } : {}),
+        ...(candidate.repro ? { repro: candidate.repro } : {}),
+        ...(candidate.side ? { side: candidate.side } : {}),
+    };
 }
 
 type Queued = { candidate: Candidate; doc: ContextDoc; fingerprint: string };
@@ -353,16 +366,30 @@ async function notify(deps: ReviewDeps, note: ProgressNote): Promise<void> {
  * Code CR: one fresh verifier per candidate, same refutation discipline, then a second deterministic
  * check that the quoted evidence is still in the diff. No patch is ever produced or judged.
  */
+type NoteExtra = {
+    grade?: Candidate["grade"];
+    category?: Candidate["category"];
+    confidence?: number;
+    side?: "LEFT" | "RIGHT";
+    anchor?: CodeAnchor;
+};
+
 async function verifyCode(
     review: Review,
     config: InitConfig,
     deps: ReviewDeps,
     item: QueuedCode,
     promptBudget: number,
-    note: (candidate: Candidate, verdict: "confirmed" | "rejected", reason: string, quote?: string) => void,
+    note: (
+        candidate: Candidate,
+        verdict: "confirmed" | "rejected",
+        reason: string,
+        quote?: string,
+        extra?: NoteExtra,
+    ) => void,
 ): Promise<void> {
     const { candidate, hunk } = item;
-    const prompt = codeVerifierPrompt(candidate, hunk, promptBudget);
+    const prompt = codeVerifierPrompt(candidate, hunk, promptBudget, deps.intent ?? "");
     if (prompt === undefined) {
         review.fail(`verifier prompt for ${candidate.path}:${candidate.line} exceeds the context window`);
         const reason = "candidate too large for the context window";
@@ -403,7 +430,13 @@ async function verifyCode(
         return;
     }
     review.result.findings.push(toFinding(candidate, verdict.reason, RULE.codeAi));
-    note(candidate, "confirmed", verdict.reason, ground.quote);
+    note(candidate, "confirmed", verdict.reason, ground.quote, {
+        grade: candidate.grade,
+        category: candidate.category,
+        confidence: candidate.confidence,
+        side: candidate.side === "left" ? "LEFT" : "RIGHT",
+        anchor: item.anchor,
+    });
 }
 
 /**
@@ -414,7 +447,13 @@ async function runCodeReview(config: InitConfig, scope: CodeScope, deps: ReviewD
     const review = new Review(config, deps);
     const trace: CodeTrace = { groups: [], checks: [] };
     review.result.trace = trace;
-    const note = (candidate: Candidate, verdict: "confirmed" | "rejected", reason: string, quote?: string) => {
+    const note = (
+        candidate: Candidate,
+        verdict: "confirmed" | "rejected",
+        reason: string,
+        quote?: string,
+        extra?: NoteExtra,
+    ) => {
         trace.checks.push({
             path: candidate.path,
             line: candidate.line,
@@ -422,6 +461,11 @@ async function runCodeReview(config: InitConfig, scope: CodeScope, deps: ReviewD
             verdict,
             reason,
             quote,
+            grade: extra?.grade,
+            category: extra?.category,
+            confidence: extra?.confidence,
+            side: extra?.side,
+            anchor: extra?.anchor,
         });
     };
     const suppressed = new Set(config.suppressions.map((item) => item.fingerprint));
@@ -467,7 +511,14 @@ async function runCodeReview(config: InitConfig, scope: CodeScope, deps: ReviewD
             queue.push(outcome.item);
             return undefined;
         };
-        const prompt = codeFinderPrompt(scope, batch, config.suppressions, budgets, deps.evidence ?? "");
+        const prompt = codeFinderPrompt(
+            scope,
+            batch,
+            config.suppressions,
+            budgets,
+            deps.evidence ?? "",
+            deps.intent ?? "",
+        );
         if (prompt === undefined) {
             review.fail(`finder prompt for ${label} exceeds the context window`);
             review.result.notReviewed.push(...hunks.map((hunk) => hunk.path + " (prompt exceeds context window)"));
@@ -499,6 +550,7 @@ async function runCodeReview(config: InitConfig, scope: CodeScope, deps: ReviewD
         });
         await verifyCode(review, config, deps, item, budgets.prompt, note);
     }
+    applyCommentBudget(review, trace);
     await notify(deps, {
         stage: "verify",
         detail: `证据校验完成：${trace.checks.filter((item) => item.verdict === "confirmed").length} 条确认，${trace.checks.filter((item) => item.verdict === "rejected").length} 条驳回`,
@@ -507,11 +559,62 @@ async function runCodeReview(config: InitConfig, scope: CodeScope, deps: ReviewD
     return review.result;
 }
 
-type QueuedCode = { candidate: Candidate; hunk: CodeHunk; fingerprint: string };
+type QueuedCode = { candidate: Candidate; hunk: CodeHunk; fingerprint: string; anchor: CodeAnchor };
 
 /**
- * Deterministic gate for code CR: the candidate must name a file and an added line of its own batch. A line
- * the diff did not add, a path outside the batch, a suppression and a duplicate never cost a verifier.
+ * Where a code candidate is allowed to point. Right-side lines are added lines, plus context lines
+ * in a hunk that also deletes something. Left-side lines are the removed lines themselves.
+ */
+function locateLine(candidate: Candidate, batch: CodeHunk[]): { hunk: CodeHunk; anchor: CodeAnchor } | undefined {
+    if (candidate.side === "left") {
+        const hunk = batch.find((item) => item.path === candidate.path && item.removed.includes(candidate.line));
+        return hunk ? { hunk, anchor: "removed" } : undefined;
+    }
+    const added = batch.find((item) => item.path === candidate.path && item.lines.includes(candidate.line));
+    if (added) {
+        return { hunk: added, anchor: "added" };
+    }
+    const exposed = batch.find((item) => item.path === candidate.path && item.exposed.includes(candidate.line));
+    return exposed ? { hunk: exposed, anchor: "exposed" } : undefined;
+}
+
+/**
+ * Drop confirmed findings that do not earn a line comment. They stay in the trace as suppressed
+ * so the budget is visible, and they leave the published finding list so the PR comment stays short.
+ */
+function applyCommentBudget(review: Review, trace: CodeTrace): void {
+    const keep = publishKeys(
+        review.result.findings.map((finding) => ({
+            key: finding.fingerprint,
+            grade: finding.grade ?? "nit",
+            confidence: finding.confidence ?? 0.5,
+        })),
+    );
+    const dropped = review.result.findings.filter((finding) => !keep.has(finding.fingerprint));
+    review.result.findings = review.result.findings.filter((finding) => keep.has(finding.fingerprint));
+    for (const finding of dropped) {
+        const check = trace.checks.find(
+            (item) =>
+                item.verdict === "confirmed" &&
+                item.path === finding.path &&
+                item.line === finding.line &&
+                finding.message.startsWith(item.title + ":"),
+        );
+        const title = check?.title ?? finding.message;
+        review.reject(
+            { path: finding.path, line: finding.line, title, message: "", evidence: "" },
+            "suppressed by the per-PR comment budget",
+        );
+        if (check) {
+            check.verdict = "suppressed";
+            check.reason = "comment budget: " + check.reason;
+        }
+    }
+}
+
+/**
+ * Deterministic gate for code CR: the candidate must name a file and a line this diff added,
+ * removed, or left exposed. A path outside the batch, a suppression and a duplicate never cost a verifier.
  */
 function gateCode(
     review: Review,
@@ -522,24 +625,27 @@ function gateCode(
     prove: (candidate: Candidate, hunk: CodeHunk) => string | undefined,
 ): { item: QueuedCode } | { reason: string } {
     const id = toFinding(candidate, "", RULE.codeAi).fingerprint;
-    // A file can appear in several hunks of one batch: any hunk that added this line accepts it.
-    const hunk = batch.find((item) => item.path === candidate.path && item.lines.includes(candidate.line));
+    const located = locateLine(candidate, batch);
     const anyPath = batch.some((item) => item.path === candidate.path);
     const reason = !anyPath
         ? "not a file of this batch"
-        : !hunk
-          ? `line ${candidate.line} is not a line this diff added to ${candidate.path}`
+        : !located
+          ? candidate.side === "left"
+              ? `line ${candidate.line} is not a line this diff removed from ${candidate.path}`
+              : `line ${candidate.line} is not a line this diff added to ${candidate.path}`
           : suppressed.has(id)
             ? "suppressed by earlier feedback"
             : seen.has(id)
               ? "duplicate of another candidate"
-              : prove(candidate, hunk as CodeHunk);
-    if (reason !== undefined) {
-        review.reject(candidate, reason);
-        return { reason };
+              : candidate.structureError
+                ? candidate.structureError
+                : prove(candidate, located.hunk);
+    if (reason !== undefined || located === undefined) {
+        review.reject(candidate, reason ?? "not a line in this diff");
+        return { reason: reason ?? "not a line in this diff" };
     }
     seen.add(id);
-    return { item: { candidate, hunk: hunk as CodeHunk, fingerprint: id } };
+    return { item: { candidate, hunk: located.hunk, fingerprint: id, anchor: located.anchor } };
 }
 
 /**

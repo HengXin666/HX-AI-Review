@@ -8,6 +8,7 @@ export type DiffGroup = {
     path: string;
     hunks: CodeHunk[];
     added: number[];
+    removed: number[];
 };
 
 const EXCERPT_LINES = 40;
@@ -36,12 +37,19 @@ export function assembleFileGroups(hunks: CodeHunk[]): DiffGroup[] {
             path,
             hunks: fileHunks,
             added: fileHunks.flatMap((hunk) => hunk.lines),
+            removed: fileHunks.flatMap((hunk) => hunk.removed),
         };
     });
 }
 
 function asGroup(id: string, path: string, hunks: CodeHunk[]): DiffGroup {
-    return { id, path, hunks, added: hunks.flatMap((hunk) => hunk.lines) };
+    return {
+        id,
+        path,
+        hunks,
+        added: hunks.flatMap((hunk) => hunk.lines),
+        removed: hunks.flatMap((hunk) => hunk.removed),
+    };
 }
 
 /**
@@ -115,6 +123,7 @@ export function groupViews(batches: DiffGroup[][]): CodeGroupView[] {
                 path: group.path,
                 hunks: group.hunks.length,
                 added: group.added,
+                removed: group.removed,
                 batch: index + 1,
                 excerpt: groupExcerpt(group),
             });
