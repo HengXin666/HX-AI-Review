@@ -511,6 +511,23 @@ paths:
                         content: { application/json: { schema: { $ref: "#/components/schemas/Token" } } },
                     }
                 "404": { description: Unknown repo }
+    /api/runs/{owner}/{repo}/{id}/report:
+        get:
+            operationId: getRunReport
+            security: [{ access: [] }, { session: [] }]
+            parameters:
+                - { name: owner, in: path, required: true, schema: { type: string } }
+                - { name: repo, in: path, required: true, schema: { type: string } }
+                - { name: id, in: path, required: true, schema: { type: string } }
+            responses:
+                "200":
+                    description: >
+                        Report JSON stored for the run. A code review includes trace.groups (the assembled
+                        pull-request diff) and trace.checks (the evidence verdict for every candidate).
+                    content:
+                        application/json:
+                            schema: { type: object, additionalProperties: true }
+                "404": { description: Unknown run, or the id or repository name is not safe to look up }
     /api/providers/{name}:
         put:
             operationId: upsertProvider
@@ -611,3 +628,53 @@ paths:
             responses:
                 "201": { description: Notes folded into a new active addendum }
                 "400": { description: No unfolded notes, or the folded text exceeds 4000 bytes }
+    /api/github/app:
+        get:
+            operationId: getGithubApp
+            security: [{ access: [] }, { session: [] }]
+            description: Public fields of the one product GitHub App, plus installations. The PEM and webhook secret are not returned.
+            responses:
+                "200": { description: configured flag, bot login, install URL, installations }
+                "403": { description: No Access identity and no valid session }
+        put:
+            operationId: putGithubApp
+            security: [{ access: [] }, { session: [] }]
+            description: Save an already-created GitHub App. The private key is stored and not echoed.
+            responses:
+                "200": { description: Saved }
+                "400": { description: appId, slug, PEM or webhook secret is invalid }
+    /api/github/manifest:
+        post:
+            operationId: startGithubManifest
+            security: [{ access: [] }, { session: [] }]
+            description: Returns the form target and manifest. The browser POSTs it to GitHub; optional query org selects an organization.
+            responses:
+                "200": { description: action URL, state, manifest }
+                "400": { description: OVERVIEW_URL is unset, or org is not a login }
+    /api/github/setup:
+        get:
+            operationId: finishGithubManifest
+            description: GitHub redirects here with code and state. State authorizes the call; no session is required.
+            parameters:
+                - { name: code, in: query, required: true, schema: { type: string } }
+                - { name: state, in: query, required: true, schema: { type: string } }
+            responses:
+                "200": { description: HTML that returns to the overview }
+                "400": { description: Unknown or expired state }
+    /github/webhook:
+        post:
+            operationId: githubWebhook
+            description: Installation events. X-Hub-Signature-256 is HMAC-SHA256 of the raw body.
+            responses:
+                "200": { description: Recorded }
+                "401": { description: Bad signature }
+    /github/token:
+        get:
+            operationId: githubInstallationToken
+            security: [{ repoToken: [] }]
+            description: >-
+                Mints an installation token for the repository that owns the bearer token.
+                The runner uses it so reviews are authored by the app.
+            responses:
+                "200": { description: token, expiresAt, bot login, installationId }
+                "404": { description: App is not configured, or not installed on this repository }

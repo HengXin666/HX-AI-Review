@@ -79,9 +79,33 @@ hx-context-review 与 hx-agent-code 使用同一份报告契约: 同样的 Findi
 }
 ```
 
-`rejections` 是被确定性闸门或 verifier 驳回的 AI 候选及理由, 用于调提示词, 不计入 counts. `stages.ai` 写明确认数, 驳回数, 因候选上限或无法读取而未审的文件, 以及 incomplete 的原因. Markdown 版本在开头列出每个 stage 与驳回数.
+`rejections` 是被确定性闸门或 verifier 驳回的 AI 候选及理由, 用于调提示词, 不计入 counts. `stages.ai` 写明确认数, 驳回数, 因候选上限或无法读取而未审的文件, 以及 incomplete 的原因. Markdown 版本在开头列出每个 stage 与驳回数, code CR 另有 `## Diff groups` 与 `## Evidence checks`.
 
-Markdown 版本与 GitHub 评论遵守同一展示规则: 问题合计超过 10 条只列数量与类型统计, 不超过 10 条才逐条展开.
+code CR 的报告多一个 `trace` (`context-cr/src/contract/trace.ts`), context CR 没有这个字段:
+
+```json
+{
+    "trace": {
+        "groups": [
+            { "id": "g1", "path": "src/a.ts", "hunks": 1, "added": [12, 13], "batch": 1, "excerpt": "@@ ..." }
+        ],
+        "checks": [
+            {
+                "path": "src/a.ts",
+                "line": 12,
+                "title": "unchecked read",
+                "verdict": "confirmed",
+                "reason": "verifier: read() can throw",
+                "quote": "const added = read()"
+            }
+        ]
+    }
+}
+```
+
+`groups` 是按文件组装后的 PR diff, `batch` 是第几批 finder. `excerpt` 是这组 diff 的摘录, 不是整文件源码. `checks` 覆盖每一条候选: 确认或驳回, 以及驳回原因. `quote` 只在引用确实出现在 diff 或被审提交里时才有. 要求读者确认、回答、或检查上下文是否正确的候选不会出现在 `findings` 里, 只出现在 `checks` 与 `rejections`. 总览页用 `GET /api/runs/{owner}/{repo}/{id}/report` 读这份 JSON.
+
+Markdown 版本与 GitHub 评论遵守同一展示规则: 问题合计超过 10 条只列数量与类型统计, 不超过 10 条才逐条展开. code CR 的 PR 评论在这条规则之外另附分组表和校验表, 因为那是进度, 不是又一份发现列表.
 
 ## 排序与稳定性
 

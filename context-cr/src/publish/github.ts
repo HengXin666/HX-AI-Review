@@ -118,3 +118,32 @@ export async function writeBack(target: GithubTarget, sha: string, body: string,
         await call(target, "POST", `/issues/${prNumber}/comments`, { body });
     }
 }
+
+export type LineNote = { path: string; line: number; body: string };
+
+const REVIEW_BODY_MAX = 60000;
+
+/**
+ * One pull-request review as the token's account (github-actions[bot], or a GitHub App when the workflow
+ * passes an installation token). Comments land on the RIGHT side of the diff, which is the new file.
+ * An empty comment list posts a body-only review, so the assembled diff is visible even with no findings.
+ */
+export async function postPullReview(
+    target: GithubTarget,
+    prNumber: number,
+    sha: string,
+    body: string,
+    comments: LineNote[],
+): Promise<void> {
+    const text = body.length > REVIEW_BODY_MAX ? body.slice(0, REVIEW_BODY_MAX) + "\n\n…截断" : body;
+    const payload: Record<string, unknown> = { commit_id: sha, event: "COMMENT", body: text };
+    if (comments.length) {
+        payload.comments = comments.map((item) => ({
+            path: item.path,
+            line: item.line,
+            side: "RIGHT",
+            body: item.body,
+        }));
+    }
+    await call(target, "POST", `/pulls/${prNumber}/reviews`, payload);
+}

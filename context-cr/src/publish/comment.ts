@@ -1,4 +1,5 @@
-import { COMMENT_MARKER, DETAIL_LIMIT, TOOL_NAME, TOOL_VERSION } from "../constants.ts";
+import { COMMENT_MARKER, DETAIL_LIMIT, ENV, TOOL_NAME, TOOL_VERSION } from "../constants.ts";
+import type { CodeCheck, CodeTrace, ProgressNote } from "../contract/trace.ts";
 import { escapeMd } from "../contract/report.ts";
 import type { ReviewReport } from "../contract/report.ts";
 
@@ -209,6 +210,10 @@ export function renderComment(report: ReviewReport, links: CommentLinks, note?: 
         );
     }
 
+    if (report.kind === "code" && report.trace) {
+        out.push(renderTraceHtml(report.trace), "");
+    }
+
     const applying = report.patches.filter((item) => item.applies).length;
     const foot: string[] = [];
     if (links.patchUrl && applying) {
@@ -225,4 +230,146 @@ export function renderComment(report: ReviewReport, links: CommentLinks, note?: 
     }
     out.push(`<sub>${TOOL_NAME} v${TOOL_VERSION} · 错误只来自 L0, AI 只产出告警</sub>`);
     return out.join("\n").trim() + "\n";
+}
+
+function addedLines(lines: number[]): string {
+    if (lines.length === 0) {
+        return "-";
+    }
+    const shown = lines.slice(0, 12).join(", ");
+    return lines.length > 12 ? shown + ` …共 ${lines.length} 行` : shown;
+}
+
+/** Groups and evidence checks, as HTML inside the sticky comment so the diff is visible without opening a review. */
+function renderTraceHtml(trace: CodeTrace): string {
+    const groups = trace.groups
+        .map((group) => {
+            const excerpt = escapeHtml(group.excerpt);
+            return (
+                `<tr><td><code>${escapeHtml(group.id)}</code></td>` +
+                `<td><code>${escapeHtml(group.path)}</code></td>` +
+                `<td align="right">${group.hunks}</td>` +
+                `<td>第 ${group.batch} 批</td>` +
+                `<td><code>${escapeHtml(addedLines(group.added))}</code></td></tr>` +
+                `<tr><td colspan="5"><pre>${excerpt}</pre></td></tr>`
+            );
+        })
+        .join("");
+    const checks = trace.checks
+        .map((check) => {
+            const quote = check.quote ? `<br/><code>${escapeHtml(check.quote)}</code>` : "";
+            return (
+                `<tr><td>${escapeHtml(check.verdict === "confirmed" ? "确认" : "驳回")}</td>` +
+                `<td><code>${escapeHtml(check.path)}:${check.line}</code></td>` +
+                `<td>${escapeHtml(check.title)}${quote}<br/>${escapeHtml(check.reason)}</td></tr>`
+            );
+        })
+        .join("");
+    return [
+        "<h4>分组组装</h4>",
+        "<p>按文件把 PR diff 收成组，再按预算分批审查。下面是每一组的 diff，不是整文件源码。</p>",
+        "<table>",
+        '<tr><th align="left">组</th><th align="left">文件</th><th align="right">hunk</th><th align="left">批次</th><th align="left">新增行</th></tr>',
+        groups || '<tr><td colspan="5">没有可审的新增行</td></tr>',
+        "</table>",
+        "<h4>证据校验</h4>",
+        "<p>每条候选都核对过：引用必须出现在 diff 或被审提交里，并且不能把判断推给读者。</p>",
+        "<table>",
+        '<tr><th align="left">结果</th><th align="left">位置</th><th align="left">说明</th></tr>',
+        checks || '<tr><td colspan="3">没有候选</td></tr>',
+        "</table>",
+    ].join("\n");
+}
+
+/** Who is posting. Empty until the runner has asked the Worker for an app token. */
+function actorNote(): string {
+    const login = process.env[ENV.githubActor];
+    if (!login) {
+        return "";
+    }
+    if (process.env[ENV.githubActorVia] === "app") {
+        return `身份 ${login}。这条评论由登记在总览里的 GitHub App 发出，不是 github-actions，也不是你的个人账号。`;
+    }
+    return `身份 ${login}。此仓库还没安装总览里登记的 GitHub App，所以暂时由 Actions 机器人发言。`;
+}
+
+/** Sticky comment updated in place while a code review is still running. */
+export function renderProgress(note: ProgressNote): string {
+    const doneAssemble = note.stage !== "assemble";
+    const reviewing = note.stage === "review";
+    const verifying = note.stage === "verify";
+    const rows = [
+        `<li>${doneAssemble ? "完成" : "进行中"} · 分组组装（${note.trace.groups.length} 组）</li>`,
+        `<li>${reviewing ? "进行中" : doneAssemble && !reviewing ? "完成" : "等待"} · 分块审查</li>`,
+        `<li>${verifying ? "进行中" : "等待"} · 证据校验（${note.trace.checks.length} 条已记录）</li>`,
+    ];
+    // Once verification has started, the review batches are done.
+    if (verifying) {
+        rows[1] = `<li>完成 · 分块审查</li>`;
+    }
+    return [
+        COMMENT_MARKER,
+        "<h3>代码 CR 进度</h3>",
+        actorNote() ? `<p>${escapeHtml(actorNote())}</p>` : "",
+        `<p>${escapeHtml(note.detail)}</p>`,
+        "<ol>",
+        ...rows,
+        "</ol>",
+        renderTraceHtml(note.trace),
+        "",
+    ].join("\n");
+}
+
+/** Review body for the first pull-request review: the assembled diff, before any line comment. */
+export function renderChunkReview(trace: CodeTrace): string {
+    const blocks = trace.groups.map((group) =>
+        [
+            `### ${group.id} \`${group.path}\``,
+            `第 ${group.batch} 批 · ${group.hunks} 个 hunk · 新增行 ${addedLines(group.added)}`,
+            "",
+            "```diff",
+            group.excerpt,
+            "```",
+        ].join("\n"),
+    );
+    return [
+        "分块审查：下面是按文件组装后的 PR diff，不是整文件源码。每一组单独审查，超预算的文件再按 hunk 切开。",
+        actorNote(),
+        "",
+        blocks.join("\n\n") || "没有可审的新增行。",
+    ].join("\n");
+}
+
+/** Review body for the evidence-check review. Line comments carry only the confirmed findings. */
+export function renderEvidenceReview(trace: CodeTrace): string {
+    const lines = trace.checks.map((check) => {
+        const mark = check.verdict === "confirmed" ? "确认" : "驳回";
+        const quote = check.quote ? ` \`${check.quote}\`` : "";
+        return `- ${mark} \`${check.path}:${check.line}\` ${check.title}${quote} — ${check.reason}`;
+    });
+    return [
+        "证据校验：每一条候选的引用都在 diff 或被审提交里核对过。确认的问题写在对应新增行上；驳回的只留在这里，不占 diff。",
+        "没有一条结论要求你再去确认上下文。引用对不上，或把判断推给读者的，一律驳回。",
+        actorNote(),
+        "",
+        lines.join("\n") || "没有候选。",
+    ].join("\n");
+}
+
+/** Inline comment on one added line. States the checked quote; never asks the reader to verify it. */
+export function diffLineComment(check: CodeCheck): string {
+    const quote = check.quote ?? "";
+    return [
+        `**${check.title}**`,
+        "",
+        check.reason,
+        "",
+        "证据已在本 PR diff 与被审提交中核对，不是请你再去确认：",
+        "",
+        "```",
+        quote,
+        "```",
+        "",
+        `位置 \`${check.path}:${check.line}\` 是这次 diff 的新增行。`,
+    ].join("\n");
 }

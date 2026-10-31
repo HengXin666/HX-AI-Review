@@ -4,6 +4,7 @@ import { HttpError, json } from "./http.ts";
 import type { Deps, Env } from "./http.ts";
 import { handleAdmin } from "./routes/admin.ts";
 import { handleFeedback } from "./routes/feedback.ts";
+import { handleGithubToken, handleGithubWebhook } from "./routes/github.ts";
 import { handleInit } from "./routes/init.ts";
 import { handleRuns, handleSpend } from "./routes/runs.ts";
 import { D1Store, R2Blobs } from "./store/d1.ts";
@@ -25,6 +26,12 @@ export function route(request: Request, deps: Deps): Promise<Response> {
     }
     if (method === "POST" && pathname === "/feedback") {
         return handleFeedback(request, deps);
+    }
+    if (method === "POST" && pathname === "/github/webhook") {
+        return handleGithubWebhook(request, deps);
+    }
+    if (method === "GET" && pathname === "/github/token") {
+        return handleGithubToken(request, deps);
     }
     if (pathname.startsWith("/api/")) {
         return handleAdmin(request, deps, pathname.slice(5).split("/").filter(Boolean));
