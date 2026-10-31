@@ -25,7 +25,7 @@ export type NavEntry = { id: SectionId; label: string; icon: LucideIcon; badge?:
 export function navEntries(openFindings: number): NavEntry[] {
     return [
         { id: "overview", label: "总览", icon: LayoutDashboard },
-        { id: "runs", label: "运行记录", icon: FileClock },
+        { id: "runs", label: "审查", icon: FileClock },
         {
             id: "findings",
             label: "待处理发现",
@@ -58,7 +58,7 @@ function StatusStrip({ data }: { data: Overview }) {
 /** One line per screen: what it is for, not how to use it. */
 const SECTION_DESC: Record<SectionId, string> = {
     overview: "两种 CR 的健康度一屏看完: 错误与告警, 待处理发现, 花费与运行数。",
-    runs: "每一次运行只属于一种 CR, 可以按类型筛选后逐条看耗时与花费。",
+    runs: "打开一次运行，看步骤、按目录分的文件，以及每条发现的证据引用。",
     findings: "待处理发现可以接受或驳回; 驳回需要原因, 会写回抑制表。",
     repos: "登记仓库, 选择它跑哪种 CR, 并设置月度预算与令牌。",
     providers: "模型供应商的地址, 协议与单价; 密钥本身只在 Worker secret 里。",

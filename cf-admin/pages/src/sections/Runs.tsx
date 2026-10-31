@@ -78,10 +78,10 @@ export function runColumns(): DataTableColumn<Run>[] {
     ];
 }
 
-type Props = { runs: Run[]; filter: KindFilter; maxHeight?: string; compact?: boolean };
+type Props = { runs: Run[]; filter: KindFilter; maxHeight?: string; compact?: boolean; onOpen?: (id: string) => void };
 
 /** Recent runs, narrowed by the kind filter. Code CR never produces a patch branch, so that column is "-". */
-export function Runs({ runs, filter, maxHeight = "34rem", compact = false }: Props) {
+export function Runs({ runs, filter, maxHeight = "34rem", compact = false, onOpen }: Props) {
     const rows = runs.filter((row) => matchesKind(row, filter));
     const columns = compact
         ? runColumns().filter((column) => ["repo", "kind", "status", "counts", "created"].includes(column.key))
@@ -89,14 +89,15 @@ export function Runs({ runs, filter, maxHeight = "34rem", compact = false }: Pro
     return (
         <Card>
             <CardHeader className="flex flex-row items-center gap-2">
-                <CardTitle>运行记录 ({rows.length})</CardTitle>
-                <span className="ml-auto text-[length:var(--fs-2xs)] text-muted-foreground">一次运行只属于一种 CR</span>
+                <CardTitle>审查 ({rows.length})</CardTitle>
+                <span className="ml-auto text-[length:var(--fs-2xs)] text-muted-foreground">点开一行看这次审查</span>
             </CardHeader>
             <CardContent className="px-0 pb-0">
                 <DataTable
                     bare
                     maxHeight={maxHeight}
                     rowKey={(row) => row.id}
+                    onRowClick={onOpen ? (row) => onOpen(row.id) : undefined}
                     rows={rows}
                     columns={columns}
                     emptyText={filter === "all" ? "暂无运行记录" : "该类型暂无运行记录"}

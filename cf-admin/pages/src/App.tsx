@@ -13,15 +13,20 @@ import { Overview as OverviewScreen } from "./sections/Overview.tsx";
 import { Prompts } from "./sections/Prompts.tsx";
 import { Providers } from "./sections/Providers.tsx";
 import { Repos } from "./sections/Repos.tsx";
+import { Review } from "./sections/Review.tsx";
 import { Rules } from "./sections/Rules.tsx";
 import { Runs } from "./sections/Runs.tsx";
 
 const SECTIONS: SectionId[] = ["overview", "runs", "findings", "repos", "providers", "rules", "prompts", "deploy"];
 
-/** The screen named in the URL hash, so a section can be linked and survives a reload. */
-function sectionFromHash(): SectionId {
-    const id = window.location.hash.replace(/^#\/?/, "");
-    return (SECTIONS as string[]).includes(id) ? (id as SectionId) : "overview";
+/** The screen named in the URL hash. `#/runs/<id>` opens that run; the worker already writes this link. */
+function placeFromHash(): { section: SectionId; runId: string | null } {
+    const raw = window.location.hash.replace(/^#\/?/, "");
+    const slash = raw.indexOf("/");
+    const head = slash === -1 ? raw : raw.slice(0, slash);
+    const rest = slash === -1 ? "" : decodeURIComponent(raw.slice(slash + 1));
+    const section = (SECTIONS as string[]).includes(head) ? (head as SectionId) : "overview";
+    return { section, runId: section === "runs" && rest ? rest : null };
 }
 
 /** 403 means the session cookie is gone or was never valid: the login screen is the only useful view. */
@@ -35,7 +40,8 @@ export function App() {
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [phase, setPhase] = useState<"loading" | "login" | "ready">("loading");
-    const [section, setSection] = useState<SectionId>(sectionFromHash);
+    const [section, setSection] = useState<SectionId>(placeFromHash().section);
+    const [runId, setRunId] = useState<string | null>(placeFromHash().runId);
     const [filter, setFilter] = useState<KindFilter>("all");
 
     const fail = useCallback((err: Error) => {
@@ -66,14 +72,20 @@ export function App() {
 
     // The hash is the only navigation state, so the back button and a shared link both work.
     useEffect(() => {
-        const sync = () => setSection(sectionFromHash());
+        const sync = () => {
+            const place = placeFromHash();
+            setSection(place.section);
+            setRunId(place.runId);
+        };
         window.addEventListener("hashchange", sync);
         return () => window.removeEventListener("hashchange", sync);
     }, []);
 
     const go = (id: SectionId) => {
-        setSection(id);
         window.location.hash = "/" + id;
+    };
+    const openRun = (id: string) => {
+        window.location.hash = "/runs/" + encodeURIComponent(id);
     };
 
     const updateRepo = (name: string, patch: Partial<Repo>) => {
@@ -151,9 +163,27 @@ export function App() {
     const screen = (id: SectionId) => {
         switch (id) {
             case "overview":
-                return <OverviewScreen data={data} filter={filter} onSection={go} onVerdict={verdict} />;
+                return (
+                    <OverviewScreen
+                        data={data}
+                        filter={filter}
+                        onSection={go}
+                        onOpenRun={openRun}
+                        onVerdict={verdict}
+                    />
+                );
             case "runs":
-                return <Runs runs={data.runs} filter={filter} />;
+                return runId ? (
+                    <Review
+                        runId={runId}
+                        runs={data.runs}
+                        findings={[...data.findings, ...(data.resolved ?? [])]}
+                        onBack={() => go("runs")}
+                        onVerdict={verdict}
+                    />
+                ) : (
+                    <Runs runs={data.runs} filter={filter} onOpen={openRun} />
+                );
             case "findings":
                 return (
                     <Findings
@@ -204,7 +234,7 @@ export function App() {
                 {screen(section)}
             </DataBoundary>
             <p className="mt-auto text-[length:var(--fs-2xs)] text-muted-foreground">
-                上下文 CR 与代码 CR 共用同一份预算, 模型供应商与驳回抑制表; 错误只来自 L0 确定性检查。
+                上下文 CR 与代码 CR 共用同一份预算。打开一次运行才能看到它的步骤、分组和证据引用。
             </p>
         </Shell>
     );

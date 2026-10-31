@@ -4,7 +4,7 @@
 
 /*
  * HX-UI 的图标类串 (icon-[solar--...]) 由 iconify 的 Tailwind 插件在构建时展开, 本仓库没有装那个
- * 插件, 于是空态 / 错误态 / 加载态里的图标会退化成一块灰方块。这里只为页面实际用到的四个类串
+ * 插件, 于是空态 / 错误态 / 加载态里的图标会退化成一块灰方块。这里只为页面实际用到的类串
  * 补上 mask 图, 类名契约与库保持一致: 新图标先加进这一节, 再在页面里用同样的类串。
  */
 [class*="icon-[solar--"] {
@@ -31,4 +31,8 @@
 
 [class*="icon-[solar--lock-keyhole-minimalistic-linear]"] {
     --hx-icon: url("data:image/svg+xml,%3Csvg xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22 viewBox%3D%220 0 24 24%22 fill%3D%22none%22 stroke%3D%22%23000%22 stroke-width%3D%221.7%22 stroke-linecap%3D%22round%22 stroke-linejoin%3D%22round%22%3E%3Crect x%3D%224%22 y%3D%2210%22 width%3D%2216%22 height%3D%2211%22 rx%3D%222%22%2F%3E%3Cpath d%3D%22M8 10V7a4 4 0 0 1 8 0v3%22%2F%3E%3Cpath d%3D%22M12 15v2%22%2F%3E%3C%2Fsvg%3E");
+}
+
+[class*="icon-[solar--check-circle-linear]"] {
+    --hx-icon: url("data:image/svg+xml,%3Csvg xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22 viewBox%3D%220 0 24 24%22 fill%3D%22none%22 stroke%3D%22%23000%22 stroke-width%3D%221.7%22 stroke-linecap%3D%22round%22 stroke-linejoin%3D%22round%22%3E%3Ccircle cx%3D%2212%22 cy%3D%2212%22 r%3D%229%22%2F%3E%3Cpath d%3D%22m8.5 12.5 2.5 2.5 4.5-5%22%2F%3E%3C%2Fsvg%3E");
 }

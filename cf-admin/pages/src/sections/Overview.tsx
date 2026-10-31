@@ -11,6 +11,7 @@ type Props = {
     data: OverviewData;
     filter: KindFilter;
     onSection: (id: SectionId) => void;
+    onOpenRun: (id: string) => void;
     onVerdict: (id: string, verdict: "accepted" | "rejected", reason: string) => void;
 };
 
@@ -21,7 +22,7 @@ type Props = {
  * question. Code CR and context CR differ in what they produce (patches vs suggestions), so the two
  * columns also state their own rule namespace.
  */
-export function Overview({ data, filter, onSection, onVerdict }: Props) {
+export function Overview({ data, filter, onSection, onOpenRun, onVerdict }: Props) {
     const sums = totals(data, filter);
     const findings = data.findings.filter((row) => filter === "all" || kindOf(row.kind) === filter);
     const runs = data.runs.filter((row) => filter === "all" || kindOf(row.kind) === filter);
@@ -132,9 +133,11 @@ export function Overview({ data, filter, onSection, onVerdict }: Props) {
                             <EmptyState compact text="暂无运行记录" hint="runner 上报后会出现在这里。" />
                         ) : (
                             runs.slice(0, 6).map((row) => (
-                                <div
+                                <button
                                     key={row.id}
-                                    className="flex flex-wrap items-center gap-1.5 rounded-lg border border-border/40 px-2 py-1.5"
+                                    type="button"
+                                    onClick={() => onOpenRun(row.id)}
+                                    className="flex flex-wrap items-center gap-1.5 rounded-lg border border-border/40 px-2 py-1.5 text-left transition-colors hover:border-border hover:bg-muted/40"
                                 >
                                     <Badge variant={kindVariant(kindOf(row.kind))}>{kindLabel(kindOf(row.kind))}</Badge>
                                     <Badge variant={statusVariant(row.status)}>{statusLabel(row.status)}</Badge>
@@ -150,7 +153,7 @@ export function Overview({ data, filter, onSection, onVerdict }: Props) {
                                     <span className="tabular-nums text-[length:var(--fs-3xs)] text-muted-foreground">
                                         {duration(row.durationMs)} · {dateTime(row.createdAt)}
                                     </span>
-                                </div>
+                                </button>
                             ))
                         )}
                     </CardContent>
