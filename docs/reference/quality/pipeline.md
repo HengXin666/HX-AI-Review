@@ -16,8 +16,9 @@ push / pull_request
         |-- tests (quality-tests.yml, 下载同一次 build 产物) -> ci.ts tests
         `-- result         : build, compatibility, tests 任一失败即失败
 
-workflow_dispatch
+workflow_dispatch，以及 main 上总览页路径的 push
   `-- deploy-cf.yml      : 部署前先跑 cf-admin typecheck 与 test, 失败不部署
+                           手动可选 all / migrations / worker；前端合进 main 时自动以 worker 部署
 
 workflow_call (业务仓库调用, 本仓库自身不跑)
   `-- review.yml         : init -> L0 -> scope -> pi review -> publish
@@ -31,7 +32,7 @@ workflow_call (业务仓库调用, 本仓库自身不跑)
 | [quality-tests.yml](../../../.github/workflows/quality-tests.yml) | 被 quality-build 调用 | 选中的测试全部退出 0 |
 | [tests-all.yml](../../../.github/workflows/tests-all.yml) | 手动或 workflow_call | 六类测试聚合, 任一类别失败即失败 |
 | [tests-<category>.yml](../../../.github/workflows/tests-backend-api.yml) | 按类别: PR 路径, main push, schedule, label 或 tag | 对应类别退出 0; 没有 test 分支时输出 notice 并跳过 |
-| [deploy-cf.yml](../../../.github/workflows/deploy-cf.yml) | 手动 | 部署前测试通过, 部署步骤无错 |
+| [deploy-cf.yml](../../../.github/workflows/deploy-cf.yml) | 手动；另外 main 上 `cf-admin/pages/**` 或 `cf-admin/package.json` 变更会自动部署 Worker（总览页打进静态资源） | 部署前测试通过, 部署步骤无错 |
 
 ## 本地命令
 

@@ -1,9 +1,19 @@
 name: deploy-cf
-# Manual one-click deploy of the Cloudflare side (D1 + migrations, R2, Worker serving the overview SPA as assets).
+# Deploys the Cloudflare side (D1 + migrations, R2, Worker serving the overview SPA as assets).
+# Push to main that changes the overview frontend redeploys the Worker assets with the
+# repository's existing Cloudflare credentials. A full deploy (migrations-only, or resetting a
+# provider key) stays manual.
 # Repository secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, optional HX_PROVIDER_API_KEY.
 # Repository variables (optional): HX_ACCESS_AUD, HX_ACCESS_TEAM_DOMAIN, HX_WORKER_NAME, HX_D1_NAME,
 # HX_R2_BUCKET, HX_OVERVIEW_DOMAIN, HX_OVERVIEW_URL.
 on:
+    push:
+        branches: [main]
+        paths:
+            # The overview is not a separate Pages project: vite builds it into the Worker assets.
+            # A frontend change therefore redeploys the Worker (target=worker), which ships the new UI.
+            - "cf-admin/pages/**"
+            - "cf-admin/package.json"
     workflow_dispatch:
         inputs:
             target:
@@ -46,9 +56,10 @@ jobs:
               env:
                   CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
                   CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-                  HX_DEPLOY_TARGET: ${{ inputs.target }}
-                  HX_PROVIDER_KEY_NAME: ${{ inputs.provider-key-name }}
-                  HX_PROVIDER_KEY_VALUE: ${{ inputs.provider-key-name != '' && secrets.HX_PROVIDER_API_KEY || '' }}
+                  # A push has no inputs. Frontend pushes ship the SPA (worker target). Manual runs use the chosen target.
+                  HX_DEPLOY_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'worker' }}
+                  HX_PROVIDER_KEY_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.provider-key-name || '' }}
+                  HX_PROVIDER_KEY_VALUE: ${{ github.event_name == 'workflow_dispatch' && inputs.provider-key-name != '' && secrets.HX_PROVIDER_API_KEY || '' }}
                   HX_ACCESS_AUD: ${{ vars.HX_ACCESS_AUD }}
                   HX_ACCESS_TEAM_DOMAIN: ${{ vars.HX_ACCESS_TEAM_DOMAIN }}
                   HX_WORKER_NAME: ${{ vars.HX_WORKER_NAME }}
