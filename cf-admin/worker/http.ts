@@ -36,6 +36,8 @@ export type Deps = {
     deployment: Deployment;
     now(): Date;
     id(): string;
+    /** GitHub HTTP. Production uses fetch; tests replace it so no request leaves the process. */
+    githubFetch?(url: string, init: RequestInit): Promise<Response>;
 };
 
 export type Deployment = {
