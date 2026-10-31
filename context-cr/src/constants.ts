@@ -98,6 +98,10 @@ export const ENV = {
     group: "HX_CTX_GROUP",
     apiKey: "HX_CTX_API_KEY",
     githubToken: "GITHUB_TOKEN",
+    /** Set by adoptGithubActor: the login that will appear on the pull request. */
+    githubActor: "HX_GITHUB_ACTOR",
+    /** "app" when the Worker minted an installation token, otherwise "actions". */
+    githubActorVia: "HX_GITHUB_ACTOR_VIA",
     githubOutput: "GITHUB_OUTPUT",
     runnerTemp: "RUNNER_TEMP",
     githubEventPath: "GITHUB_EVENT_PATH",

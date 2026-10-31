@@ -3,6 +3,7 @@ import { HttpError, field, json, month, readJson } from "../http.ts";
 import type { Deps } from "../http.ts";
 import type { RepoPatch } from "../store/port.ts";
 import { verdictOf } from "./feedback.ts";
+import { handleGithubGet, handleGithubManifest, handleGithubPut, handleGithubSetup } from "./github.ts";
 import { handlePrompts } from "./prompts.ts";
 import { handleRules } from "./rules.ts";
 import { handleSession } from "./session.ts";
@@ -132,6 +133,10 @@ export async function handleAdmin(request: Request, deps: Deps, parts: string[])
     if (resource === "session") {
         return handleSession(request, deps);
     }
+    // GitHub redirects the browser here with a one-time code. The state row is the credential.
+    if (resource === "github" && method === "GET" && rest[0] === "setup") {
+        return handleGithubSetup(request, deps);
+    }
     const who = await requireAdmin(request, deps);
     if (method === "GET" && resource === "overview") {
         return overview(deps);
@@ -167,6 +172,17 @@ export async function handleAdmin(request: Request, deps: Deps, parts: string[])
     }
     if (resource === "prompts") {
         return handlePrompts(request, deps, rest);
+    }
+    if (resource === "github") {
+        if (method === "GET" && rest.length === 1 && rest[0] === "app") {
+            return handleGithubGet(deps);
+        }
+        if (method === "PUT" && rest.length === 1 && rest[0] === "app") {
+            return handleGithubPut(request, deps);
+        }
+        if (method === "POST" && rest.length === 1 && rest[0] === "manifest") {
+            return handleGithubManifest(request, deps);
+        }
     }
     if (method === "GET" && resource === "rules") {
         return handleRules(request, deps);

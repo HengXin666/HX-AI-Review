@@ -22,6 +22,7 @@ import {
     renderProgress,
 } from "./publish/comment.ts";
 import { compareUrl, githubTarget, postPullReview, pushPatchBranch, writeBack } from "./publish/github.ts";
+import { adoptGithubActor } from "./publish/app-token.ts";
 import type { GithubTarget } from "./publish/github.ts";
 import { postRun, postSpend, sessionsToJsonl, statusOf } from "./publish/ingest.ts";
 import { runReview } from "./review/index.ts";
@@ -194,6 +195,8 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
     if (!apiKey) {
         throw new Error("no api key from init; run the init step first");
     }
+    // Progress comments and the later line reviews must be the product app when one is installed.
+    await adoptGithubActor();
     const run = await createPiRunner(root, state.config, apiKey);
     // The diff is a context-CR input: a code CR is scoped to its hunks and reads the rest with its tools.
     const diff = scope.kind === "code" ? "" : diffText(root, scope.base, scope.head);
@@ -233,8 +236,8 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
         // The Worker settles a taken-over claim only if it was marked as spending, so a run cancelled
         // before its first session is charged nothing. Only meaningful for a budgeted repo with a claim.
         onSpend: endpoint && token && claim ? (signal) => postSpend(endpoint, token, claim, signal) : undefined,
-        // Code CR rewrites the sticky PR comment as groups are assembled, reviewed and checked. The
-        // Actions app (or GH_APP_TOKEN) is the account that later posts the line reviews too.
+        // Code CR rewrites the sticky PR comment as groups are assembled, reviewed and checked.
+        // adoptGithubActor already swapped in the app installation token when the repo has the app.
         onProgress:
             state.config.kind === "code"
                 ? async (note) => {
@@ -340,6 +343,7 @@ async function postCodeReviews(target: GithubTarget, prNumber: number, sha: stri
 /** Aggregate, write MD/JSON, push the patch branch, ingest to CF, comment. Returns blocking count. */
 export async function stepPublish(root: string): Promise<number> {
     dropKey(root);
+    await adoptGithubActor();
     const state = initState(root);
     const l0 = load<L0State>(root, L0_FILE) ?? { findings: stepL0(root) };
     const scope = load<RunScope>(root, SCOPE_FILE);

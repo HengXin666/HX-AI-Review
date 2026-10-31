@@ -151,6 +151,43 @@ export type Overview = {
     providers: Provider[];
 };
 
+export type GithubInstallationView = {
+    installationId: number;
+    accountLogin: string;
+    accountType: string;
+    repos: string[];
+    allRepos: boolean;
+    suspended: boolean;
+};
+
+/** What the overview may show. The private key and webhook secret are never in this object. */
+export type GithubAppView = {
+    configured: boolean;
+    appId?: number;
+    slug?: string;
+    name?: string;
+    ownerLogin?: string;
+    htmlUrl?: string;
+    bot?: string;
+    installUrl?: string;
+    webhookUrl: string;
+    installations: GithubInstallationView[];
+};
+
+export type GithubAppInput = {
+    appId: number;
+    slug: string;
+    name?: string;
+    privateKey: string;
+    webhookSecret: string;
+};
+
+export type GithubManifest = {
+    action: string;
+    state: string;
+    manifest: Record<string, unknown>;
+};
+
 export type ProviderInput = Omit<Provider, "name" | "keyPresent">;
 export type RepoInput = Pick<Repo, "name" | "finderModel" | "verifierModel" | "budgetUsd"> & {
     provider: string;
@@ -196,6 +233,10 @@ export const api = {
     foldNotes: (role: "finder" | "verifier") =>
         call<{ version: PromptVersion; folded: number }>("POST", "prompts/fold", { role }),
     runReport: (repo: string, id: string) => call<RunReport>("GET", `runs/${repo}/${id}/report`),
+    githubApp: () => call<GithubAppView>("GET", "github/app"),
+    saveGithubApp: (input: GithubAppInput) => call<{ ok: boolean }>("PUT", "github/app", input),
+    githubManifest: (org?: string) =>
+        call<GithubManifest>("POST", "github/manifest" + (org ? "?org=" + encodeURIComponent(org) : ""), {}),
 };
 
 /** One-click merge: open a PR from the runner's patch branch into the default branch. */

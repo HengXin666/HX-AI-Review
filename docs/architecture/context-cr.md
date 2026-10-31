@@ -171,6 +171,7 @@ skill 注入上界 = 所有 skill 的 front matter (常驻 L1) + 最大的 `conc
 - 报告: `scripts/.hx_code_quality/reports/context-review.{md,json}`, 超过 10 条只列数量与类型. 报告带 `kind`, Markdown 开头写明这次审的是哪一种.
 - 补丁分支: 只有 context 运行会推. 只收 verifier 判 correct, 且是单个已有文件的纯文本修改 (不含新建, 删除, 改权限, 改名, 二进制) 的补丁. `hx-ctx/patch-<head 前 12 位>`, 以 head 为基, 提交者 hx-context-review, `--force` 推送, 不碰被审分支. 互相冲突的补丁逐个跳过; 推送失败只记录日志, 不影响入库与评论. code 运行即使某个候选带了补丁也不会推: `stepPublish` 在 `config.kind === "code"` 时跳过整个推送步骤.
 - 评论: push 发 commit comment; PR 找到带 `<!-- hx-context-review -->` 标记的评论就更新, 否则新建. `POST /runs` 返回的 `resolved` 大于 0 时, 评论注明本 PR 上有多少条更早的发现被标成 resolved.
+- 身份: review 与 publish 开始时调用 `adoptGithubActor` (`context-cr/src/publish/app-token.ts`). 它用 `HX_CTX_TOKEN` 请求 `GET /github/token`. Worker 认的是这个仓库自己的令牌, 签一张该仓库的 installation token 回来, runner 把它写入本进程的 `GITHUB_TOKEN`. 进度评论, 分块 review 和行评都用这张 token, 所以 GitHub 上的作者是 App (`slug[bot]`), 不是 `github-actions[bot]`, 也不是打开 PR 的人. 仓库没安装 App, 或总览还没登记时, 保持 workflow 里原有的 token, 评论里写明是 Actions 机器人. 调用方不用再传 `GH_APP_TOKEN`.
 
 ### 评论的视觉结构
 

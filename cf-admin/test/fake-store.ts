@@ -4,6 +4,8 @@ import type {
     FeedbackInput,
     FindingRow,
     FindingStatus,
+    GithubAppRow,
+    GithubInstallation,
     PromptNote,
     PromptRole,
     PromptVersion,
@@ -47,6 +49,9 @@ export class FakeStore implements Store {
     >();
     /** Claims already settled by a takeover, by claim id: their allowance is charged but may be replaced. */
     settled = new Map<string, { usd: number; month: string }>();
+    app: GithubAppRow | null = null;
+    installations: GithubInstallation[] = [];
+    setupStates = new Map<string, string>();
 
     private strip(row?: RepoRow & { tokenHash: string }): RepoRow | null {
         if (!row) {
@@ -353,6 +358,35 @@ export class FakeStore implements Store {
                 note.foldedInto = versionId;
             }
         }
+    }
+
+    async githubApp() {
+        return this.app;
+    }
+    async saveGithubApp(row: GithubAppRow) {
+        this.app = row;
+    }
+    async listInstallations() {
+        return this.installations;
+    }
+    async saveInstallation(row: GithubInstallation) {
+        const index = this.installations.findIndex((item) => item.installationId === row.installationId);
+        if (index >= 0) {
+            this.installations[index] = row;
+        } else {
+            this.installations.push(row);
+        }
+    }
+    async deleteInstallation(installationId: number) {
+        this.installations = this.installations.filter((item) => item.installationId !== installationId);
+    }
+    async putSetupState(state: string, expiresAt: string) {
+        this.setupStates.set(state, expiresAt);
+    }
+    async takeSetupState(state: string, now: string) {
+        const expires = this.setupStates.get(state);
+        this.setupStates.delete(state);
+        return expires !== undefined && expires >= now;
     }
 }
 

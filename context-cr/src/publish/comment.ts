@@ -1,4 +1,4 @@
-import { COMMENT_MARKER, DETAIL_LIMIT, TOOL_NAME, TOOL_VERSION } from "../constants.ts";
+import { COMMENT_MARKER, DETAIL_LIMIT, ENV, TOOL_NAME, TOOL_VERSION } from "../constants.ts";
 import type { CodeCheck, CodeTrace, ProgressNote } from "../contract/trace.ts";
 import { escapeMd } from "../contract/report.ts";
 import type { ReviewReport } from "../contract/report.ts";
@@ -281,6 +281,18 @@ function renderTraceHtml(trace: CodeTrace): string {
     ].join("\n");
 }
 
+/** Who is posting. Empty until the runner has asked the Worker for an app token. */
+function actorNote(): string {
+    const login = process.env[ENV.githubActor];
+    if (!login) {
+        return "";
+    }
+    if (process.env[ENV.githubActorVia] === "app") {
+        return `身份 ${login}。这条评论由登记在总览里的 GitHub App 发出，不是 github-actions，也不是你的个人账号。`;
+    }
+    return `身份 ${login}。此仓库还没安装总览里登记的 GitHub App，所以暂时由 Actions 机器人发言。`;
+}
+
 /** Sticky comment updated in place while a code review is still running. */
 export function renderProgress(note: ProgressNote): string {
     const doneAssemble = note.stage !== "assemble";
@@ -298,6 +310,7 @@ export function renderProgress(note: ProgressNote): string {
     return [
         COMMENT_MARKER,
         "<h3>代码 CR 进度</h3>",
+        actorNote() ? `<p>${escapeHtml(actorNote())}</p>` : "",
         `<p>${escapeHtml(note.detail)}</p>`,
         "<ol>",
         ...rows,
@@ -321,6 +334,7 @@ export function renderChunkReview(trace: CodeTrace): string {
     );
     return [
         "分块审查：下面是按文件组装后的 PR diff，不是整文件源码。每一组单独审查，超预算的文件再按 hunk 切开。",
+        actorNote(),
         "",
         blocks.join("\n\n") || "没有可审的新增行。",
     ].join("\n");
@@ -336,6 +350,7 @@ export function renderEvidenceReview(trace: CodeTrace): string {
     return [
         "证据校验：每一条候选的引用都在 diff 或被审提交里核对过。确认的问题写在对应新增行上；驳回的只留在这里，不占 diff。",
         "没有一条结论要求你再去确认上下文。引用对不上，或把判断推给读者的，一律驳回。",
+        actorNote(),
         "",
         lines.join("\n") || "没有候选。",
     ].join("\n");
