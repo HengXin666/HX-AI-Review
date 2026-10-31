@@ -287,3 +287,18 @@ test("an Access assertion that decodes to JSON null is unauthenticated, not a 50
     });
     assert.equal(await verifyAccess(request, "aud", "team.example"), null);
 });
+
+test("an admin can read a stored run report, and a bad id is not a key", async () => {
+    const { call, blobs } = await registered();
+    await blobs.put(
+        "runs/o/r/run9/report.json",
+        JSON.stringify({ kind: "code", trace: { groups: [{ id: "g1", path: "src/a.ts" }], checks: [] } }),
+    );
+    const ok = await call("GET", "/api/runs/o/r/run9/report");
+    assert.equal(ok.status, 200);
+    const body = (await ok.json()) as { kind: string; trace: { groups: { id: string }[] } };
+    assert.equal(body.kind, "code");
+    assert.equal(body.trace.groups[0].id, "g1");
+    assert.equal((await call("GET", "/api/runs/o/r/missing/report")).status, 404);
+    assert.equal((await call("GET", "/api/runs/o/r/..%2Fsecret/report")).status, 404);
+});

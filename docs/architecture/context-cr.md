@@ -27,7 +27,7 @@ L0 规则 (HC-*, CX-*) 判的是 "上下文文件是否与代码一致", 属于 
 | `context-cr/src/scope/index.ts` | 快照, 变更列表, 可选引用索引提示 | `ContextScope` (`kind: "context"`) |
 | `context-cr/src/scope/code.ts` | 每个变更文件的 diff | `CodeScope` (`kind: "code"`, 新增行的 hunk) |
 | `context-cr/src/review/` | `InitConfig`, `ContextScope` 或 `CodeScope`, diff, `AgentRunner` | 确认后的 Warning, 补丁 (仅 context), 用量, 会话记录 |
-| `context-cr/src/publish/` | 汇总报告 | POST /runs, 补丁分支 (仅 context), 评论 |
+| `context-cr/src/publish/` | 汇总报告 | POST /runs, 补丁分支 (仅 context), 评论. code CR 另在 PR 上更新进度评论, 并提交「分块审查」与「证据校验」两个 review, 确认项落到 diff 行 |
 
 `context-cr/src/init/client.ts` 对可能让运行被误判为完整的字段失败关闭: `l0Only` 时缺失或未知的 `l0Cause` 按 `config` 处理 (不能与主动选择混淆, 否则该区间会被当成已审并推进 last_sha); 非 L0 响应缺少 `limits.maxRunUsd` 时报错, 只有显式 `null` 才表示无上限. `Review.session()` 只在开会话前检查已累计花费, 会话结束后才加上本次会话的花费, 所以达到 `maxRunUsd` 后不再启动新会话, 但单个会话仍可能使本次花费超过该值.
 

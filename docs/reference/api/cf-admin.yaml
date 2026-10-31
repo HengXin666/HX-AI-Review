@@ -511,6 +511,23 @@ paths:
                         content: { application/json: { schema: { $ref: "#/components/schemas/Token" } } },
                     }
                 "404": { description: Unknown repo }
+    /api/runs/{owner}/{repo}/{id}/report:
+        get:
+            operationId: getRunReport
+            security: [{ access: [] }, { session: [] }]
+            parameters:
+                - { name: owner, in: path, required: true, schema: { type: string } }
+                - { name: repo, in: path, required: true, schema: { type: string } }
+                - { name: id, in: path, required: true, schema: { type: string } }
+            responses:
+                "200":
+                    description: >
+                        Report JSON stored for the run. A code review includes trace.groups (the assembled
+                        pull-request diff) and trace.checks (the evidence verdict for every candidate).
+                    content:
+                        application/json:
+                            schema: { type: object, additionalProperties: true }
+                "404": { description: Unknown run, or the id or repository name is not safe to look up }
     /api/providers/{name}:
         put:
             operationId: upsertProvider

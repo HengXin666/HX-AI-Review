@@ -5,6 +5,7 @@ import { EMPTY_USAGE } from "./contract/finding.ts";
 import type { Finding, Patch, Usage } from "./contract/finding.ts";
 import { CONTEXT_KIND, parseKind } from "./contract/kind.ts";
 import type { CrKind } from "./contract/kind.ts";
+import type { CodeTrace } from "./contract/trace.ts";
 import { buildReport, isBlocking, renderMarkdown, writeReport } from "./contract/report.ts";
 import type { ReviewReport } from "./contract/report.ts";
 import { changedFiles, diffText, headSha, patchFiles, showFile, tryGit } from "./git.ts";
@@ -13,8 +14,14 @@ import type { InitConfig } from "./init/client.ts";
 import { runL0 } from "./l0/index.ts";
 import type { Approved } from "./l0/index.ts";
 import { worktreeSnapshot } from "./l0/snapshot.ts";
-import { renderComment } from "./publish/comment.ts";
-import { compareUrl, githubTarget, pushPatchBranch, writeBack } from "./publish/github.ts";
+import {
+    diffLineComment,
+    renderChunkReview,
+    renderComment,
+    renderEvidenceReview,
+    renderProgress,
+} from "./publish/comment.ts";
+import { compareUrl, githubTarget, postPullReview, pushPatchBranch, writeBack } from "./publish/github.ts";
 import type { GithubTarget } from "./publish/github.ts";
 import { postRun, postSpend, sessionsToJsonl, statusOf } from "./publish/ingest.ts";
 import { runReview } from "./review/index.ts";
@@ -59,6 +66,7 @@ type AiState = {
     errors: string[];
     notReviewed: string[];
     rejections: Rejection[];
+    trace?: CodeTrace;
 };
 
 const LOCAL_CONFIG: InitConfig = {
@@ -225,9 +233,21 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
         // The Worker settles a taken-over claim only if it was marked as spending, so a run cancelled
         // before its first session is charged nothing. Only meaningful for a budgeted repo with a claim.
         onSpend: endpoint && token && claim ? (signal) => postSpend(endpoint, token, claim, signal) : undefined,
+        // Code CR rewrites the sticky PR comment as groups are assembled, reviewed and checked. The
+        // Actions app (or GH_APP_TOKEN) is the account that later posts the line reviews too.
+        onProgress:
+            state.config.kind === "code"
+                ? async (note) => {
+                      const target = githubTarget();
+                      if (!target || state.event.prNumber === undefined) {
+                          return;
+                      }
+                      await writeBack(target, state.head, renderProgress(note), state.event.prNumber);
+                  }
+                : undefined,
     });
     writeFileSync(stateFile(root, SESSION_FILE), sessionsToJsonl(result.transcripts), UTF8);
-    const { findings, patches, usage, rejected, complete, errors, notReviewed, rejections } = result;
+    const { findings, patches, usage, rejected, complete, errors, notReviewed, rejections, trace } = result;
     const ai: AiState = {
         nonce: state.nonce,
         findings,
@@ -238,6 +258,7 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
         errors,
         notReviewed,
         rejections,
+        trace,
     };
     for (const error of errors) {
         process.stderr.write(`review: ${error}\n`);
@@ -288,6 +309,34 @@ function safePatchBranch(root: string, head: string, report: ReviewReport, targe
     }
 }
 
+/**
+ * Two reviews on the pull request, both from the token's app account. The first shows the assembled
+ * diff. The second is the evidence check, and only confirmed findings become line comments. A review
+ * that GitHub refuses (a line no longer in the diff, a missing permission) must not drop the report.
+ */
+async function postCodeReviews(target: GithubTarget, prNumber: number, sha: string, trace: CodeTrace): Promise<void> {
+    const notes = trace.checks
+        .filter((check) => check.verdict === "confirmed" && check.quote)
+        .map((check) => ({ path: check.path, line: check.line, body: diffLineComment(check) }));
+    try {
+        await postPullReview(target, prNumber, sha, renderChunkReview(trace), []);
+    } catch (error) {
+        process.stderr.write(`chunk review skipped: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+    try {
+        await postPullReview(target, prNumber, sha, renderEvidenceReview(trace), notes);
+    } catch (error) {
+        process.stderr.write(`line review skipped: ${error instanceof Error ? error.message : String(error)}\n`);
+        try {
+            await postPullReview(target, prNumber, sha, renderEvidenceReview(trace), []);
+        } catch (again) {
+            process.stderr.write(
+                `evidence review skipped: ${again instanceof Error ? again.message : String(again)}\n`,
+            );
+        }
+    }
+}
+
 /** Aggregate, write MD/JSON, push the patch branch, ingest to CF, comment. Returns blocking count. */
 export async function stepPublish(root: string): Promise<number> {
     dropKey(root);
@@ -309,6 +358,7 @@ export async function stepPublish(root: string): Promise<number> {
         findings: [...l0.findings, ...(ai?.findings ?? [])],
         patches: ai?.patches ?? [],
         rejections: ai?.rejections ?? [],
+        trace: ai?.trace,
         usage: ai?.usage ?? EMPTY_USAGE,
         durationMs: Date.now() - state.startedAt,
         stages: {
@@ -362,6 +412,9 @@ export async function stepPublish(root: string): Promise<number> {
     }
     if (target && (report.findings.length || state.event.prNumber !== undefined)) {
         const patchUrl = patchBranch ? compareUrl(target, patchBranch) : undefined;
+        if (code && state.event.prNumber !== undefined && ai?.trace) {
+            await postCodeReviews(target, state.event.prNumber, state.head, ai.trace);
+        }
         await writeBack(
             target,
             state.head,

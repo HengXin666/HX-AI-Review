@@ -47,6 +47,21 @@ export type Run = {
     createdAt: string;
 };
 
+export type RunReport = {
+    kind?: Kind;
+    trace?: {
+        groups: { id: string; path: string; hunks: number; added: number[]; batch: number; excerpt: string }[];
+        checks: {
+            path: string;
+            line: number;
+            title: string;
+            verdict: "confirmed" | "rejected";
+            reason: string;
+            quote?: string;
+        }[];
+    };
+};
+
 export type Finding = {
     id: string;
     repo: string;
@@ -180,6 +195,7 @@ export const api = {
         call<{ version: PromptVersion }>("POST", "prompts", { role, body, note }),
     foldNotes: (role: "finder" | "verifier") =>
         call<{ version: PromptVersion; folded: number }>("POST", "prompts/fold", { role }),
+    runReport: (repo: string, id: string) => call<RunReport>("GET", `runs/${repo}/${id}/report`),
 };
 
 /** One-click merge: open a PR from the runner's patch branch into the default branch. */

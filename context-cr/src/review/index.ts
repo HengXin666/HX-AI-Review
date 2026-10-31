@@ -19,13 +19,17 @@ import {
 import { isPlainEdit } from "../git.ts";
 import { addUsage, EMPTY_USAGE, fingerprint, makeFinding } from "../contract/finding.ts";
 import type { Finding, Patch, Usage } from "../contract/finding.ts";
+import type { CodeTrace, ProgressNote } from "../contract/trace.ts";
 import type { InitConfig, PromptAddendum } from "../init/client.ts";
 import type { CodeHunk, CodeScope } from "../scope/code.ts";
 import type { ContextScope } from "../scope/index.ts";
 import { SessionError } from "./agent.ts";
 import type { AgentRequest, AgentResult, AgentRunner } from "./agent.ts";
-import { batchDocs, batchHunks, loadDocs } from "./context.ts";
+import { batchDocs, loadDocs } from "./context.ts";
 import type { ContextDoc } from "./context.ts";
+import { groundEvidence, defersToUser } from "./ground.ts";
+import { assembleFileGroups, batchGroups, groupViews } from "./groups.ts";
+import type { DiffGroup } from "./groups.ts";
 import {
     CODE_FINDER_SYSTEM,
     CODE_VERIFIER_SYSTEM,
@@ -56,6 +60,8 @@ export type ReviewDeps = {
      * connects and never answers cannot stall the run past the time publish needs.
      */
     onSpend?: (signal: AbortSignal) => Promise<void>;
+    /** Called as a code review assembles groups, reviews a batch, and checks evidence. Failures are ignored. */
+    onProgress?: (note: ProgressNote) => Promise<void> | void;
 };
 
 export type Rejection = { path: string; title: string; reason: string };
@@ -72,6 +78,8 @@ export type ReviewResult = {
     errors: string[];
     /** Context files not reviewed for a reason a re-run would hit again (candidate cap, unreadable): not a failure. */
     notReviewed: string[];
+    /** Code CR only: the diff groups and the evidence check for every candidate. */
+    trace?: CodeTrace;
 };
 
 /**
@@ -328,16 +336,38 @@ async function verify(
     review.result.patches.push({ fingerprint: finding.fingerprint, diff, applies });
 }
 
+/** A progress write must not fail the review: the PR comment is a view, not the result. */
+async function notify(deps: ReviewDeps, note: ProgressNote): Promise<void> {
+    if (!deps.onProgress) {
+        return;
+    }
+    try {
+        await deps.onProgress(note);
+    } catch (error) {
+        const why = error instanceof Error ? error.message : String(error);
+        process.stderr.write(`progress update skipped: ${why}\n`);
+    }
+}
+
 /**
- * Code CR: one fresh verifier per candidate, same refutation discipline. No patch is ever produced or
- * judged, so a code finding can never become a pushed branch.
+ * Code CR: one fresh verifier per candidate, same refutation discipline, then a second deterministic
+ * check that the quoted evidence is still in the diff. No patch is ever produced or judged.
  */
-async function verifyCode(review: Review, config: InitConfig, item: QueuedCode, promptBudget: number): Promise<void> {
+async function verifyCode(
+    review: Review,
+    config: InitConfig,
+    deps: ReviewDeps,
+    item: QueuedCode,
+    promptBudget: number,
+    note: (candidate: Candidate, verdict: "confirmed" | "rejected", reason: string, quote?: string) => void,
+): Promise<void> {
     const { candidate, hunk } = item;
     const prompt = codeVerifierPrompt(candidate, hunk, promptBudget);
     if (prompt === undefined) {
         review.fail(`verifier prompt for ${candidate.path}:${candidate.line} exceeds the context window`);
-        review.reject(candidate, "candidate too large for the context window");
+        const reason = "candidate too large for the context window";
+        review.reject(candidate, reason);
+        note(candidate, "rejected", reason);
         return;
     }
     const verdicts: Verdict[] = [];
@@ -349,14 +379,132 @@ async function verifyCode(review: Review, config: InitConfig, item: QueuedCode, 
         tools: [reportVerdictTool(verdicts)],
     });
     if (!ran) {
+        note(candidate, "rejected", "verifier session did not finish");
         return;
     }
     const verdict = verdicts[verdicts.length - 1];
     if (verdict?.verdict !== "confirmed") {
-        review.reject(candidate, verdict ? "verifier: " + verdict.reason : "verifier gave no verdict");
+        const reason = verdict ? "verifier: " + verdict.reason : "verifier gave no verdict";
+        review.reject(candidate, reason);
+        note(candidate, "rejected", reason);
+        return;
+    }
+    if (defersToUser(verdict.reason)) {
+        const reason = "verifier asks a person to decide instead of checking the code";
+        review.reject(candidate, reason);
+        note(candidate, "rejected", reason);
+        return;
+    }
+    const ground = groundEvidence(candidate, hunk.body, deps.readFile(candidate.path));
+    if (!ground.ok) {
+        const reason = "evidence check: " + ground.reason;
+        review.reject(candidate, reason);
+        note(candidate, "rejected", reason);
         return;
     }
     review.result.findings.push(toFinding(candidate, verdict.reason, RULE.codeAi));
+    note(candidate, "confirmed", verdict.reason, ground.quote);
+}
+
+/**
+ * Code CR: assemble the diff by file, review each batch, then check every candidate's evidence.
+ * Findings are Warning only and never carry a patch, because a code CR reviews the change instead of writing one.
+ */
+async function runCodeReview(config: InitConfig, scope: CodeScope, deps: ReviewDeps): Promise<ReviewResult> {
+    const review = new Review(config, deps);
+    const trace: CodeTrace = { groups: [], checks: [] };
+    review.result.trace = trace;
+    const note = (candidate: Candidate, verdict: "confirmed" | "rejected", reason: string, quote?: string) => {
+        trace.checks.push({
+            path: candidate.path,
+            line: candidate.line,
+            title: candidate.title,
+            verdict,
+            reason,
+            quote,
+        });
+    };
+    const suppressed = new Set(config.suppressions.map((item) => item.fingerprint));
+    const seen = new Set<string>();
+    const queue: QueuedCode[] = [];
+    const budgets = promptBudgets(config);
+    const assembled = assembleFileGroups(scope.hunks);
+    const batches: DiffGroup[][] = budgets ? batchGroups(assembled, budgets.diff) : [];
+    trace.groups = groupViews(batches.length ? batches : assembled.map((group) => [group]));
+    await notify(deps, {
+        stage: "assemble",
+        detail: `已按文件组装 PR diff：${assembled.length} 组，${scope.hunks.length} 个 hunk，分 ${batches.length} 批审查`,
+        trace,
+    });
+    if (!budgets) {
+        review.fail(
+            `model context window of ${config.limits.contextWindow} tokens leaves no room for a review prompt ` +
+                `(maxTokens ${config.limits.maxTokens}); raise the provider contextWindow or lower maxTokens`,
+        );
+        return review.result;
+    }
+    let batchIndex = 0;
+    for (const batch of batches) {
+        batchIndex += 1;
+        const hunks = batch.flatMap((group) => group.hunks);
+        const label = batch.map((group) => `${group.id} ${group.path}`).join(", ");
+        const left = config.limits.maxCandidates - queue.length;
+        if (left <= 0) {
+            // Re-running would hit the same cap, so this is reported, not treated as an incomplete run.
+            review.result.notReviewed.push(...hunks.map((hunk) => hunk.path + " (candidate limit)"));
+            continue;
+        }
+        const sink: Candidate[] = [];
+        const accept = (candidate: Candidate): string | undefined => {
+            const outcome = gateCode(review, candidate, hunks, seen, suppressed, (item, hunk) => {
+                const ground = groundEvidence(item, hunk.body, deps.readFile(item.path));
+                return ground.ok ? undefined : ground.reason;
+            });
+            if ("reason" in outcome) {
+                note(candidate, "rejected", outcome.reason);
+                return outcome.reason;
+            }
+            queue.push(outcome.item);
+            return undefined;
+        };
+        const prompt = codeFinderPrompt(scope, batch, config.suppressions, budgets, deps.evidence ?? "");
+        if (prompt === undefined) {
+            review.fail(`finder prompt for ${label} exceeds the context window`);
+            review.result.notReviewed.push(...hunks.map((hunk) => hunk.path + " (prompt exceeds context window)"));
+            continue;
+        }
+        await notify(deps, {
+            stage: "review",
+            detail: `分块审查 ${batchIndex}/${batches.length}：${label}`,
+            trace,
+        });
+        const ran = await review.session({
+            role: "finder",
+            model: config.models.finder,
+            system: systemPrompt(CODE_FINDER_SYSTEM, config.prompts?.finder),
+            prompt,
+            tools: [reportCodeFindingTool(sink, left, accept)],
+        });
+        if (!ran) {
+            continue;
+        }
+    }
+    let verified = 0;
+    for (const item of queue) {
+        verified += 1;
+        await notify(deps, {
+            stage: "verify",
+            detail: `证据校验 ${verified}/${queue.length}：${item.candidate.path}:${item.candidate.line} ${item.candidate.title}`,
+            trace,
+        });
+        await verifyCode(review, config, deps, item, budgets.prompt, note);
+    }
+    await notify(deps, {
+        stage: "verify",
+        detail: `证据校验完成：${trace.checks.filter((item) => item.verdict === "confirmed").length} 条确认，${trace.checks.filter((item) => item.verdict === "rejected").length} 条驳回`,
+        trace,
+    });
+    return review.result;
 }
 
 type QueuedCode = { candidate: Candidate; hunk: CodeHunk; fingerprint: string };
@@ -371,6 +519,7 @@ function gateCode(
     batch: CodeHunk[],
     seen: Set<string>,
     suppressed: Set<string>,
+    prove: (candidate: Candidate, hunk: CodeHunk) => string | undefined,
 ): { item: QueuedCode } | { reason: string } {
     const id = toFinding(candidate, "", RULE.codeAi).fingerprint;
     // A file can appear in several hunks of one batch: any hunk that added this line accepts it.
@@ -384,7 +533,7 @@ function gateCode(
             ? "suppressed by earlier feedback"
             : seen.has(id)
               ? "duplicate of another candidate"
-              : undefined;
+              : prove(candidate, hunk as CodeHunk);
     if (reason !== undefined) {
         review.reject(candidate, reason);
         return { reason };
@@ -394,64 +543,9 @@ function gateCode(
 }
 
 /**
- * Code CR: finder -> gate -> verifier over the diff's hunks. Findings are Warning only and never carry a
- * patch, because a code CR reviews the change instead of writing one.
- */
-async function runCodeReview(config: InitConfig, scope: CodeScope, deps: ReviewDeps): Promise<ReviewResult> {
-    const review = new Review(config, deps);
-    const suppressed = new Set(config.suppressions.map((item) => item.fingerprint));
-    const seen = new Set<string>();
-    const queue: QueuedCode[] = [];
-    const budgets = promptBudgets(config);
-    if (!budgets) {
-        review.fail(
-            `model context window of ${config.limits.contextWindow} tokens leaves no room for a review prompt ` +
-                `(maxTokens ${config.limits.maxTokens}); raise the provider contextWindow or lower maxTokens`,
-        );
-        return review.result;
-    }
-    for (const batch of batchHunks(scope.hunks, budgets.diff)) {
-        const left = config.limits.maxCandidates - queue.length;
-        if (left <= 0) {
-            // Re-running would hit the same cap, so this is reported, not treated as an incomplete run.
-            review.result.notReviewed.push(...batch.map((hunk) => hunk.path + " (candidate limit)"));
-            continue;
-        }
-        const sink: Candidate[] = [];
-        const accept = (candidate: Candidate): string | undefined => {
-            const outcome = gateCode(review, candidate, batch, seen, suppressed);
-            if ("reason" in outcome) {
-                return outcome.reason;
-            }
-            queue.push(outcome.item);
-            return undefined;
-        };
-        const prompt = codeFinderPrompt(scope, batch, config.suppressions, budgets, deps.evidence ?? "");
-        if (prompt === undefined) {
-            review.fail(`finder prompt for ${batch.map((hunk) => hunk.path).join(", ")} exceeds the context window`);
-            review.result.notReviewed.push(...batch.map((hunk) => hunk.path + " (prompt exceeds context window)"));
-            continue;
-        }
-        const ran = await review.session({
-            role: "finder",
-            model: config.models.finder,
-            system: systemPrompt(CODE_FINDER_SYSTEM, config.prompts?.finder),
-            prompt,
-            tools: [reportCodeFindingTool(sink, left, accept)],
-        });
-        if (!ran) {
-            continue;
-        }
-    }
-    for (const item of queue) {
-        await verifyCode(review, config, item, budgets.prompt);
-    }
-    return review.result;
-}
-
-/**
  * finder -> gate -> verifier, dispatched by kind. AI output is Warning only; Error stays with L0. Context CR
- * batches context files and may propose a patch; code CR batches the diff's hunks and never pushes anything.
+ * batches context files and may propose a patch; code CR assembles the diff by file, reviews each batch,
+ * then checks that every quoted piece of evidence is actually in the diff.
  */
 export async function runReview(
     config: InitConfig,

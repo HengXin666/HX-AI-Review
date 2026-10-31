@@ -21,6 +21,9 @@ on:
         secrets:
             HX_CTX_TOKEN:
                 required: true
+            GH_APP_TOKEN:
+                description: Optional GitHub App installation token. Line reviews and the progress comment are posted as that app. When unset, github-actions[bot] is used.
+                required: false
 
 jobs:
     review:
@@ -101,15 +104,18 @@ jobs:
               if: steps.scope.outputs.empty != 'true' && steps.init.outputs.l0_only != 'true'
               # The token is needed to POST /spend before the first model session: only a claim marked as
               # spending is settled when a newer run takes it over. Fork PRs never reach this step (job if).
+              # GITHUB_TOKEN (or GH_APP_TOKEN) lets a code review update the PR comment as each diff group
+              # is assembled, reviewed and checked, so the run is not a silent wait for one final summary.
               env:
                   HX_CTX_TOKEN: ${{ secrets.HX_CTX_TOKEN }}
+                  GITHUB_TOKEN: ${{ secrets.GH_APP_TOKEN || github.token }}
               run: node "$TOOL/context-cr/src/cli.ts" review
             # Not on cancel. After a scope or review failure it still publishes L0, marked incomplete so last_sha stays.
             - name: 6 ingest + write-back (POST /runs, patch branch, comment)
               if: ${{ !cancelled() && steps.init.outcome == 'success' }}
               env:
                   HX_CTX_TOKEN: ${{ secrets.HX_CTX_TOKEN }}
-                  GITHUB_TOKEN: ${{ github.token }}
+                  GITHUB_TOKEN: ${{ secrets.GH_APP_TOKEN || github.token }}
               run: node "$TOOL/context-cr/src/cli.ts" publish
             - name: Upload MD/JSON report
               if: ${{ !cancelled() }}

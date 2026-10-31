@@ -44,11 +44,14 @@ code CR:
 
 ```text
 scope (确定性)            diff -> 新增行的 hunk; 没有新增行则 0 次模型调用
-  -> 分批 (确定性)        按字节预算把 hunk 分成若干批
-  -> finder x N (模型)    每批一个会话, 只读工具 + report_finding (无 patch 字段)
-  -> 闸门 (确定性)        path 属于本批且 line 是本批某个 hunk 的新增行, 未被抑制, 不重复
-  -> verifier x M (模型)  每条候选一个全新会话, 尝试反驳, report_verdict (patch 恒为 none)
+  -> 分组组装 (确定性)    同一文件的 hunk 收成一组; 再按字节预算把组分批, 超预算的文件才按 hunk 切开
+  -> finder x N (模型)    每批一个会话, 只读工具 + report_finding (无 patch 字段); 提示词里就是这批 PR diff
+  -> 闸门 (确定性)        path 属于本批且 line 是新增行; 证据里的反引号引用必须出现在 hunk 或被审文件里;
+                          标题/说明/证据若要求读者确认、回答或检查上下文是否正确, 直接驳回
+  -> verifier x M (模型)  每条候选一个全新会话, 尝试反驳, 并且必须自己核对证据
+  -> 证据再核 (确定性)    verifier 判 confirmed 之后再核一次引用是否真的在 diff/文件里, 以及理由有没有把判断推给读者
   -> Warning (CODE-AI), 无补丁
+  -> PR                   进度评论随分组/分块/校验更新; 另开「分块审查」与「证据校验」两个 review, 确认项写到 diff 行上
 ```
 
 ### 1. scope: 审哪些文件
@@ -73,7 +76,7 @@ scope (确定性)            diff -> 新增行的 hunk; 没有新增行则 0 次
 
 context CR 的总额再分给 diff (上限 `DIFF_MAX_BYTES` 60000, 下限 `MIN_DIFF_BYTES` 4000) 与上下文正文 (上限 `CONTEXT_BATCH_BYTES` 40000, 下限 `MIN_BATCH_BYTES` 4000). 所以每个 finder 会话看到的上下文正文取 `min(40000, 总额 - diff 预算)`, 按带行号前缀后的实际显示字节计算; 超出时贪心切成多批, 每批一个 finder 会话.
 
-code CR 不单独给 diff 留额度: hunk 本身就是 diff, 不再把整份 diff 塞进提示词 (`steps.ts` 给 code 运行传空 diff). 分批 (`batchHunks`) 按 `header + body` 的实际显示字节计, 用与 context 的 diff 相同的额度 (`budgets.diff`), 超出时切成多批. 单个 hunk 的显示上限从 `budgets.doc` 起按渲染后的提示词余量收缩, 所以一个超长 hunk 只会被截断显示, 不会挤掉同批其他 hunk; 被截掉的部分模型可用 read 工具读.
+code CR 不单独给 diff 留额度: hunk 本身就是 diff, 不再把整份 diff 塞进提示词 (`steps.ts` 给 code 运行传空 diff). 分组 (`assembleFileGroups`) 先按路径把同一文件的 hunk 收成一组, 再按 `header + body` 的实际显示字节把整组装进批次 (`batchGroups`), 额度与 context 的 diff 相同 (`budgets.diff`). 一组自己就超过额度时才按 hunk 切开, 并且不会和别的文件混进同一批. 单个组的显示上限从 `budgets.doc` 起按渲染后的提示词余量收缩, 所以一个超长 hunk 只会被截断显示, 不会挤掉同批其他组; 被截掉的部分模型可用 read 工具读. 组号, 路径, 新增行号和 hunk 正文都进 finder 提示词, 也进 PR 评论和总览报告, 所以外面看得到审的是哪一段 diff, 而不是只看到一句概述.
 
 窗口连 `MIN_PROMPT_BYTES` 都放不下时不再抬高预算 (抬高只会让会话因上下文溢出而失败), 而是按 config 报错: 该区间记为未审, 运行 incomplete, last_sha 不推进.
 
@@ -125,6 +128,8 @@ code (`gateCode`):
 | 行号是本批某个 hunk 的新增行 (同一个文件的多个 hunk 都算) | 驳回 "line ... is not a line this diff added to ..." |
 | 指纹 (路径 + 完整标题) 不在抑制表 | 驳回 "suppressed by earlier feedback" |
 | 指纹不与本次已排队候选重复 | 驳回 "duplicate of another candidate" |
+| 标题, 说明, 证据没有把判断推给读者 (确认, 回答, 检查上下文是否正确) | 驳回 "asks a person to confirm..." |
+| 证据里每个不少于 8 个字符的反引号引用都出现在本 hunk 或被审提交的文件里 | 驳回 "quoted evidence is not in this diff hunk..." 或 "evidence has no backtick quote..." |
 
 两套闸门都在 `report_finding` 工具内即时执行: 被驳回的候选立刻把理由回给 finder, 不进入队列, 也不占用候选名额, 因此 finder 反复报已抑制, 重复或 diff 没碰过的行不会挤掉本批的真实问题. 工具另有 `REPORT_CALL_LIMIT` (40) 次调用上限: 超过后的调用只被拒绝并回一句 "stop and summarize", 模型仍可继续调用, 照样消耗会话时长与费用, 真正的兜底是每会话轮数上限与运行时限. 被驳回的候选 (包括 verifier 驳回的) 连同理由写入报告 JSON 的 `rejections`, Markdown 报告列出驳回数, 便于调提示词.
 
@@ -136,14 +141,20 @@ code (`gateCode`):
 - 输入 (code): 候选 (同样标为不可信) 与该行所属 hunk 的 `@@` 头加正文. 没有补丁, 也没有上下文文件摘录.
 - 工具: 同样的 git 只读工具, 加上 `report_verdict`.
 - 判定 (context): 默认立场是反驳. 以下任一成立就 rejected: 文件仍然准确; 报告行附近没有该陈述; 推测性或文风问题; 证据在当前代码里不成立; 照着该文件做的 agent 不会被误导. 只有矛盾真实且会误导 agent 才 confirmed.
-- 判定 (code): 默认立场同样是反驳. 以下任一成立就 rejected: 新增行对代码能收到的每种输入都正确; 问题需要仓库无法产生的状态, 时序或输入; 属于风格, 命名或偏好; 引用的证据在当前代码里不成立; 缺陷早于本次 diff, 改动既没有造成也没有暴露它. 只有 "照这条候选做的维护者会同意改动是错的且合入前必须改" 才 confirmed.
+- 判定 (code): 默认立场同样是反驳. 以下任一成立就 rejected: 新增行对代码能收到的每种输入都正确; 问题需要仓库无法产生的状态, 时序或输入; 属于风格, 命名或偏好; 引用的证据在当前代码里不成立; 缺陷早于本次 diff, 改动既没有造成也没有暴露它; 候选或理由要求读者去确认, 回答, 或检查上下文是否正确. 只有 "证据引用真实存在, 且照这条候选做的维护者会同意改动是错的且合入前必须改" 才 confirmed. 模型给出 confirmed 之后, runner 再做一次确定性核对 (`groundEvidence`): 引用不在 diff 或文件里, 或理由仍在问人, 一律改判驳回. 这次核对的结论记在 `trace.checks`, 不靠模型自己说"我看过了".
 - 补丁判定: context 在同一次调用里给出 `patch`: correct (只改该文件且让陈述变真, 不引入新错误), incorrect, 或 none (没有补丁). code 的提示词明确要求 `patch` 恒为 none, 因为代码 CR 没有补丁可判. 没有调用 `report_verdict`, 或给出无法识别的值, 一律按 rejected / incorrect 处理.
 
 ### 6. 补丁闸门
 
 只有 context CR 走到这一步. 只有 verifier 判 correct 的补丁才进入下一步: 必须是单个已有文件的纯文本修改 (`--numstat` 只报路径, 所以另行拒绝新建, 删除, 改权限, 变成符号链接, 改名, 复制与二进制补丁, 以及含多个文件头的补丁); `git apply --check --numstat -z` 必须成功, 且触及的文件恰好只有被报告的那个上下文文件 (路径按原始字节比较, 含非 ASCII 或制表符的路径也不会被截断冒充). 通过的补丁在 publish 阶段合到一个 `hx-ctx/patch-*` 分支, 互相冲突的补丁跳过, 补丁分支失败不影响报告入库.
 
-code CR 没有这一环, 也没有下一步: `stepPublish` 在 `config.kind === "code"` 时跳过整个补丁分支推送, 即使某个候选带着补丁也不会推. 代码改动需要人判断, 代码 CR 只给建议文本.
+code CR 没有补丁闸门, 也没有补丁分支: `stepPublish` 在 `config.kind === "code"` 时跳过整个补丁分支推送. 它改为在 PR 上留三样东西, 都由 `GITHUB_TOKEN` 的身份发出. 默认可复用工作流用的是 `github.token`, 也就是 github-actions[bot] 这个 App; 调用方传入可选 secret `GH_APP_TOKEN` 时, 进度评论和行评改由那个 GitHub App 安装令牌发出.
+
+- 一条带 `<!-- hx-context-review -->` 的 issue 评论, 审查过程中按「分组组装 → 分块审查 → 证据校验」原地更新, 结束时换成带分组 diff 摘录和校验表的总结. 没有 PR (纯 push) 时退回一条 commit 评论, 不发行评.
+- 一个「分块审查」review, 正文是各组的 diff 摘录.
+- 一个「证据校验」review. 确认的发现用 `POST /pulls/{n}/reviews` 写到 diff 的右侧新增行 (`side: RIGHT`, `line` 为新文件行号); 驳回的只出现在 review 正文里. 行评正文带已经核对过的引用, 不要求读者再去确认. GitHub 拒绝某一行 (该行不在 PR diff 上) 时, 改为只发正文, 入库不受影响.
+
+总览页运行记录的「进度」读取 `GET /api/runs/{owner}/{repo}/{id}/report` 里的 `trace`. 报告在 publish 时入库, 所以页面上的进度是这次运行结束后的分组和校验; 跑的过程中看 PR 上那条原地更新的评论.
 
 ## 隔离与安全
 

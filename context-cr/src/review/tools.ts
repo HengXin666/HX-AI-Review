@@ -38,7 +38,7 @@ function parametersFor(code: boolean) {
         }),
         evidence: Type.String({
             description: code
-                ? "The added line and the code proving it wrong, with paths"
+                ? "Backtick quotes copied from the added line and the code that proves it wrong. Do not ask the reader to check."
                 : "Code or diff lines proving the mismatch, with paths",
         }),
     };
@@ -70,8 +70,9 @@ function findingTool(
         name: REPORT_FINDING_TOOL,
         label: "Report finding",
         description: code
-            ? "Report one defect in a line this diff added or changed. Describe the fix in the message; " +
-              "a code review never pushes a patch branch."
+            ? "Report one defect in a line this diff added. evidence must backtick-quote code copied from " +
+              "the hunk or a file you read. Do not ask anyone to confirm or to check the context. " +
+              "Describe the fix in the message; a code review never pushes a patch branch."
             : "Report one place where an AI context file (AGENTS.md, README.md, SKILL.md, docs) no longer " +
               "matches the code after this diff. Optionally include a unified diff patch fixing the context file.",
         parameters: parametersFor(code),
