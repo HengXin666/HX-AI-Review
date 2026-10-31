@@ -6,6 +6,8 @@ import type {
     FeedbackInput,
     FindingRow,
     FindingStatus,
+    GithubAppRow,
+    GithubInstallation,
     PromptRole,
     PromptVersion,
     ProviderRow,
@@ -17,6 +19,31 @@ import type {
     Store,
     Suppression,
 } from "./port.ts";
+
+function githubApp(row: Row): GithubAppRow {
+    return {
+        appId: Number(row.app_id),
+        slug: String(row.slug),
+        name: String(row.name),
+        ownerLogin: String(row.owner_login ?? ""),
+        htmlUrl: String(row.html_url ?? ""),
+        privateKey: String(row.private_key),
+        webhookSecret: String(row.webhook_secret),
+    };
+}
+
+function githubInstallation(row: Row): GithubInstallation {
+    const parsed = JSON.parse(String(row.repos_json ?? "[]")) as unknown;
+    const repos = Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+    return {
+        installationId: Number(row.installation_id),
+        accountLogin: String(row.account_login),
+        accountType: String(row.account_type),
+        repos,
+        allRepos: Number(row.all_repos) === 1,
+        suspended: Number(row.suspended) === 1,
+    };
+}
 
 const REPO_COLUMNS: Record<keyof RepoPatch, string> = {
     enabled: "enabled",
@@ -443,6 +470,83 @@ export class D1Store implements Store {
             .prepare(`UPDATE prompt_notes SET folded_into = ? WHERE folded_into IS NULL AND id IN (${marks})`)
             .bind(versionId, ...ids)
             .run();
+    }
+
+    async githubApp(): Promise<GithubAppRow | null> {
+        const row = await this.one("SELECT * FROM github_app WHERE id = 1");
+        return row ? githubApp(row) : null;
+    }
+
+    async saveGithubApp(app: GithubAppRow) {
+        await this.db
+            .prepare(
+                `INSERT INTO github_app (id, app_id, slug, name, owner_login, html_url, private_key, webhook_secret, updated_at)
+                 VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(id) DO UPDATE SET
+                    app_id = excluded.app_id, slug = excluded.slug, name = excluded.name,
+                    owner_login = excluded.owner_login, html_url = excluded.html_url,
+                    private_key = excluded.private_key, webhook_secret = excluded.webhook_secret,
+                    updated_at = excluded.updated_at`,
+            )
+            .bind(
+                app.appId,
+                app.slug,
+                app.name,
+                app.ownerLogin,
+                app.htmlUrl,
+                app.privateKey,
+                app.webhookSecret,
+                new Date().toISOString(),
+            )
+            .run();
+    }
+
+    async listInstallations(): Promise<GithubInstallation[]> {
+        return (await this.all("SELECT * FROM github_installations ORDER BY account_login")).map(githubInstallation);
+    }
+
+    async saveInstallation(row: GithubInstallation) {
+        await this.db
+            .prepare(
+                `INSERT INTO github_installations
+                    (installation_id, account_login, account_type, repos_json, all_repos, suspended)
+                 VALUES (?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(installation_id) DO UPDATE SET
+                    account_login = excluded.account_login, account_type = excluded.account_type,
+                    repos_json = excluded.repos_json, all_repos = excluded.all_repos,
+                    suspended = excluded.suspended`,
+            )
+            .bind(
+                row.installationId,
+                row.accountLogin,
+                row.accountType,
+                JSON.stringify(row.repos),
+                row.allRepos ? 1 : 0,
+                row.suspended ? 1 : 0,
+            )
+            .run();
+    }
+
+    async deleteInstallation(installationId: number) {
+        await this.db.prepare("DELETE FROM github_installations WHERE installation_id = ?").bind(installationId).run();
+    }
+
+    async putSetupState(state: string, expiresAt: string) {
+        await this.db
+            .prepare(
+                `INSERT INTO github_setup_states (state, expires_at) VALUES (?, ?)
+                 ON CONFLICT(state) DO UPDATE SET expires_at = excluded.expires_at`,
+            )
+            .bind(state, expiresAt)
+            .run();
+    }
+
+    async takeSetupState(state: string, now: string) {
+        const row = await this.db
+            .prepare("DELETE FROM github_setup_states WHERE state = ? AND expires_at >= ? RETURNING state")
+            .bind(state, now)
+            .first<Row>();
+        return row !== null;
     }
 }
 

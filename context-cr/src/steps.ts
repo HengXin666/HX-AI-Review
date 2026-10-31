@@ -5,6 +5,7 @@ import { EMPTY_USAGE } from "./contract/finding.ts";
 import type { Finding, Patch, Usage } from "./contract/finding.ts";
 import { CONTEXT_KIND, parseKind } from "./contract/kind.ts";
 import type { CrKind } from "./contract/kind.ts";
+import type { CodeTrace } from "./contract/trace.ts";
 import { buildReport, isBlocking, renderMarkdown, writeReport } from "./contract/report.ts";
 import type { ReviewReport } from "./contract/report.ts";
 import { changedFiles, diffText, headSha, patchFiles, showFile, tryGit } from "./git.ts";
@@ -13,10 +14,18 @@ import type { InitConfig } from "./init/client.ts";
 import { runL0 } from "./l0/index.ts";
 import type { Approved } from "./l0/index.ts";
 import { worktreeSnapshot } from "./l0/snapshot.ts";
-import { renderComment } from "./publish/comment.ts";
-import { compareUrl, githubTarget, pushPatchBranch, writeBack } from "./publish/github.ts";
+import {
+    diffLineComment,
+    renderChunkReview,
+    renderComment,
+    renderEvidenceReview,
+    renderProgress,
+} from "./publish/comment.ts";
+import { compareUrl, githubTarget, postPullReview, pushPatchBranch, writeBack } from "./publish/github.ts";
+import { adoptGithubActor } from "./publish/app-token.ts";
 import type { GithubTarget } from "./publish/github.ts";
 import { postRun, postSpend, sessionsToJsonl, statusOf } from "./publish/ingest.ts";
+import { loadIntent, renderIntent } from "./review/intent.ts";
 import { runReview } from "./review/index.ts";
 import { buildEvidencePack } from "./review/evidence.ts";
 import type { Rejection } from "./review/index.ts";
@@ -59,6 +68,7 @@ type AiState = {
     errors: string[];
     notReviewed: string[];
     rejections: Rejection[];
+    trace?: CodeTrace;
 };
 
 const LOCAL_CONFIG: InitConfig = {
@@ -167,7 +177,7 @@ export function stepScope(root: string): RunScope {
     return scope;
 }
 
-/** True when the scope holds nothing to review: no context file, or no added line in the diff. */
+/** True when the scope holds nothing to review: no context file, or no added or removed line. */
 export function scopeEmpty(scope: RunScope): boolean {
     return scope.kind === "code" ? scope.hunks.length === 0 : scope.contexts.length === 0;
 }
@@ -186,6 +196,8 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
     if (!apiKey) {
         throw new Error("no api key from init; run the init step first");
     }
+    // Progress comments and the later line reviews must be the product app when one is installed.
+    await adoptGithubActor();
     const run = await createPiRunner(root, state.config, apiKey);
     // The diff is a context-CR input: a code CR is scoped to its hunks and reads the rest with its tools.
     const diff = scope.kind === "code" ? "" : diffText(root, scope.base, scope.head);
@@ -216,18 +228,41 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
     } catch (error) {
         process.stderr.write(`evidence pack skipped: ${error instanceof Error ? error.message : String(error)}\n`);
     }
+    let intent = "";
+    if (scope.kind === "code") {
+        try {
+            // The card is untrusted text. A missing event file or a failed issue lookup still leaves
+            // the commits, and a total failure leaves the review with no card rather than no review.
+            intent = renderIntent(await loadIntent(root, scope.base, scope.head, issueLookup));
+        } catch (error) {
+            process.stderr.write(`intent card skipped: ${error instanceof Error ? error.message : String(error)}\n`);
+        }
+    }
     const result = await runReview(state.config, scope, {
         run,
         diff,
         evidence,
+        intent,
         patchFiles: (patch) => patchFiles(root, patch),
         readFile: (path) => readTracked(root, path),
         // The Worker settles a taken-over claim only if it was marked as spending, so a run cancelled
         // before its first session is charged nothing. Only meaningful for a budgeted repo with a claim.
         onSpend: endpoint && token && claim ? (signal) => postSpend(endpoint, token, claim, signal) : undefined,
+        // Code CR rewrites the sticky PR comment as groups are assembled, reviewed and checked.
+        // adoptGithubActor already swapped in the app installation token when the repo has the app.
+        onProgress:
+            state.config.kind === "code"
+                ? async (note) => {
+                      const target = githubTarget();
+                      if (!target || state.event.prNumber === undefined) {
+                          return;
+                      }
+                      await writeBack(target, state.head, renderProgress(note), state.event.prNumber);
+                  }
+                : undefined,
     });
     writeFileSync(stateFile(root, SESSION_FILE), sessionsToJsonl(result.transcripts), UTF8);
-    const { findings, patches, usage, rejected, complete, errors, notReviewed, rejections } = result;
+    const { findings, patches, usage, rejected, complete, errors, notReviewed, rejections, trace } = result;
     const ai: AiState = {
         nonce: state.nonce,
         findings,
@@ -238,6 +273,7 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
         errors,
         notReviewed,
         rejections,
+        trace,
     };
     for (const error of errors) {
         process.stderr.write(`review: ${error}\n`);
@@ -266,6 +302,22 @@ function aiStage(ai: AiState): string {
 const UNREVIEWED_CAUSES = new Set(["budget", "config"]);
 
 /** Context files come from the reviewed commit via git, never the filesystem: no .git, no symlink targets. */
+/** Issue title and body for the intent card. No token, or a failed request, leaves the number unfilled. */
+async function issueLookup(number: number): Promise<{ title: string; body: string } | undefined> {
+    const target = githubTarget();
+    if (!target) {
+        return undefined;
+    }
+    const response = await fetch(target.apiUrl + "/repos/" + target.repo + "/issues/" + number, {
+        headers: { authorization: "Bearer " + target.token, accept: "application/vnd.github+json" },
+    });
+    if (!response.ok) {
+        return undefined;
+    }
+    const body = (await response.json()) as { title?: string; body?: string | null };
+    return { title: body.title ?? "", body: body.body ?? "" };
+}
+
 function readTracked(root: string, path: string): string | undefined {
     if (path.split("/").includes(".git")) {
         return undefined;
@@ -288,9 +340,43 @@ function safePatchBranch(root: string, head: string, report: ReviewReport, targe
     }
 }
 
+/**
+ * Two reviews on the pull request, both from the token's app account. The first shows the assembled
+ * diff. The second is the evidence check, and only confirmed findings become line comments. A review
+ * that GitHub refuses (a line no longer in the diff, a missing permission) must not drop the report.
+ */
+async function postCodeReviews(target: GithubTarget, prNumber: number, sha: string, trace: CodeTrace): Promise<void> {
+    const notes = trace.checks
+        .filter((check) => check.verdict === "confirmed" && check.quote)
+        .map((check) => ({
+            path: check.path,
+            line: check.line,
+            side: check.side,
+            body: diffLineComment(check),
+        }));
+    try {
+        await postPullReview(target, prNumber, sha, renderChunkReview(trace), []);
+    } catch (error) {
+        process.stderr.write(`chunk review skipped: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+    try {
+        await postPullReview(target, prNumber, sha, renderEvidenceReview(trace), notes);
+    } catch (error) {
+        process.stderr.write(`line review skipped: ${error instanceof Error ? error.message : String(error)}\n`);
+        try {
+            await postPullReview(target, prNumber, sha, renderEvidenceReview(trace), []);
+        } catch (again) {
+            process.stderr.write(
+                `evidence review skipped: ${again instanceof Error ? again.message : String(again)}\n`,
+            );
+        }
+    }
+}
+
 /** Aggregate, write MD/JSON, push the patch branch, ingest to CF, comment. Returns blocking count. */
 export async function stepPublish(root: string): Promise<number> {
     dropKey(root);
+    await adoptGithubActor();
     const state = initState(root);
     const l0 = load<L0State>(root, L0_FILE) ?? { findings: stepL0(root) };
     const scope = load<RunScope>(root, SCOPE_FILE);
@@ -309,6 +395,7 @@ export async function stepPublish(root: string): Promise<number> {
         findings: [...l0.findings, ...(ai?.findings ?? [])],
         patches: ai?.patches ?? [],
         rejections: ai?.rejections ?? [],
+        trace: ai?.trace,
         usage: ai?.usage ?? EMPTY_USAGE,
         durationMs: Date.now() - state.startedAt,
         stages: {
@@ -362,6 +449,9 @@ export async function stepPublish(root: string): Promise<number> {
     }
     if (target && (report.findings.length || state.event.prNumber !== undefined)) {
         const patchUrl = patchBranch ? compareUrl(target, patchBranch) : undefined;
+        if (code && state.event.prNumber !== undefined && ai?.trace) {
+            await postCodeReviews(target, state.event.prNumber, state.head, ai.trace);
+        }
         await writeBack(
             target,
             state.head,

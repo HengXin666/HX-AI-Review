@@ -374,3 +374,40 @@ test("a context round never resolves a code finding it did not look at", async (
     const status = (id: string) => (db.prepare("SELECT status FROM findings WHERE id = ?").get(id) as Row).status;
     assert.equal(status("code1-0"), "open");
 });
+
+test("the github app row is a singleton and a setup state can be consumed only once", async () => {
+    const db = migrated();
+    const store = new D1Store(d1(db));
+    await store.saveGithubApp({
+        appId: 7,
+        slug: "hx-ai-review",
+        name: "HX AI Review",
+        ownerLogin: "HengXin666",
+        htmlUrl: "https://github.com/apps/hx-ai-review",
+        privateKey: "pem",
+        webhookSecret: "secret",
+    });
+    await store.saveGithubApp({
+        appId: 8,
+        slug: "hx-ai-review",
+        name: "HX AI Review",
+        ownerLogin: "HengXin666",
+        htmlUrl: "https://github.com/apps/hx-ai-review",
+        privateKey: "pem-2",
+        webhookSecret: "secret-2",
+    });
+    assert.equal((await store.githubApp())?.appId, 8);
+    assert.equal((db.prepare("SELECT COUNT(*) AS n FROM github_app").get() as Row).n, 1);
+    await store.saveInstallation({
+        installationId: 3,
+        accountLogin: "acme",
+        accountType: "Organization",
+        repos: ["acme/app"],
+        allRepos: false,
+        suspended: false,
+    });
+    assert.equal((await store.listInstallations())[0].repos[0], "acme/app");
+    await store.putSetupState("abc", "2026-10-11T01:00:00.000Z");
+    assert.equal(await store.takeSetupState("abc", "2026-10-11T00:30:00.000Z"), true);
+    assert.equal(await store.takeSetupState("abc", "2026-10-11T00:30:00.000Z"), false);
+});

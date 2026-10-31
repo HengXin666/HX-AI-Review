@@ -1,0 +1,15 @@
+{
+    "version": "v1",
+    "cases": [
+        "intent-cents.json",
+        "migration-drop.json",
+        "payment-float.json",
+        "null-deref.json",
+        "listener-leak.json",
+        "sql-injection.json",
+        "deleted-guard.json",
+        "race.json",
+        "clean-rename.json",
+        "nit-flood.json"
+    ]
+}

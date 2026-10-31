@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DETAIL_LIMIT, ERROR, REPORT_DIR, REPORT_NAME, TOOL_NAME, TOOL_VERSION, UTF8 } from "../constants.ts";
 import type { CrKind } from "./kind.ts";
+import type { CodeTrace } from "./trace.ts";
 import { sortFindings } from "./finding.ts";
 import type { Finding, Patch, Usage } from "./finding.ts";
 
@@ -22,6 +23,8 @@ export type ReviewReport = {
     stages: Record<string, string>;
     /** AI candidates dropped by the deterministic gate or the verifier, with the reason. */
     rejections: { path: string; title: string; reason: string }[];
+    /** Code CR only: assembled diff groups and the evidence check for every candidate. */
+    trace?: CodeTrace;
 };
 
 export type ReportInput = Omit<ReviewReport, "tool" | "version" | "ok" | "counts" | "findings" | "rejections"> & {
@@ -89,7 +92,20 @@ export function renderMarkdown(report: ReviewReport): string {
         `Rejected AI candidates: ${report.rejections.length}`,
         "",
     ];
-    return head.join("\n") + summarize(report.findings);
+    const trace = report.trace ? renderTrace(report.trace) : "";
+    return head.join("\n") + summarize(report.findings) + trace;
+}
+
+function renderTrace(trace: CodeTrace): string {
+    const groups = trace.groups.map(
+        (group) =>
+            `- ${group.id} ${group.path} batch ${group.batch}: ${group.hunks} hunk(s), added ${group.added.join(",")}`,
+    );
+    const checks = trace.checks.map(
+        (check) =>
+            `- ${check.verdict} ${check.path}:${check.line} ${escapeMd(check.title)} — ${escapeMd(check.reason)}`,
+    );
+    return ["", "## Diff groups", ...groups, "", "## Evidence checks", ...checks, ""].join("\n");
 }
 
 export function writeReport(root: string, report: ReviewReport): string {

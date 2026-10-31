@@ -1,0 +1,34 @@
+{
+    "id": "sql-injection",
+    "note": "A user id is concatenated into a SQL string.",
+    "path": "src/users.ts",
+    "diff": "diff --git a/src/users.ts b/src/users.ts\n--- a/src/users.ts\n+++ b/src/users.ts\n@@ -1,3 +1,4 @@\n export function findUser(db: Db, userId: string): Row {\n+    return db.query(\"SELECT * FROM users WHERE id = \" + userId);\n }",
+    "replay": {
+        "finder": [
+            {
+                "path": "src/users.ts",
+                "line": 2,
+                "side": "right",
+                "title": "user id concatenated into SQL",
+                "message": "userId is interpolated into the query string, so a quote breaks out of the predicate",
+                "evidence": "`SELECT * FROM users WHERE id = `",
+                "category": "security",
+                "grade": "critical",
+                "confidence": 0.97,
+                "repro": "userId = \"1 OR 1=1\" returns every row",
+                "requires": "SELECT * FROM users WHERE id = "
+            }
+        ],
+        "verdicts": {
+            "user id concatenated into SQL": "confirmed"
+        }
+    },
+    "expect": [
+        {
+            "category": "security",
+            "grade": "critical",
+            "path": "src/users.ts",
+            "titleIncludes": "SQL"
+        }
+    ]
+}

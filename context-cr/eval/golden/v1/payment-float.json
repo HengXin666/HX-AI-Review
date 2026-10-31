@@ -1,0 +1,34 @@
+{
+    "id": "payment-float",
+    "note": "A money total is accumulated with a binary float add.",
+    "path": "src/money.ts",
+    "diff": "diff --git a/src/money.ts b/src/money.ts\n--- a/src/money.ts\n+++ b/src/money.ts\n@@ -1,3 +1,4 @@\n export function add(total: number, price: number): number {\n+    total += price;\n     return total;\n }",
+    "replay": {
+        "finder": [
+            {
+                "path": "src/money.ts",
+                "line": 2,
+                "side": "right",
+                "title": "money added with binary floating point",
+                "message": "price is a currency amount and total += price cannot represent decimal cents",
+                "evidence": "`total += price`",
+                "category": "breaking",
+                "grade": "major",
+                "confidence": 0.88,
+                "repro": "add(0.1, 0.2) is not 0.3",
+                "requires": "total += price"
+            }
+        ],
+        "verdicts": {
+            "money added with binary floating point": "confirmed"
+        }
+    },
+    "expect": [
+        {
+            "category": "breaking",
+            "grade": "major",
+            "path": "src/money.ts",
+            "titleIncludes": "floating point"
+        }
+    ]
+}

@@ -1,5 +1,7 @@
 import { Type } from "typebox";
 import { GIT_TOOL_TIMEOUT_MS, REPORT_CALL_LIMIT, REPORT_FINDING_TOOL, REPORT_VERDICT_TOOL } from "../constants.ts";
+import { CODE_CATEGORIES, CODE_GRADES } from "../contract/finding.ts";
+import type { CodeCategory, CodeGrade } from "../contract/finding.ts";
 import { describeGitError, gitAsync, isMissingPath, isNoMatch } from "../git.ts";
 import type { ToolSpec } from "./agent.ts";
 
@@ -10,6 +12,14 @@ export type Candidate = {
     message: string;
     evidence: string;
     patch?: string;
+    /** Code CR: left reports an old-side deleted line. Right is the default. */
+    side?: "left" | "right";
+    category?: CodeCategory;
+    grade?: CodeGrade;
+    confidence?: number;
+    repro?: string;
+    /** Set when the model sent a grade, category, or confidence the gate cannot accept. */
+    structureError?: string;
 };
 
 export type PatchVerdict = "correct" | "incorrect" | "none";
@@ -17,6 +27,57 @@ export type Verdict = { verdict: "confirmed" | "rejected"; reason: string; patch
 
 /** Deterministic gate result: undefined accepts the candidate, a string is the reason to refuse it. */
 export type AcceptCandidate = (candidate: Candidate) => string | undefined;
+
+function asGrade(value: unknown): CodeGrade | undefined {
+    return CODE_GRADES.find((item) => item === value);
+}
+
+function asCategory(value: unknown): CodeCategory | undefined {
+    return CODE_CATEGORIES.find((item) => item === value);
+}
+
+/**
+ * Fill the structured code fields. A missing grade becomes a nit so an unstructured report
+ * does not spend a comment slot ahead of a real defect. An illegal value is refused by the gate.
+ */
+function applyCodeFields(candidate: Candidate, params: Record<string, unknown>): void {
+    candidate.side = params.side === "left" ? "left" : "right";
+    const errors: string[] = [];
+    if (params.grade === undefined || params.grade === "") {
+        candidate.grade = "nit";
+    } else {
+        const grade = asGrade(params.grade);
+        if (!grade) {
+            errors.push("grade must be critical, major, minor or nit");
+        }
+        candidate.grade = grade ?? "nit";
+    }
+    if (params.category === undefined || params.category === "") {
+        candidate.category = "other";
+    } else {
+        const category = asCategory(params.category);
+        if (!category) {
+            errors.push("category must be intent, breaking, stability, security or other");
+        }
+        candidate.category = category ?? "other";
+    }
+    if (params.confidence === undefined || params.confidence === "") {
+        candidate.confidence = 0.5;
+    } else {
+        const confidence = typeof params.confidence === "number" ? params.confidence : Number(params.confidence);
+        if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+            errors.push("confidence must be a number from 0 to 1");
+            candidate.confidence = 0.5;
+        } else {
+            candidate.confidence = confidence;
+        }
+    }
+    const repro = typeof params.repro === "string" ? params.repro.trim() : "";
+    candidate.repro = repro || candidate.message;
+    if (errors.length) {
+        candidate.structureError = errors[0];
+    }
+}
 
 /** The report tool's parameters. Code CR has no patch field: nothing is pushed for a code finding. */
 function parametersFor(code: boolean) {
@@ -38,12 +99,44 @@ function parametersFor(code: boolean) {
         }),
         evidence: Type.String({
             description: code
-                ? "The added line and the code proving it wrong, with paths"
+                ? "Backtick quotes copied from the added, removed, or exposed line and the code that proves it wrong. Do not ask the reader to check."
                 : "Code or diff lines proving the mismatch, with paths",
         }),
     };
     return code
-        ? Type.Object(shared)
+        ? Type.Object({
+              ...shared,
+              side: Type.Optional(
+                  Type.Union([Type.Literal("left"), Type.Literal("right")], {
+                      description:
+                          "right (default) for a new-side added or exposed line; left for a removed line numbered L<old>",
+                  }),
+              ),
+              category: Type.Optional(
+                  Type.Union(
+                      CODE_CATEGORIES.map((item) => Type.Literal(item)),
+                      {
+                          description: "intent, breaking, stability, security, or other",
+                      },
+                  ),
+              ),
+              grade: Type.Optional(
+                  Type.Union(
+                      CODE_GRADES.map((item) => Type.Literal(item)),
+                      {
+                          description: "critical, major, minor, or nit. This does not change Warning vs Error.",
+                      },
+                  ),
+              ),
+              confidence: Type.Optional(
+                  Type.Number({ minimum: 0, maximum: 1, description: "0 to 1, how sure you are" }),
+              ),
+              repro: Type.Optional(
+                  Type.String({
+                      description: "The input, state, timing, or reasoning that makes the defect happen",
+                  }),
+              ),
+          })
         : Type.Object({
               ...shared,
               patch: Type.Optional(Type.String({ description: "git unified diff that fixes the context file" })),
@@ -70,8 +163,11 @@ function findingTool(
         name: REPORT_FINDING_TOOL,
         label: "Report finding",
         description: code
-            ? "Report one defect in a line this diff added or changed. Describe the fix in the message; " +
-              "a code review never pushes a patch branch."
+            ? "Report one defect in a line this diff added, removed, or left exposed by a deletion. " +
+              "Set side to left for a removed line (the L number), and set category, grade, confidence, and repro. " +
+              "evidence must backtick-quote code copied from the hunk or a file you read. " +
+              "Do not ask anyone to confirm or to check the context. " +
+              "Describe the fix in the message; a code review never pushes a patch branch."
             : "Report one place where an AI context file (AGENTS.md, README.md, SKILL.md, docs) no longer " +
               "matches the code after this diff. Optionally include a unified diff patch fixing the context file.",
         parameters: parametersFor(code),
@@ -91,6 +187,9 @@ function findingTool(
                 evidence: String(params.evidence),
                 patch: !code && typeof params.patch === "string" && params.patch.trim() ? params.patch : undefined,
             };
+            if (code) {
+                applyCodeFields(candidate, params);
+            }
             const reason = accept?.(candidate);
             if (reason !== undefined) {
                 // Refused candidates do not count against the cap: keep reviewing the rest of the batch.

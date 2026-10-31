@@ -56,9 +56,33 @@ GitHub (计算)                                       Cloudflare (配置 / 存�
 1. checkout: `fetch-depth: 0`, 拿到完整历史, 以便计算 last_sha 到 head 的区间和 merge-base.
 2. init: `GET /init?repo=owner/name&kind=context|code&group=<concurrency group>`, Bearer HX_CTX_TOKEN. `kind` 来自调用方 workflow 的输入, 缺省 `context`; 仓库只服务另一种时返回 400. 返回 api_url, api_key, finder/verifier 模型, last_sha, 抑制表. runner 立刻 `::add-mask::` api_key, 写入 RUNNER_TEMP 下权限 0600 的文件, review 步骤读取后立即删除, publish 步骤兜底删除; key 不进 `$GITHUB_ENV`, 因此后续步骤与第三方 Action 看不到它. `init.json` 不含 key. 返回值必须是不含空白与控制字符的单行, 否则 init 失败. 仓库停用, 模式为 l0 或超预算时只下发 L0 配置, 没有 key.
 3. L0 确定性检查 (仅 context): HC-CONTEXT, HC-BUDGET, HC-DOCNAME, CX-DEADREF, CX-SKILL, CX-ORPHAN. 新 Error 让 job 失败, check 变红; 但后续步骤照常执行, 结果照常入库. code 运行直接写空的 `l0.json`, 不跑这些规则: 它们判的是上下文, 不是 diff.
-4. scope: 按 kind 分派. context 下是区间 diff -> 每个变更路径的祖先 AGENTS 链 + 引用了该路径 (或其所在目录) 的上下文文件 + 改动的 AGENTS 的所有后代 AGENTS; code 下是区间 diff -> 每个文件新增行的 hunk (删除行没有新侧行号, 不可被报). 结果为空就结束, 0 次模型调用.
-5. pi finder -> verifier: finder 会话用只读工具 (read, grep, find, ls) 与 `report_finding`. context 下找过时陈述并可附补丁, code 下找新增行的缺陷且工具没有补丁字段; 每个候选在新的 verifier 会话里被尝试反驳, 只有 `confirmed` 才保留, 规则分别为 `CX-AI` 与 `CODE-AI`, 等级都是 Warning. 补丁用 `git apply --check` 确定性校验.
-6. 入库 + 回写: POST /runs 发送 kind, findings, 补丁, 耗时, token 用量; 用 GITHUB_TOKEN 把可用补丁推到 `hx-ctx/patch-<sha>` 分支 (仅 context); push 发 commit comment, PR 更新同一条带标记的评论. `last_sha` 只由完整的 context push 运行推进.
+4. scope: 按 kind 分派. context 下是区间 diff -> 每个变更路径的祖先 AGENTS 链 + 引用了该路径 (或其所在目录) 的上下文文件 + 改动的 AGENTS 的所有后代 AGENTS; code 下是区间 diff -> 每个文件有新增或删除的 hunk (删除行用旧侧行号 `L<old>` 报告, 行评在 LEFT). 结果为空就结束, 0 次模型调用.
+5. pi finder -> verifier: finder 会话用只读工具 (read, grep, find, ls) 与 `report_finding`. context 下找过时陈述并可附补丁, code 下找新增行, 删除行和意图偏离, 工具没有补丁字段; 每个候选在新的 verifier 会话里被尝试反驳, 只有 `confirmed` 才保留, 再按 grade 做每 PR 评论预算. 规则分别为 `CX-AI` 与 `CODE-AI`, 等级都是 Warning. 补丁用 `git apply --check` 确定性校验.
+6. 入库 + 回写: POST /runs 发送 kind, findings, 补丁, 耗时, token 用量; 用当前 GitHub 身份把可用补丁推到 `hx-ctx/patch-<sha>` 分支 (仅 context); push 发 commit comment, PR 更新同一条带标记的评论. `last_sha` 只由完整的 context push 运行推进. 身份优先是总览里登记的 GitHub App (见下), 没有安装时才退回 `github-actions[bot]`.
+
+## 回评身份
+
+评论和行评要显示成一个 App, 和 Qodo / DeepSource 一样, 而不是 Actions 机器人, 也不是仓库主人的个人账号. 全产品只有一个 GitHub App. 总览页创建或粘贴它, Worker 保存 App ID 和私钥. 每个业务仓库安装这个 App, GitHub 用 webhook 告诉 Worker 安装到了哪. 审查跑起来时, runner 用已有的 `HX_CTX_TOKEN` 向 Worker 换一张只属于该仓库的 installation token, 再用这张 token 发进度评论, 分块 review 和行评.
+
+```mermaid
+sequenceDiagram
+    participant Admin as 总览页
+    participant GH as GitHub
+    participant Worker as Worker
+    participant Run as 业务仓库 runner
+    Admin->>GH: 创建 GitHub App（清单，确认一次）
+    GH->>Worker: 回调 code，换 App ID 与私钥
+    Note over Admin,Worker: 也可以在总览里粘贴已有 App
+    GH->>Worker: 仓库安装后的 webhook
+    Run->>Worker: GET /github/token（Bearer HX_CTX_TOKEN）
+    Worker->>GH: App JWT 换 installation token
+    GH-->>Worker: 1 小时 token
+    Worker-->>Run: token + bot 登录名
+    Run->>GH: 进度评论、分块 review、行评
+    Note over GH: 显示为 hx-ai-review[bot]
+```
+
+业务仓库的 workflow 不用新增 secret. `GH_APP_TOKEN` 只是换 token 失败时的备用, 不是正路.
 
 ## 为什么这样分
 
@@ -77,7 +101,9 @@ GitHub (计算)                                       Cloudflare (配置 / 存�
 |---|---|---|
 | HX_CTX_TOKEN | 业务仓库 secret; D1 只存 SHA-256 | /init, /spend, /runs, /feedback |
 | api_key | Worker secret, D1 只存 secret 名 | /init 响应, RUNNER_TEMP 下 0600 文件 (review 读后即删), review 进程内存, 被 mask |
-| GITHUB_TOKEN | Actions 自动注入, 只传给 publish 步骤 | 推补丁分支, 评论 |
+| GITHUB_TOKEN | Actions 自动注入, 只在没有 App token 时使用 | 推补丁分支, 评论 |
+| GitHub App 私钥与 webhook secret | D1 `github_app`（总览写入）; 管理接口不回传 | 只用于签 App JWT 和校验安装 webhook |
+| installation token | Worker 现签, 约 1 小时, 只覆盖发出请求的那个仓库 | runner 的 review 与 publish 进程 |
 | HX_CTX_TOKEN | 只传给 init 与 publish 步骤 | /init, /runs |
 | 管理权限 | Cloudflare Access | /api/* 校验 Access JWT (RS256, aud, exp), 未配置即 403 |
 
@@ -87,6 +113,6 @@ GitHub (计算)                                       Cloudflare (配置 / 存�
 
 - 补丁分支的提交不会触发其他 workflow (GITHUB_TOKEN 的限制), 需要人工开 PR 合入; 总览页提供 compare 链接.
 - push 触发建议只开在默认分支, 因为 last_sha 是按仓一个游标; 这个游标只对 context CR 有意义, code CR 既不读也不推进它.
-- code CR 只看新增行: 删掉一行校验同样可能引入缺陷, 但删除行在被审的新文件里没有行号, 无法定位报告.
+- code CR 的删除行锚在旧文件行号上, 行评用 GitHub 的 LEFT. 二进制补丁仍然没有 hunk, 不会被审. 离线黄金集重放流水线, 不调用托管模型, 见 [code-eval.md](../reference/code-eval.md).
 - L0 读的 baseline 来自可信 base 提交, 不信任本次 diff 自己改的 baseline.
 - CF 的引用索引是可选提示, runner 每次都会本地重算反向引用.

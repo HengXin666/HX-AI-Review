@@ -50,6 +50,12 @@ export const MIN_DIFF_BYTES = 4000;
 export const MIN_PROMPT_BYTES = MIN_BATCH_BYTES + MIN_DIFF_BYTES;
 /** A finder may keep reporting after a gate rejection; this caps total report_finding calls. */
 export const REPORT_CALL_LIMIT = 40;
+/**
+ * How many confirmed code findings become line comments on one pull request.
+ * Critical, major and minor fill the slots first. Nits are dropped when any higher
+ * finding is kept, and a lone nit is kept only when its confidence is at least 0.8.
+ */
+export const CODE_COMMENT_BUDGET = 5;
 /** Read-only git tools run async under this timeout, so a hung git cannot outlive the session timer. */
 export const GIT_TOOL_TIMEOUT_MS = 30000;
 /**
@@ -98,6 +104,10 @@ export const ENV = {
     group: "HX_CTX_GROUP",
     apiKey: "HX_CTX_API_KEY",
     githubToken: "GITHUB_TOKEN",
+    /** Set by adoptGithubActor: the login that will appear on the pull request. */
+    githubActor: "HX_GITHUB_ACTOR",
+    /** "app" when the Worker minted an installation token, otherwise "actions". */
+    githubActorVia: "HX_GITHUB_ACTOR_VIA",
     githubOutput: "GITHUB_OUTPUT",
     runnerTemp: "RUNNER_TEMP",
     githubEventPath: "GITHUB_EVENT_PATH",

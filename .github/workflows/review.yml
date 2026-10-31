@@ -21,6 +21,9 @@ on:
         secrets:
             HX_CTX_TOKEN:
                 required: true
+            GH_APP_TOKEN:
+                description: Fallback only. The runner asks the Worker for an installation token of the GitHub App saved on the overview. Set this when that mint fails and you still want a specific app token instead of github.token.
+                required: false
 
 jobs:
     review:
@@ -99,17 +102,20 @@ jobs:
             - name: 5 pi finder -> verifier (reads and deletes the key file)
               id: review
               if: steps.scope.outputs.empty != 'true' && steps.init.outputs.l0_only != 'true'
-              # The token is needed to POST /spend before the first model session: only a claim marked as
-              # spending is settled when a newer run takes it over. Fork PRs never reach this step (job if).
+              # HX_CTX_TOKEN does two jobs here: mark the budget claim as spending before the first
+              # model session, and ask the Worker for the product GitHub App's installation token so
+              # progress comments are that app, not github-actions[bot]. GITHUB_TOKEN is only the
+              # fallback (GH_APP_TOKEN, else the Actions bot) when the app is not installed.
               env:
                   HX_CTX_TOKEN: ${{ secrets.HX_CTX_TOKEN }}
+                  GITHUB_TOKEN: ${{ secrets.GH_APP_TOKEN || github.token }}
               run: node "$TOOL/context-cr/src/cli.ts" review
             # Not on cancel. After a scope or review failure it still publishes L0, marked incomplete so last_sha stays.
             - name: 6 ingest + write-back (POST /runs, patch branch, comment)
               if: ${{ !cancelled() && steps.init.outcome == 'success' }}
               env:
                   HX_CTX_TOKEN: ${{ secrets.HX_CTX_TOKEN }}
-                  GITHUB_TOKEN: ${{ github.token }}
+                  GITHUB_TOKEN: ${{ secrets.GH_APP_TOKEN || github.token }}
               run: node "$TOOL/context-cr/src/cli.ts" publish
             - name: Upload MD/JSON report
               if: ${{ !cancelled() }}

@@ -7,7 +7,7 @@ hx-context-review 与 hx-agent-code 使用同一份报告契约: 同样的 Findi
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | ruleId | string | 规则 ID, 见下表 |
-| severity | `error` 或 `warning` | Error 阻断, Warning 只进 review |
+| severity | `error` 或 `warning` | Error 阻断, Warning 只进 review. code CR 的 grade 不是这个字段 |
 | path | string | 仓库相对路径 |
 | line | integer >= 1 | 行号 |
 | message | string | 问题说明 |
@@ -43,11 +43,24 @@ hx-context-review 与 hx-agent-code 使用同一份报告契约: 同样的 Findi
 
 | ID | 等级 | 阶段 | 判据 |
 |---|---|---|---|
-| CODE-AI | Warning | AI | diff 新增或修改的行存在真实缺陷, 且 verifier 无法反驳 |
+| CODE-AI | Warning | AI | diff 新增, 删除, 或删除所暴露的行存在真实缺陷, 且 verifier 无法反驳. 发表前还要过评论预算 |
 
 代码 CR 的 finder 只报可被代码证实的缺陷: 逻辑错误, 边界条件, 错误处理, 并发与资源, 安全边界,
-以及与既有设计相悖. 不报纯风格偏好, 不报未改动代码的既有问题, 不报无法从 diff 与仓库读出证据的猜测.
+与既有设计相悖, 以及实现偏离意图卡 (PR 标题, 正文, 关联 issue, 提交说明). 不报纯风格偏好,
+不报未改动代码的既有问题, 不报无法从 diff 与仓库读出证据的猜测.
 它不产出可自动推送的补丁分支: 代码改动需要人判断, 只给建议文本.
+
+code 发现在 Warning 之外可以带这些可选字段. 缺了它们的老报告仍然合法. Worker 入库只保留上表的字段, 多出来的留在 R2 报告 JSON 里:
+
+| 字段 | 取值 | 说明 |
+|---|---|---|
+| grade | `critical` / `major` / `minor` / `nit` | 评论预算的排序. 不改变 severity, 不能让 job 变红 |
+| category | `intent` / `breaking` / `stability` / `security` / `other` | 缺陷类别 |
+| confidence | 0 到 1 | finder 的把握. 同档排序用 |
+| repro | string | 触发输入, 时序, 或推理 |
+| side | `left` / `right` | left 是旧侧删除行, right 是新侧行 |
+
+模型没给 grade 时 runner 按 nit 处理. 评论预算默认 5 条 (`CODE_COMMENT_BUDGET`): 有更高档时 nit 不发表. 被裁掉的候选不进 `findings`, 只留在 `trace.checks`, verdict 为 `suppressed`.
 
 ### 通用
 
@@ -79,9 +92,37 @@ hx-context-review 与 hx-agent-code 使用同一份报告契约: 同样的 Findi
 }
 ```
 
-`rejections` 是被确定性闸门或 verifier 驳回的 AI 候选及理由, 用于调提示词, 不计入 counts. `stages.ai` 写明确认数, 驳回数, 因候选上限或无法读取而未审的文件, 以及 incomplete 的原因. Markdown 版本在开头列出每个 stage 与驳回数.
+`rejections` 是被确定性闸门或 verifier 驳回的 AI 候选及理由, 用于调提示词, 不计入 counts. `stages.ai` 写明确认数, 驳回数, 因候选上限或无法读取而未审的文件, 以及 incomplete 的原因. Markdown 版本在开头列出每个 stage 与驳回数, code CR 另有 `## Diff groups` 与 `## Evidence checks`.
 
-Markdown 版本与 GitHub 评论遵守同一展示规则: 问题合计超过 10 条只列数量与类型统计, 不超过 10 条才逐条展开.
+code CR 的报告多一个 `trace` (`context-cr/src/contract/trace.ts`), context CR 没有这个字段:
+
+```json
+{
+    "trace": {
+        "groups": [
+            { "id": "g1", "path": "src/a.ts", "hunks": 1, "added": [12, 13], "removed": [11], "batch": 1, "excerpt": "@@ ..." }
+        ],
+        "checks": [
+            {
+                "path": "src/a.ts",
+                "line": 12,
+                "title": "unchecked read",
+                "verdict": "confirmed",
+                "reason": "verifier: read() can throw",
+                "quote": "const added = read()",
+                "grade": "major",
+                "category": "stability",
+                "side": "RIGHT",
+                "anchor": "added"
+            }
+        ]
+    }
+}
+```
+
+`groups` 是按文件组装后的 PR diff, `batch` 是第几批 finder. `added` 是新侧行号, `removed` 是旧侧行号, 老报告可以没有 `removed`. `excerpt` 是这组 diff 的摘录, 不是整文件源码. `checks` 覆盖每一条候选: `confirmed`, `rejected`, 或被评论预算裁掉的 `suppressed`. `quote` 只在引用确实出现在 diff 或被审提交里时才有. `grade`, `category`, `side`, `anchor` 只在 code 候选上出现. `anchor` 是 `added`, `removed` 或 `exposed`. 要求读者确认、回答、或检查上下文是否正确的候选不会出现在 `findings` 里, 只出现在 `checks` 与 `rejections`. 被预算裁掉的同样不进 `findings`. 总览页用 `GET /api/runs/{owner}/{repo}/{id}/report` 读这份 JSON.
+
+Markdown 版本与 GitHub 评论遵守同一展示规则: 问题合计超过 10 条只列数量与类型统计, 不超过 10 条才逐条展开. code CR 的 PR 评论在这条规则之外另附分组表和校验表, 因为那是进度, 不是又一份发现列表.
 
 ## 排序与稳定性
 
