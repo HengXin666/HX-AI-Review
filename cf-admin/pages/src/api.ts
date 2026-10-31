@@ -85,6 +85,8 @@ export type Finding = {
     evidence?: string;
     patchKey: string | null;
     status?: string;
+    /** The run that reported this finding. Present on overview payloads; older pages ignored it. */
+    runId?: string;
     fingerprint?: string;
 };
 

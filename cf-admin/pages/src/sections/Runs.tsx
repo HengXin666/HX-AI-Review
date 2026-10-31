@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle, DataTable } from "@hx/ui";
+import { Badge, Card, CardContent, CardHeader, CardTitle, DataTable } from "@hx/ui";
 import type { DataTableColumn } from "@hx/ui";
 import { kindOf, patchBranchUrl } from "../api.ts";
 import type { Run } from "../api.ts";
@@ -7,7 +6,6 @@ import { dateTime, duration, shortSha, usd } from "../format.ts";
 import { kindLabel, kindVariant, matchesKind } from "../kind.ts";
 import type { KindFilter } from "../kind.ts";
 import { statusLabel, statusVariant } from "../status.ts";
-import { CodeTrace } from "./CodeTrace.tsx";
 
 export function runColumns(): DataTableColumn<Run>[] {
     return [
@@ -80,48 +78,31 @@ export function runColumns(): DataTableColumn<Run>[] {
     ];
 }
 
-type Props = { runs: Run[]; filter: KindFilter; maxHeight?: string; compact?: boolean };
+type Props = { runs: Run[]; filter: KindFilter; maxHeight?: string; compact?: boolean; onOpen?: (id: string) => void };
 
-/** Recent runs, narrowed by the kind filter. Code CR never produces a patch branch, so that column is "-". */
-export function Runs({ runs, filter, maxHeight = "34rem", compact = false }: Props) {
-    const [open, setOpen] = useState<Run | null>(null);
+/** Recent runs, narrowed by the kind filter. A row opens that run's review. Code CR has no patch branch. */
+export function Runs({ runs, filter, maxHeight = "34rem", compact = false, onOpen }: Props) {
     const rows = runs.filter((row) => matchesKind(row, filter));
     const columns = compact
         ? runColumns().filter((column) => ["repo", "kind", "status", "counts", "created"].includes(column.key))
         : runColumns();
-    if (!compact) {
-        columns.push({
-            key: "trace",
-            header: "进度",
-            width: "5rem",
-            render: (row) => (
-                <Button type="button" variant="outline" size="sm" onClick={() => setOpen(row)}>
-                    查看
-                </Button>
-            ),
-        });
-    }
     return (
-        <div className="flex flex-col gap-3">
-            <Card>
-                <CardHeader className="flex flex-row items-center gap-2">
-                    <CardTitle>运行记录 ({rows.length})</CardTitle>
-                    <span className="ml-auto text-[length:var(--fs-2xs)] text-muted-foreground">
-                        一次运行只属于一种 CR
-                    </span>
-                </CardHeader>
-                <CardContent className="px-0 pb-0">
-                    <DataTable
-                        bare
-                        maxHeight={maxHeight}
-                        rowKey={(row) => row.id}
-                        rows={rows}
-                        columns={columns}
-                        emptyText={filter === "all" ? "暂无运行记录" : "该类型暂无运行记录"}
-                    />
-                </CardContent>
-            </Card>
-            {open ? <CodeTrace repo={open.repo} id={open.id} onClose={() => setOpen(null)} /> : null}
-        </div>
+        <Card>
+            <CardHeader className="flex flex-row items-center gap-2">
+                <CardTitle>审查 ({rows.length})</CardTitle>
+                <span className="ml-auto text-[length:var(--fs-2xs)] text-muted-foreground">点开一行看这次审查</span>
+            </CardHeader>
+            <CardContent className="px-0 pb-0">
+                <DataTable
+                    bare
+                    maxHeight={maxHeight}
+                    rowKey={(row) => row.id}
+                    onRowClick={onOpen ? (row) => onOpen(row.id) : undefined}
+                    rows={rows}
+                    columns={columns}
+                    emptyText={filter === "all" ? "暂无运行记录" : "该类型暂无运行记录"}
+                />
+            </CardContent>
+        </Card>
     );
 }

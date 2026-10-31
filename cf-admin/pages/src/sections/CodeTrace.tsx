@@ -3,7 +3,7 @@ import { Badge, Card, CardContent, CardHeader, CardTitle } from "@hx/ui";
 import { ApiError, api } from "../api.ts";
 import type { RunReport } from "../api.ts";
 
-type Props = { repo: string; id: string; onClose: () => void };
+type Props = { repo: string; id: string; onClose?: () => void };
 
 /**
  * Diff groups and evidence checks for one code review. The report is written when the run finishes,
@@ -40,9 +40,11 @@ export function CodeTrace({ repo, id, onClose }: Props) {
         <Card>
             <CardHeader className="flex flex-row items-center gap-2">
                 <CardTitle>代码 CR 进度 · {repo}</CardTitle>
-                <button type="button" className="ml-auto text-[length:var(--fs-xs)] text-link" onClick={onClose}>
-                    关闭
-                </button>
+                {onClose ? (
+                    <button type="button" className="ml-auto text-[length:var(--fs-xs)] text-link" onClick={onClose}>
+                        关闭
+                    </button>
+                ) : null}
             </CardHeader>
             <CardContent className="flex flex-col gap-3 text-[length:var(--fs-xs)]">
                 {error ? <p className="text-danger-fg">{error}</p> : null}

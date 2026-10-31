@@ -199,10 +199,45 @@ export function MotionSelect(_props: {
 export function CodeBlock(_props: {
     code: string;
     lang?: string;
-    language?: string;
-    title?: ReactNode;
+    title?: string;
+    showLineNumbers?: boolean;
+    highlightLines?: readonly number[];
     className?: string;
 }): ReactNode {
+    return null;
+}
+
+export type StepStatus = "pending" | "active" | "done" | "error";
+
+export type StepItem = {
+    id: string;
+    title: string;
+    description?: string;
+    status?: StepStatus;
+};
+
+export function Stepper(_props: {
+    steps: readonly StepItem[];
+    current: number;
+    orientation?: "horizontal" | "vertical";
+    className?: string;
+}): ReactNode {
+    return null;
+}
+
+export function ResizablePanelGroup(
+    _props: HTMLAttributes<HTMLDivElement> & { orientation?: "horizontal" | "vertical" },
+): ReactNode {
+    return null;
+}
+
+export function ResizablePanel(
+    _props: HTMLAttributes<HTMLDivElement> & { defaultSize?: number | string; minSize?: number | string },
+): ReactNode {
+    return null;
+}
+
+export function ResizableHandle(_props: HTMLAttributes<HTMLDivElement> & { withHandle?: boolean }): ReactNode {
     return null;
 }
 

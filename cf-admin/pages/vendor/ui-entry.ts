@@ -24,3 +24,10 @@ export { SidebarNavItemButton } from "../../node_modules/@hx/ui/src/layout/Sideb
 export { IconSlot } from "../../node_modules/@hx/ui/src/layout/Icon.tsx";
 export { MotionSelect } from "../../node_modules/@hx/ui/src/layout/MotionSelect.tsx";
 export { StatCard, StatGrid } from "../../node_modules/@hx/ui/src/layout/StatCard.tsx";
+export { CodeBlock } from "../../node_modules/@hx/ui/src/layout/CodeBlock.tsx";
+export { Stepper } from "../../node_modules/@hx/ui/src/layout/Stepper.tsx";
+export {
+    ResizableHandle,
+    ResizablePanel,
+    ResizablePanelGroup,
+} from "../../node_modules/@hx/ui/src/primitives/resizable.tsx";
