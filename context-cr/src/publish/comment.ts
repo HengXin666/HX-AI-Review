@@ -240,6 +240,21 @@ function addedLines(lines: number[]): string {
     return lines.length > 12 ? shown + ` …共 ${lines.length} 行` : shown;
 }
 
+function verdictLabel(verdict: string): string {
+    if (verdict === "confirmed") {
+        return "确认";
+    }
+    if (verdict === "suppressed") {
+        return "预算抑制";
+    }
+    return "驳回";
+}
+
+function lineCell(group: { added: number[]; removed?: number[] }): string {
+    const removed = group.removed?.length ? " / 删除 " + addedLines(group.removed) : "";
+    return "新增 " + addedLines(group.added) + removed;
+}
+
 /** Groups and evidence checks, as HTML inside the sticky comment so the diff is visible without opening a review. */
 function renderTraceHtml(trace: CodeTrace): string {
     const groups = trace.groups
@@ -250,7 +265,7 @@ function renderTraceHtml(trace: CodeTrace): string {
                 `<td><code>${escapeHtml(group.path)}</code></td>` +
                 `<td align="right">${group.hunks}</td>` +
                 `<td>第 ${group.batch} 批</td>` +
-                `<td><code>${escapeHtml(addedLines(group.added))}</code></td></tr>` +
+                `<td><code>${escapeHtml(lineCell(group))}</code></td></tr>` +
                 `<tr><td colspan="5"><pre>${excerpt}</pre></td></tr>`
             );
         })
@@ -259,7 +274,7 @@ function renderTraceHtml(trace: CodeTrace): string {
         .map((check) => {
             const quote = check.quote ? `<br/><code>${escapeHtml(check.quote)}</code>` : "";
             return (
-                `<tr><td>${escapeHtml(check.verdict === "confirmed" ? "确认" : "驳回")}</td>` +
+                `<tr><td>${escapeHtml(verdictLabel(check.verdict))}</td>` +
                 `<td><code>${escapeHtml(check.path)}:${check.line}</code></td>` +
                 `<td>${escapeHtml(check.title)}${quote}<br/>${escapeHtml(check.reason)}</td></tr>`
             );
@@ -270,7 +285,7 @@ function renderTraceHtml(trace: CodeTrace): string {
         "<p>按文件把 PR diff 收成组，再按预算分批审查。下面是每一组的 diff，不是整文件源码。</p>",
         "<table>",
         '<tr><th align="left">组</th><th align="left">文件</th><th align="right">hunk</th><th align="left">批次</th><th align="left">新增行</th></tr>',
-        groups || '<tr><td colspan="5">没有可审的新增行</td></tr>',
+        groups || '<tr><td colspan="5">没有可审的改动</td></tr>',
         "</table>",
         "<h4>证据校验</h4>",
         "<p>每条候选都核对过：引用必须出现在 diff 或被审提交里，并且不能把判断推给读者。</p>",
@@ -325,7 +340,7 @@ export function renderChunkReview(trace: CodeTrace): string {
     const blocks = trace.groups.map((group) =>
         [
             `### ${group.id} \`${group.path}\``,
-            `第 ${group.batch} 批 · ${group.hunks} 个 hunk · 新增行 ${addedLines(group.added)}`,
+            `第 ${group.batch} 批 · ${group.hunks} 个 hunk · ${lineCell(group)}`,
             "",
             "```diff",
             group.excerpt,
@@ -336,19 +351,19 @@ export function renderChunkReview(trace: CodeTrace): string {
         "分块审查：下面是按文件组装后的 PR diff，不是整文件源码。每一组单独审查，超预算的文件再按 hunk 切开。",
         actorNote(),
         "",
-        blocks.join("\n\n") || "没有可审的新增行。",
+        blocks.join("\n\n") || "没有可审的改动。",
     ].join("\n");
 }
 
 /** Review body for the evidence-check review. Line comments carry only the confirmed findings. */
 export function renderEvidenceReview(trace: CodeTrace): string {
     const lines = trace.checks.map((check) => {
-        const mark = check.verdict === "confirmed" ? "确认" : "驳回";
+        const mark = verdictLabel(check.verdict);
         const quote = check.quote ? ` \`${check.quote}\`` : "";
         return `- ${mark} \`${check.path}:${check.line}\` ${check.title}${quote} — ${check.reason}`;
     });
     return [
-        "证据校验：每一条候选的引用都在 diff 或被审提交里核对过。确认的问题写在对应新增行上；驳回的只留在这里，不占 diff。",
+        "证据校验：每一条候选的引用都在 diff 或被审提交里核对过。确认的问题写在对应行上（删除行在左侧）；驳回和被评论预算抑制的只留在这里。",
         "没有一条结论要求你再去确认上下文。引用对不上，或把判断推给读者的，一律驳回。",
         actorNote(),
         "",
@@ -356,11 +371,23 @@ export function renderEvidenceReview(trace: CodeTrace): string {
     ].join("\n");
 }
 
-/** Inline comment on one added line. States the checked quote; never asks the reader to verify it. */
+function anchorSentence(check: CodeCheck): string {
+    const where = `\`${check.path}:${check.line}\``;
+    if (check.anchor === "removed" || check.side === "LEFT") {
+        return `位置 ${where} 是这次 diff 删掉的行（旧文件行号）。`;
+    }
+    if (check.anchor === "exposed") {
+        return `位置 ${where} 是删除之后仍然留在文件里的上下文行。`;
+    }
+    return `位置 ${where} 是这次 diff 的新增行。`;
+}
+
+/** Inline comment on one diff line. States the checked quote; never asks the reader to verify it. */
 export function diffLineComment(check: CodeCheck): string {
     const quote = check.quote ?? "";
+    const rank = [check.grade, check.category].filter(Boolean).join(" / ");
     return [
-        `**${check.title}**`,
+        `**${check.title}**${rank ? ` (${rank})` : ""}`,
         "",
         check.reason,
         "",
@@ -370,6 +397,6 @@ export function diffLineComment(check: CodeCheck): string {
         quote,
         "```",
         "",
-        `位置 \`${check.path}:${check.line}\` 是这次 diff 的新增行。`,
+        anchorSentence(check),
     ].join("\n");
 }

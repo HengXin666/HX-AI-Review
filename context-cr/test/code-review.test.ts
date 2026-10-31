@@ -59,7 +59,15 @@ function fake(calls: AgentRequest[], script: Script = {}): AgentRunner {
         const [tool] = request.tools;
         if (request.role === "finder") {
             for (const item of reported) {
-                tool.execute({ message: "m", evidence: "`const added = read()`", ...item });
+                tool.execute({
+                    message: "m",
+                    evidence: "`const added = read()`",
+                    category: "stability",
+                    grade: "major",
+                    confidence: 0.9,
+                    repro: "call read() when the file is missing",
+                    ...item,
+                });
             }
         } else {
             const real = request.prompt.includes('"title": "real');
@@ -145,6 +153,56 @@ test("an empty code scope makes no model call", async () => {
     assert.equal(result.complete, true);
 });
 
+test("a removed line can be reported on the old side and a low-confidence nit is budgeted out", async () => {
+    const removal = [
+        "diff --git a/src/a.ts b/src/a.ts",
+        "--- a/src/a.ts",
+        "+++ b/src/a.ts",
+        "@@ -1,3 +1,2 @@",
+        " export function run(user: User): void {",
+        "-    if (!user) return;",
+        "     user.save();",
+        " }",
+    ].join("\n");
+    const calls: AgentRequest[] = [];
+    const finder = [
+        {
+            path: "src/a.ts",
+            line: 2,
+            side: "left",
+            title: "null check removed",
+            category: "stability",
+            grade: "critical",
+            confidence: 0.95,
+            message: "user.save runs when user is missing",
+            evidence: "`if (!user) return`",
+            repro: "run(undefined) throws",
+        },
+        {
+            path: "src/a.ts",
+            line: 2,
+            side: "right",
+            title: "save could be renamed",
+            category: "other",
+            grade: "nit",
+            confidence: 0.2,
+            message: "the name save is a preference",
+            evidence: "`user.save()`",
+            repro: "none",
+        },
+    ];
+    const verdict = () => ({ verdict: "confirmed", reason: "checked the diff", patch: "none" });
+    const result = await runReview(config, scopeOf(removal), { ...base, run: fake(calls, { finder, verdict }) });
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].side, "left");
+    assert.equal(result.findings[0].grade, "critical");
+    assert.equal(result.findings[0].line, 2);
+    assert.ok(result.rejections.some((item) => item.reason.includes("comment budget")));
+    assert.equal(result.trace?.checks.find((item) => item.title === "save could be renamed")?.verdict, "suppressed");
+    const finderCall = calls.find((item) => item.role === "finder") as AgentRequest;
+    assert.match(finderCall.prompt, /L2\| -    if \(!user\) return;/);
+});
+
 test("a code verifier that refuses a candidate keeps it out of the findings", async () => {
     const calls: AgentRequest[] = [];
     const finder = [{ path: "src/a.ts", line: 2, title: "real but refuted" }];
@@ -154,6 +212,28 @@ test("a code verifier that refuses a candidate keeps it out of the findings", as
     assert.equal(result.rejected, 1);
     assert.match(result.rejections[0].reason, /verifier/);
 });
+test("repeated dismissal reasons reach the code finder as repo rules", async () => {
+    const calls: AgentRequest[] = [];
+    const suppressions = [
+        { fingerprint: "aaaaaaaaaaaaaaaaaaaaaaaa", reason: "logging the token is intended" },
+        { fingerprint: "bbbbbbbbbbbbbbbbbbbbbbbb", reason: "Logging the token is intended" },
+    ];
+    await runReview({ ...config, suppressions }, scope, { ...base, run: fake(calls) });
+    const finder = calls.find((item) => item.role === "finder") as AgentRequest;
+    assert.match(finder.prompt, /Do not report this again/);
+    assert.match(finder.prompt, /logging the token is intended/);
+});
+
+test("the intent card is fenced into the code finder and verifier prompts", async () => {
+    const calls: AgentRequest[] = [];
+    await runReview(config, scope, { ...base, intent: "keep the amount in integer cents", run: fake(calls) });
+    const finder = calls.find((item) => item.role === "finder") as AgentRequest;
+    const verifier = calls.find((item) => item.role === "verifier") as AgentRequest;
+    assert.match(finder.prompt, /integer cents/);
+    assert.match(finder.prompt, /not instructions/);
+    assert.match(verifier.prompt, /integer cents/);
+});
+
 test("a scope left by the other kind is refused instead of reviewed under the wrong prompts", async () => {
     const calls: AgentRequest[] = [];
     // A context scope with a code config: the run must not file context findings as code defects.

@@ -10,12 +10,13 @@ hx-context-review 的 runner 侧. 由 [review.yml](../.github/workflows/review.y
 | `node src/cli.ts l0` | 3 L0 确定性检查, 新 Error 退出 1; `kind=code` 时直接写空结果 | `l0.json`; `--format findings` 输出 Finding 数组 |
 | `node src/cli.ts local` | 本地 diff-only 检查: 工作区 vs 基准, 含未跟踪文件 | `local-review.{md,json}`; 阻断发现退出 1; `--base <ref>` 指定基准 |
 | `node src/cli.ts test` | 本地跑六类测试中的一类/一层 | `test-<category>-<tier>.{md,json}`; 未知类别或层级退出 2 |
-| `node src/cli.ts scope` | 4 scope: context 下是 diff -> 祖先 AGENTS 链 + 反向引用; code 下是 diff -> 新增行的 hunk | `scope.json` (带 kind 判别字段), output `empty` |
+| `node src/cli.ts scope` | 4 scope: context 下是 diff -> 祖先 AGENTS 链 + 反向引用; code 下是 diff -> 新增行和删除行的 hunk | `scope.json` (带 kind 判别字段), output `empty` |
+| `node src/cli.ts eval` | 离线重放 code CR 黄金集, 打印 precision / recall / critical miss | stdout JSON; critical miss 时退出 1 |
 | `node src/cli.ts review` | 5 pi finder -> verifier, 读取并删除 key 文件 | `ai.json`, `sessions.jsonl` |
 | `node src/cli.ts publish` | 6 入库 + 回写: POST /runs (带 kind), 推补丁分支 (仅 context), commit/PR 评论 | `context-review.md` 与 `context-review.json` |
 | `node src/cli.ts run` | 2 到 6 一次跑完 | 同上 |
 
-所有子命令都接受 `--kind context|code`. 本地运行没有 `/init`, 这个参数是唯一的 kind 来源, 缺省 `context`; 在 Actions 里它以 `HX_CTX_KIND` 环境变量传入, 而 `/init` 的响应优先 (Worker 知道仓库登记的 kind). 非法值在第一次网络调用之前就报错, 不会静默跑成另一种 CR.
+除 `eval` 外, 子命令都接受 `--kind context|code`. `eval` 只重放 code 黄金集, 不读 kind. 本地运行没有 `/init`, 这个参数是唯一的 kind 来源, 缺省 `context`; 在 Actions 里它以 `HX_CTX_KIND` 环境变量传入, 而 `/init` 的响应优先 (Worker 知道仓库登记的 kind). 非法值在第一次网络调用之前就报错, 不会静默跑成另一种 CR.
 
 中间状态写在 `RUNNER_TEMP` (本地为系统临时目录) 下的 `hx-context-review/<仓库路径哈希>/`, 不在被审仓库里; 最终报告写在 `scripts/.hx_code_quality/reports/context-review.{md,json}`, 与 hx-agent-code 同一状态目录与报告契约.
 
@@ -65,6 +66,14 @@ pnpm local:test -- --category backend-api --tier fake --root . --code-root . --b
 
 ```sh
 pnpm --filter context-cr test
+pnpm --filter context-cr eval
 ```
 
-`test/pi.test.ts` 起一个本地 OpenAI 兼容服务, 用真实 pi SDK 验证直连 api_url 与 report_finding 工具调用. `test/code-review.test.ts` 覆盖 code CR 的 scope, 闸门, 提示词与"永不产出补丁"的性质, `test/steps-kind.test.ts` 覆盖两种 kind 的 L0 与 scope 分派.
+`test/pi.test.ts` 起一个本地 OpenAI 兼容服务, 用真实 pi SDK 验证直连 api_url 与 report_finding 工具调用. `test/code-review.test.ts` 覆盖 code CR 的 scope, 闸门, 提示词与"永不产出补丁"的性质, `test/steps-kind.test.ts` 覆盖两种 kind 的 L0 与 scope 分派. `eval` 把同一条 code 流水线重放在 `eval/golden/v1` 上, 不调用模型. 怎么加样例见 [docs/reference/code-eval.md](../docs/reference/code-eval.md).
+
+## 代码 CR 还看什么
+
+- 意图卡: PR 标题, 正文, 关联 issue, 区间内的提交说明. 实现和卡片相反时可以报 `category: intent`. 卡片是数据, 不是指令.
+- 删除行: 正文里是 `L<旧行号>`, 用 `side: left` 报告. 被删掉的文件也审. 行评打在 diff 左侧.
+- 档位: `critical` / `major` / `minor` / `nit`. severity 仍是 Warning, 不让 job 变红. 每条 PR 最多发表 5 条, 有更高档时 nit 不发表.
+- 重复出现的驳回理由会收成仓库规则, 写进下一次 finder 提示词.

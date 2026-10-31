@@ -7,6 +7,7 @@ import { parseKind } from "./contract/kind.ts";
 import type { CrKind } from "./contract/kind.ts";
 import { isBlocking } from "./contract/report.ts";
 import { runRulesStep } from "./rules/run.ts";
+import { runEvalCommand } from "./eval/run.ts";
 import { runLocal } from "./local/run.ts";
 import { runSuite } from "./local/suite/run.ts";
 import { load } from "./state.ts";
@@ -17,12 +18,13 @@ commands:
   init      GET /init, mask api_key, export it to the job env
   l0        deterministic L0 checks; exit 1 on new Error findings
   local     diff-only local checks against the worktree; exit 1 on blocking findings
-  scope     context: diff -> ancestor AGENTS chain + reverse references; code: the diff's added lines
+  scope     context: diff -> ancestor AGENTS chain + reverse references; code: added and removed lines
   review    pi finder -> verifier on the scope (skipped when empty or L0-only)
   publish   write MD/JSON, POST /runs, push patch branch, commit/PR comment
   rules     run the deterministic rule registry; exit 1 on blocking findings
   run       init, l0, rules, scope, review and publish in one process
   test      run one test category/tier from the local suite
+  eval      replay the code reviewer on the versioned golden set and print metrics
 
 --kind defaults to the /init answer; without /init (local runs) it defaults to context.`;
 
@@ -72,6 +74,9 @@ function parseArgs(argv: string[]): Args {
 async function main(argv: string[]): Promise<number> {
     if (argv[0] === "test") {
         return runSuite(argv.slice(1));
+    }
+    if (argv[0] === "eval") {
+        return runEvalCommand();
     }
     const args = parseArgs(argv);
     switch (args.command) {

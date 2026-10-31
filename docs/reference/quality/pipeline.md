@@ -75,7 +75,7 @@ workflow_call (业务仓库调用, 本仓库自身不跑)
 
 | 测试 ID | 命令 | 覆盖 |
 |---|---|---|
-| context-cr:unit | `pnpm --filter context-cr test` | L0 六条规则正反例, scope 计算 (祖先链, 反向引用, 改名删除, 空范围零模型调用), 审查 agent (分批, 带行号上下文, 确定性闸门, verifier 补丁判定, 会话失败保留用量, 运行预算与运行时限导致 incomplete, 候选上限只计通过闸门的候选, 不可读文件), git 只读工具拒绝 .git 与越界路径, 补丁只能是单文件纯文本修改 (冲突, 非 ASCII 与含制表符路径), /init 严格解析, 真实 pi SDK 直连本地 OpenAI 兼容端点并计费, 模型 500 被识别为会话失败 |
+| context-cr:unit | `pnpm --filter context-cr test` | L0 六条规则正反例, scope 计算 (祖先链, 反向引用, 改名删除, 空范围零模型调用, code 的新增行与删除行), 审查 agent (分批, 带行号上下文, 确定性闸门, verifier 补丁判定, 会话失败保留用量, 运行预算与运行时限导致 incomplete, 候选上限只计通过闸门的候选, 不可读文件, 评论预算), 黄金集回放的 precision 与 critical miss, git 只读工具拒绝 .git 与越界路径, 补丁只能是单文件纯文本修改 (冲突, 非 ASCII 与含制表符路径), /init 严格解析, 真实 pi SDK 直连本地 OpenAI 兼容端点并计费, 模型 500 被识别为会话失败 |
 | cf-admin:unit | `pnpm --filter cf-admin test` | /init 鉴权, L0 降级与剩余预算, /runs 校验顺序与 R2 补偿清理, 状态推导, 预算计费 (含 PR 与缓存 token), last_sha 只随完整 push 推进, 反馈回流抑制表, provider, 仓库与 /runs 字段校验 (非法即 400, 省略保留旧值), 状态由服务端推导, l0Cause 与旧数据非法上限降级, 仓库名大小写与 409, Access 失败关闭与畸形断言 |
 | quality:unit | `node --test scripts/quality/doc-links/index.test.ts` | HX-DOCLINK 漏改, 改名, 失效映射 |
 
@@ -105,8 +105,9 @@ workflow_call (业务仓库调用, 本仓库自身不跑)
 | `context-cr/src/contract/` | [report-contract.md](../report-contract.md) |
 | `.github/workflows/review.yml`, `context-cr/src/` 下的 steps.ts, state.ts, cli.ts, publish/, init/ | [context-cr.md](../../architecture/context-cr.md) |
 | `context-cr/src/review/`, `context-cr/src/scope/`, `context-cr/src/constants.ts` | [agent-review.md](../../architecture/agent-review.md) |
+| `context-cr/src/eval/`, `context-cr/eval/` | [code-eval.md](../code-eval.md) |
 
-`constants.ts` 被 agent-review.md 记录 (会话轮数, 会话时长, 运行截止时间, 批次与 diff 预算), 所以改这些上限必须同步该文档.
+`constants.ts` 被 agent-review.md 记录 (会话轮数, 会话时长, 运行截止时间, 批次与 diff 预算, 每 PR 评论预算), 所以改这些上限必须同步该文档.
 
 `cf-admin/pages/tsconfig.json` 在 paths 里把 `@hx/ui` 指到 `pages/src/vendor-ui.ts`, 让 `tsc` 不跟进 `@hx/ui` 整库源码 (erasableSyntaxOnly 与 noUnusedLocals 会扫到库内无关符号). Vite 另用 alias 指向真实组件入口.
 

@@ -1,0 +1,76 @@
+{
+    "id": "nit-flood",
+    "note": "One real null use plus three naming nits. Only the critical finding may be published.",
+    "path": "src/cart.ts",
+    "diff": "diff --git a/src/cart.ts b/src/cart.ts\n--- a/src/cart.ts\n+++ b/src/cart.ts\n@@ -1,2 +1,5 @@\n export function total(user: User): number {\n+    const a = 1;\n+    const b = 2;\n+    const c = user.id;\n+    return a + b + c;\n }",
+    "replay": {
+        "finder": [
+            {
+                "path": "src/cart.ts",
+                "line": 2,
+                "side": "right",
+                "title": "name a is opaque",
+                "message": "the local name a does not say what it holds",
+                "evidence": "`const a = 1`",
+                "category": "other",
+                "grade": "nit",
+                "confidence": 0.95,
+                "repro": "none",
+                "requires": "const a = 1"
+            },
+            {
+                "path": "src/cart.ts",
+                "line": 3,
+                "side": "right",
+                "title": "name b is opaque",
+                "message": "the local name b does not say what it holds",
+                "evidence": "`const b = 2`",
+                "category": "other",
+                "grade": "nit",
+                "confidence": 0.95,
+                "repro": "none",
+                "requires": "const b = 2"
+            },
+            {
+                "path": "src/cart.ts",
+                "line": 5,
+                "side": "right",
+                "title": "sum is unclear",
+                "message": "the return expression is hard to read",
+                "evidence": "`return a + b + c`",
+                "category": "other",
+                "grade": "nit",
+                "confidence": 0.9,
+                "repro": "none",
+                "requires": "return a + b + c"
+            },
+            {
+                "path": "src/cart.ts",
+                "line": 4,
+                "side": "right",
+                "title": "user id used without a null check",
+                "message": "user may be missing and user.id throws",
+                "evidence": "`const c = user.id`",
+                "category": "stability",
+                "grade": "critical",
+                "confidence": 0.91,
+                "repro": "total(undefined) throws",
+                "requires": "const c = user.id"
+            }
+        ],
+        "verdicts": {
+            "name a is opaque": "confirmed",
+            "name b is opaque": "confirmed",
+            "sum is unclear": "confirmed",
+            "user id used without a null check": "confirmed"
+        }
+    },
+    "expect": [
+        {
+            "category": "stability",
+            "grade": "critical",
+            "path": "src/cart.ts",
+            "titleIncludes": "null check"
+        }
+    ]
+}

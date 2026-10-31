@@ -1,0 +1,34 @@
+{
+    "id": "race",
+    "note": "Two callers can increment a shared counter without a lock. Reported only if the prompt still names concurrency.",
+    "path": "src/counter.ts",
+    "diff": "diff --git a/src/counter.ts b/src/counter.ts\n--- a/src/counter.ts\n+++ b/src/counter.ts\n@@ -1,4 +1,5 @@\n export async function bump(shared: { count: number }): Promise<void> {\n+        shared.count += 1;\n     await shared.flush();\n }",
+    "replay": {
+        "finder": [
+            {
+                "path": "src/counter.ts",
+                "line": 2,
+                "side": "right",
+                "title": "shared counter increment races",
+                "message": "shared.count += 1 is not atomic across overlapping bump calls",
+                "evidence": "`shared.count += 1`",
+                "category": "stability",
+                "grade": "critical",
+                "confidence": 0.84,
+                "repro": "two overlapping bump() calls lose an increment",
+                "requires": "concurrency and resources"
+            }
+        ],
+        "verdicts": {
+            "shared counter increment races": "confirmed"
+        }
+    },
+    "expect": [
+        {
+            "category": "stability",
+            "grade": "critical",
+            "path": "src/counter.ts",
+            "titleIncludes": "races"
+        }
+    ]
+}
