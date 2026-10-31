@@ -1,0 +1,46 @@
+{
+    "id": "migration-drop",
+    "note": "Intent requires a ledger backfill; the diff deletes that statement and drops the column.",
+    "intent": {
+        "source": "pull_request",
+        "title": "Move balances into the ledger",
+        "body": "Backfill is required: backfill balance into the ledger before dropping the column.",
+        "commits": [
+            {
+                "subject": "drop balance column",
+                "body": ""
+            }
+        ],
+        "issues": []
+    },
+    "path": "src/migrate.ts",
+    "diff": "diff --git a/src/migrate.ts b/src/migrate.ts\n--- a/src/migrate.ts\n+++ b/src/migrate.ts\n@@ -1,4 +1,3 @@\n export function migrate(db: Db): void {\n-    db.exec(\"INSERT INTO ledger (user_id, balance) SELECT id, balance FROM users\");\n     db.exec(\"ALTER TABLE users DROP COLUMN balance\");\n }",
+    "replay": {
+        "finder": [
+            {
+                "path": "src/migrate.ts",
+                "line": 2,
+                "side": "left",
+                "title": "balance backfill removed",
+                "message": "the insert into the ledger was deleted, so dropping the column loses balances",
+                "evidence": "`INSERT INTO ledger (user_id, balance) SELECT id, balance FROM users`",
+                "category": "breaking",
+                "grade": "critical",
+                "confidence": 0.95,
+                "repro": "migrate() drops balance with no ledger row written",
+                "requires": "backfill balance"
+            }
+        ],
+        "verdicts": {
+            "balance backfill removed": "confirmed"
+        }
+    },
+    "expect": [
+        {
+            "category": "breaking",
+            "grade": "critical",
+            "path": "src/migrate.ts",
+            "titleIncludes": "backfill"
+        }
+    ]
+}

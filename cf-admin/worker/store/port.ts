@@ -147,6 +147,28 @@ export type PromptNote = {
     createdAt: string;
 };
 
+export type GithubAppRow = {
+    appId: number;
+    slug: string;
+    name: string;
+    ownerLogin: string;
+    htmlUrl: string;
+    /** PKCS#1 or PKCS#8 PEM. Admin responses never include this. */
+    privateKey: string;
+    /** Admin responses never include this. */
+    webhookSecret: string;
+};
+
+export type GithubInstallation = {
+    installationId: number;
+    accountLogin: string;
+    accountType: string;
+    repos: string[];
+    /** True when the installation covers every repo of the account, not a selected list. */
+    allRepos: boolean;
+    suspended: boolean;
+};
+
 export interface Store {
     repoByTokenHash(hash: string): Promise<RepoRow | null>;
     repoByName(name: string): Promise<RepoRow | null>;
@@ -207,6 +229,15 @@ export interface Store {
     listPromptNotes(limit: number): Promise<PromptNote[]>;
     publishPrompt(role: PromptRole, body: string, note: string): Promise<PromptVersion>;
     foldNotes(ids: number[], versionId: number): Promise<void>;
+    githubApp(): Promise<GithubAppRow | null>;
+    saveGithubApp(row: GithubAppRow): Promise<void>;
+    listInstallations(): Promise<GithubInstallation[]>;
+    saveInstallation(row: GithubInstallation): Promise<void>;
+    deleteInstallation(installationId: number): Promise<void>;
+    /** Remember a manifest state until GitHub redirects back. */
+    putSetupState(state: string, expiresAt: string): Promise<void>;
+    /** Consume a state that has not expired. False when it is unknown or stale. */
+    takeSetupState(state: string, now: string): Promise<boolean>;
 }
 
 export interface BlobStore {

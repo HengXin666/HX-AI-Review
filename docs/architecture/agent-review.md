@@ -7,7 +7,7 @@ AI 阶段有两种模式, 由本次运行的 kind 决定, 一次只跑一种:
 | | context CR | code CR |
 |---|---|---|
 | 审什么 | 上下文文件是否被本次 diff 变成错的 | diff 新增或修改的行本身是否有缺陷 |
-| scope | 祖先 AGENTS 链与反向引用 (`context-cr/src/scope/index.ts`) | diff 的新增行 (`context-cr/src/scope/code.ts`) |
+| scope | 祖先 AGENTS 链与反向引用 (`context-cr/src/scope/index.ts`) | diff 的新增行, 删除行, 以及删除所暴露的上下文行 (`context-cr/src/scope/code.ts`) |
 | 系统提示 | `FINDER_SYSTEM` / `VERIFIER_SYSTEM` | `CODE_FINDER_SYSTEM` / `CODE_VERIFIER_SYSTEM` |
 | 规则 | `CX-AI` | `CODE-AI` |
 | 产物 | Warning + 补丁 (可能推送) | 只有 Warning 与建议文本, 永不推送 |
@@ -17,7 +17,7 @@ AI 阶段有两种模式, 由本次运行的 kind 决定, 一次只跑一种:
 ## 目标与边界
 
 - context CR 的目标: 找出上下文文件 (AGENTS.md, README.md, SKILL.md, `docs/` 下的 markdown) 中被本次 diff 变成错误, 过期或误导的陈述, 并在修法确定时给出只改该文件的补丁.
-- code CR 的目标: 找出本次 diff 新增或修改的行里真实存在的缺陷, 并说清触发它的输入, 状态或时序. 它只报能被代码证实的六类问题: 逻辑错误, 边界条件, 错误处理, 并发与资源, 安全边界, 与既有设计相悖.
+- code CR 的目标: 找出本次 diff 新增, 删除, 或被删除所暴露的行里真实存在的缺陷, 并说清触发它的输入, 状态或时序. 它只报能被代码证实的问题: 逻辑错误, 边界条件, 错误处理, 并发与资源, 安全边界, 与既有设计相悖, 以及实现偏离 PR 标题, 正文, 关联 issue 或提交说明 (意图漂移).
 - 读者假设: context CR 的读者是动手前读上下文的编码 agent, 判断标准是 "照着这句话做的 agent 会不会被误导"; code CR 的读者是审这次改动的维护者, 判断标准是 "合入前是否必须改".
 - 不做: context CR 不审代码本身的 bug; code CR 不报纯风格, 命名, 格式, 导入顺序, 缺测试, 两种同样正确的写法之间的偏好, 以及本次 diff 之前就存在的问题. 两者都不产出 Error. Error 只来自 L0 确定性检查 (见 [report-contract.md](../reference/report-contract.md)); AI 只产出 Warning (context CR 另可产出补丁), 不阻断合并.
 - 等级后果: L0 只存在于 context CR (`stepL0` 在 `kind === "code"` 时直接返回空), 所以 code CR 整条链上没有 Error 的来源, 一次代码 CR 永远不可能让 job 因为 AI 结论变红. 这是有意的: 代码改动的严重程度需要人判断, 自动阻断留给上下文规则与仓库规则引擎.
@@ -43,12 +43,19 @@ scope (确定性)            哪些上下文文件可能受影响; 为空则 0 �
 code CR:
 
 ```text
-scope (确定性)            diff -> 新增行的 hunk; 没有新增行则 0 次模型调用
-  -> 分批 (确定性)        按字节预算把 hunk 分成若干批
-  -> finder x N (模型)    每批一个会话, 只读工具 + report_finding (无 patch 字段)
-  -> 闸门 (确定性)        path 属于本批且 line 是本批某个 hunk 的新增行, 未被抑制, 不重复
-  -> verifier x M (模型)  每条候选一个全新会话, 尝试反驳, report_verdict (patch 恒为 none)
-  -> Warning (CODE-AI), 无补丁
+scope (确定性)            diff -> 有新增或删除的 hunk; 两者都没有则 0 次模型调用
+  -> 意图卡 (确定性)      PR 标题/正文, 关联 issue, 区间内提交说明; 取不到就空卡, 审查继续
+  -> 分组组装 (确定性)    同一文件的 hunk 收成一组; 再按字节预算把组分批, 超预算的文件才按 hunk 切开
+  -> finder x N (模型)    每批一个会话, 只读工具 + report_finding (无 patch 字段); 提示词里是这批 diff 和意图卡
+  -> 闸门 (确定性)        path 属于本批, 且 line 是新增行, 删除行 (side left) 或删除所暴露的上下文行;
+                          证据里的反引号引用必须出现在 hunk 或被审文件里;
+                          标题/说明/证据若要求读者确认、回答或检查上下文是否正确, 直接驳回;
+                          非法的 grade / category / confidence 直接驳回
+  -> verifier x M (模型)  每条候选一个全新会话, 尝试反驳, 并且必须自己核对证据和意图卡
+  -> 证据再核 (确定性)    verifier 判 confirmed 之后再核一次引用是否真的在 diff/文件里, 以及理由有没有把判断推给读者
+  -> 评论预算 (确定性)    按 critical > major > minor > nit 保留最多 5 条; 有更高档时丢掉全部 nit
+  -> Warning (CODE-AI), 无补丁. grade 只用于排序, 不改变 Warning, 不让 job 变红
+  -> PR                   进度评论随分组/分块/校验更新; 确认项写到 diff 行, 删除行用 LEFT
 ```
 
 ### 1. scope: 审哪些文件
@@ -63,9 +70,9 @@ scope (确定性)            diff -> 新增行的 hunk; 没有新增行则 0 次
 `computeCodeScope` 同样只读 git:
 
 - 逐个变更文件取其 diff, 路径来自 NUL 安全的变更列表, 不从 diff 头解析, 所以带引号或非 ASCII 的路径不会被读错.
-- 每个文件按 `@@` 头切成 hunk. 新增行与上下文行按新文件行号编号, 删除行不编号 (它在被审的新文件里没有位置, 所以永远不能被报告), `\ No newline at end of file` 保留但不编号也不结束 hunk.
-- 只保留至少有一个新增行的 hunk. 纯删除的 hunk, 删除的文件与二进制补丁都不产生 hunk. `scopeIgnore` 与 `exclude` 中的路径跳过.
-- 每个 `CodeHunk` 带 `path`, `header`, 带新侧行号的 `body`, 以及新增行的行号集合 `lines`; 集合就是闸门的依据.
+- 每个文件按 `@@` 头切成 hunk. 新增行与上下文行按新文件行号编号. 删除行没有新侧行号, 改用旧侧行号, 在正文里写成 `L<old>` (L12 是旧文件第 12 行). `\ No newline at end of file` 保留但不编号也不结束 hunk.
+- 保留至少有一个新增行或一个删除行的 hunk. 纯删除的 hunk 和被删除的文件都留下, 报告锚在旧侧行号, 行评用 `side: LEFT`. 二进制补丁没有 hunk 头, 仍然不产生 hunk. `scopeIgnore` 与 `exclude` 中的路径跳过.
+- 每个 `CodeHunk` 带 `path`, `header`, `body`, 新增行集合 `lines`, 删除行集合 `removed`, 以及 `exposed`: 同一个 hunk 里既有删除、又没被改动的上下文行的新侧行号. 闸门只接受这三类位置. 纯新增 hunk 里的上下文行仍然不能报, 避免把没被这次 diff 碰到的行开成评论位.
 
 ### 2. 分批
 
@@ -73,7 +80,7 @@ scope (确定性)            diff -> 新增行的 hunk; 没有新增行则 0 次
 
 context CR 的总额再分给 diff (上限 `DIFF_MAX_BYTES` 60000, 下限 `MIN_DIFF_BYTES` 4000) 与上下文正文 (上限 `CONTEXT_BATCH_BYTES` 40000, 下限 `MIN_BATCH_BYTES` 4000). 所以每个 finder 会话看到的上下文正文取 `min(40000, 总额 - diff 预算)`, 按带行号前缀后的实际显示字节计算; 超出时贪心切成多批, 每批一个 finder 会话.
 
-code CR 不单独给 diff 留额度: hunk 本身就是 diff, 不再把整份 diff 塞进提示词 (`steps.ts` 给 code 运行传空 diff). 分批 (`batchHunks`) 按 `header + body` 的实际显示字节计, 用与 context 的 diff 相同的额度 (`budgets.diff`), 超出时切成多批. 单个 hunk 的显示上限从 `budgets.doc` 起按渲染后的提示词余量收缩, 所以一个超长 hunk 只会被截断显示, 不会挤掉同批其他 hunk; 被截掉的部分模型可用 read 工具读.
+code CR 不单独给 diff 留额度: hunk 本身就是 diff, 不再把整份 diff 塞进提示词 (`steps.ts` 给 code 运行传空 diff). 分组 (`assembleFileGroups`) 先按路径把同一文件的 hunk 收成一组, 再按 `header + body` 的实际显示字节把整组装进批次 (`batchGroups`), 额度与 context 的 diff 相同 (`budgets.diff`). 一组自己就超过额度时才按 hunk 切开, 并且不会和别的文件混进同一批. 单个组的显示上限从 `budgets.doc` 起按渲染后的提示词余量收缩, 所以一个超长 hunk 只会被截断显示, 不会挤掉同批其他组; 被截掉的部分模型可用 read 工具读. 组号, 路径, 新增行号和 hunk 正文都进 finder 提示词, 也进 PR 评论和总览报告, 所以外面看得到审的是哪一段 diff, 而不是只看到一句概述.
 
 窗口连 `MIN_PROMPT_BYTES` 都放不下时不再抬高预算 (抬高只会让会话因上下文溢出而失败), 而是按 config 报错: 该区间记为未审, 运行 incomplete, last_sha 不推进.
 
@@ -93,15 +100,15 @@ code CR 不单独给 diff 留额度: hunk 本身就是 diff, 不再把整份 dif
 
 - 模型: `/init` 下发的 finder 档 (通常是便宜的小模型), 因为它要读很多内容, 产出只是候选. 两种 kind 用同一个档位.
 - 输入 (context): 审查区间, 变更路径列表, 本批每个上下文文件的带行号全文与入选原因, 抑制表 (以前被驳回的指纹与驳回理由), 证据包, diff (`DIFF_MAX_BYTES` 60000 字节内, 超出截断并提示用工具读).
-- 输入 (code): 审查区间, 变更路径列表, 本批每个 hunk 的 `@@` 头与带新侧行号的正文 (删除行不编号), 抑制表, 证据包. 没有整份 diff, 也没有上下文文件正文.
-- 证据包来自 `context-cr/src/review/evidence.ts`: 变更文件的 import / require 边, `git grep` 找到的引用方, 以及 GitHub 搜索到的最近若干相关 PR 与 issue (仓库配置 `evidencePrs` / `evidenceIssues`, 默认各 5, 范围 0 到 20). 证据是不可信数据, 用围栏包住; 搜索或 git 失败时证据为空, 审查继续. 提示词放不下时先收缩证据, 再收缩 diff (code 下是 hunk), 再收缩上下文正文.
+- 输入 (code): 审查区间, 变更路径列表, 本批每个 hunk 的 `@@` 头与正文 (新侧行号, 删除行带 `L` 号), 意图卡, 抑制表, 由重复驳回原因归纳出的仓库规则, 证据包. 没有整份 diff, 也没有上下文文件正文.
+- 证据包来自 `context-cr/src/review/evidence.ts`: 变更文件的 import / require 边, `git grep` 找到的引用方, 以及 GitHub 搜索到的最近若干相关 PR 与 issue (仓库配置 `evidencePrs` / `evidenceIssues`, 默认各 5, 范围 0 到 20). 证据是不可信数据, 用围栏包住; 搜索或 git 失败时证据为空, 审查继续. 提示词放不下时先收缩证据, code 下再收缩意图卡, 再收缩 diff (code 下是 hunk), 再收缩上下文正文.
 - 系统提示: 内置的 `FINDER_SYSTEM` (context) 与 `CODE_FINDER_SYSTEM` (code) 不变. `/init` 的 `prompts.finder` 若有非空 body, 以 `Operator addendum vN` 追加在末尾, 并写明不能改变等级 (Error 仍只来自 L0). 空正文或缺失字段不加, 对两套提示词一视同仁. verifier 同理使用 `prompts.verifier`.
 - 工具: read, grep, find, ls, 加上 `report_finding`. 这四个只读工具不是 pi 的内置工具 (内置工具能解析任意路径), 而是本仓库基于 git 实现的: 只能看到被审提交里被跟踪的文件, 拒绝绝对路径, `..` 与 `.git`, 符号链接读出的是链接目标字符串而不是目标内容, 每次输出最多 30000 字符, 单次 git 调用有 `GIT_TOOL_TIMEOUT_MS` (30 秒) 超时, 并走异步子进程: 同步 git 会阻塞事件循环, 让会话计时器无法按时中断慢操作. 工具收到会话的 abort signal, 会话超时或轮数超限时正在跑的 git 子进程会一起被取消, 不必等满 30 秒超时. git 以 1 退出只表示 "没有匹配", 是空结果而不是工具错误; 只有 128 且未被 kill/取消才表示该提交里没有这个路径, 超时与取消都按工具错误回报, 不会伪装成"文件不存在". 没有写文件或执行命令的能力; `report_finding` 是它唯一的输出通道.
 - `report_finding` 的参数按 kind 不同: code 下没有 `patch` 字段, 描述里直接说明 "a code review never pushes a patch branch". 模型能看见的 schema 里就没有这个字段, 所以一份注定被丢弃的补丁不会被写出来, 也不会白占轮次.
 - 步骤 (context, 写在 system prompt 里): 先列出 diff 改了什么 (路径, 导出名, 命令, 参数, 配置键, 环境变量, 接口, schema, 模块边界, 工作流, 默认值, 错误行为); 再在每个上下文文件里找关于这些东西的陈述; 用工具对照当前代码确认; 只有当前代码与陈述矛盾, 或缺失了使用变更代码必须知道的信息时才报告; 行号取自带行号的列表; evidence 必须引用证明矛盾的代码或 diff 行.
-- 步骤 (code): 逐个 hunk 读, 对每条新增行问 "什么输入, 状态或时序会让它出错"; 用工具确认周围代码, 调用方与被认为破坏的契约, 不靠 diff 或记忆下结论; 报告的 path 与 line 必须是 hunk 列表里的新侧行号; evidence 必须引用新增行与证明它错的代码.
+- 步骤 (code): 先读意图卡, 再逐个 hunk. 对新增行, 删除行, 以及删除所暴露的上下文行问 "什么输入, 状态或时序会让它出错", 以及实现有没有偏离意图卡里写明的金额, 迁移或必须保留的检查. 用工具确认周围代码, 调用方与被认为破坏的契约, 不靠 diff 或记忆下结论. 报告的 path 与 line 必须是 hunk 列表里的新侧行号 (side right) 或 `L` 号对应的旧侧行号 (side left). evidence 必须引用 diff 或刚读过的文件. 同时给出 category, grade, confidence 与 repro. grade 不是 Error/Warning.
 - 不报 (context): 文风, 没变代码的缺失文档, 与本次 diff 无关的问题, 列表外的文件, 已抑制项.
-- 不报 (code): 纯风格, 命名, 格式, 导入顺序, 缺测试, 两种同样正确的写法之间的偏好, 本次 diff 之前就存在的问题, 以及任何无法落到新增行上的怀疑.
+- 不报 (code): 纯风格, 命名, 格式, 导入顺序, 缺测试, 两种同样正确的写法之间的偏好, 本次 diff 之前就存在的问题, 以及任何无法落到新增行, 删除行或暴露上下文行上的怀疑. 模型没填 grade 时按 nit 处理, 评论预算会优先丢掉它.
 - 补丁: 只在正确写法确定时附带, 必须是只改该上下文文件的最小 unified diff, 保持原文语言与风格. code 不产补丁, 修法写在 message 里.
 
 ### 4. 确定性闸门
@@ -122,9 +129,13 @@ code (`gateCode`):
 | 检查 | 不通过时 |
 |---|---|
 | 路径出现在本批的某个 hunk | 驳回 "not a file of this batch" |
-| 行号是本批某个 hunk 的新增行 (同一个文件的多个 hunk 都算) | 驳回 "line ... is not a line this diff added to ..." |
+| 行号是本批某个 hunk 的新增行, 或 (side 缺省 right 时) 删除所暴露的上下文行 | 否则驳回 "line ... is not a line this diff added to ..." |
+| side 为 left 时, 行号是本批某个 hunk 的删除行 (旧侧) | 驳回 "line ... is not a line this diff removed from ..." |
+| grade, category, confidence 要么缺省, 要么是允许的取值 | 驳回 "grade must be ..." / "category must be ..." / "confidence must be ..." |
 | 指纹 (路径 + 完整标题) 不在抑制表 | 驳回 "suppressed by earlier feedback" |
 | 指纹不与本次已排队候选重复 | 驳回 "duplicate of another candidate" |
+| 标题, 说明, 证据没有把判断推给读者 (确认, 回答, 检查上下文是否正确) | 驳回 "asks a person to confirm..." |
+| 证据里每个不少于 8 个字符的反引号引用都出现在本 hunk 或被审提交的文件里 | 驳回 "quoted evidence is not in this diff hunk..." 或 "evidence has no backtick quote..." |
 
 两套闸门都在 `report_finding` 工具内即时执行: 被驳回的候选立刻把理由回给 finder, 不进入队列, 也不占用候选名额, 因此 finder 反复报已抑制, 重复或 diff 没碰过的行不会挤掉本批的真实问题. 工具另有 `REPORT_CALL_LIMIT` (40) 次调用上限: 超过后的调用只被拒绝并回一句 "stop and summarize", 模型仍可继续调用, 照样消耗会话时长与费用, 真正的兜底是每会话轮数上限与运行时限. 被驳回的候选 (包括 verifier 驳回的) 连同理由写入报告 JSON 的 `rejections`, Markdown 报告列出驳回数, 便于调提示词.
 
@@ -133,17 +144,24 @@ code (`gateCode`):
 - 模型: verifier 档 (通常是更强的模型), 因为它只看一条候选, 要做最终判断.
 - 每条候选一个全新会话, 不继承 finder 的上下文, 避免被 finder 的推理带偏.
 - 输入 (context): 候选 (文件, 行, 标题, 说明, 证据; 以 JSON 代码块给出并标明是不可信的主张, 因为它出自读过不可信文件的模型), 补丁 (同样标为不可信), 该文件在报告行附近 +-15 行的带行号原文, diff (预算减半).
-- 输入 (code): 候选 (同样标为不可信) 与该行所属 hunk 的 `@@` 头加正文. 没有补丁, 也没有上下文文件摘录.
+- 输入 (code): 候选 (同样标为不可信, 并带 side, category, grade, confidence, repro) 与该行所属 hunk 的 `@@` 头加正文, 以及同一份意图卡. 没有补丁, 也没有上下文文件摘录.
 - 工具: 同样的 git 只读工具, 加上 `report_verdict`.
 - 判定 (context): 默认立场是反驳. 以下任一成立就 rejected: 文件仍然准确; 报告行附近没有该陈述; 推测性或文风问题; 证据在当前代码里不成立; 照着该文件做的 agent 不会被误导. 只有矛盾真实且会误导 agent 才 confirmed.
-- 判定 (code): 默认立场同样是反驳. 以下任一成立就 rejected: 新增行对代码能收到的每种输入都正确; 问题需要仓库无法产生的状态, 时序或输入; 属于风格, 命名或偏好; 引用的证据在当前代码里不成立; 缺陷早于本次 diff, 改动既没有造成也没有暴露它. 只有 "照这条候选做的维护者会同意改动是错的且合入前必须改" 才 confirmed.
+- 判定 (code): 默认立场同样是反驳. 以下任一成立就 rejected: 该行对代码能收到的每种输入都正确; 问题需要仓库无法产生的状态, 时序或输入; 属于风格, 命名或偏好; 引用的证据在当前代码里不成立; 意图类候选所说的意图卡原文并不存在; 缺陷早于本次 diff, 改动既没有造成也没有暴露它; 候选或理由要求读者去确认, 回答, 或检查上下文是否正确. 只有 "证据引用真实存在, 且照这条候选做的维护者会同意改动是错的且合入前必须改" 才 confirmed. 模型给出 confirmed 之后, runner 再做一次确定性核对 (`groundEvidence`): 引用不在 diff 或文件里, 或理由仍在问人, 一律改判驳回. 这次核对的结论记在 `trace.checks`, 不靠模型自己说"我看过了".
+- 评论预算: confirmed 之后按 grade 再裁一次 (`publishKeys`, 上限 `CODE_COMMENT_BUDGET` = 5). 顺序是 critical, major, minor, 同档比 confidence. 只要留下了任何非 nit, 全部 nit 都不再发表. 只有 nit 时, 只保留置信度不低于 0.8 的那一条. 被裁掉的候选留在 `trace.checks`, verdict 为 `suppressed`, 原因前缀 `comment budget:`, 不进入 `findings`, 也不发行评. 这不增加 rejected 以外的失败, 运行仍然 complete.
 - 补丁判定: context 在同一次调用里给出 `patch`: correct (只改该文件且让陈述变真, 不引入新错误), incorrect, 或 none (没有补丁). code 的提示词明确要求 `patch` 恒为 none, 因为代码 CR 没有补丁可判. 没有调用 `report_verdict`, 或给出无法识别的值, 一律按 rejected / incorrect 处理.
 
 ### 6. 补丁闸门
 
 只有 context CR 走到这一步. 只有 verifier 判 correct 的补丁才进入下一步: 必须是单个已有文件的纯文本修改 (`--numstat` 只报路径, 所以另行拒绝新建, 删除, 改权限, 变成符号链接, 改名, 复制与二进制补丁, 以及含多个文件头的补丁); `git apply --check --numstat -z` 必须成功, 且触及的文件恰好只有被报告的那个上下文文件 (路径按原始字节比较, 含非 ASCII 或制表符的路径也不会被截断冒充). 通过的补丁在 publish 阶段合到一个 `hx-ctx/patch-*` 分支, 互相冲突的补丁跳过, 补丁分支失败不影响报告入库.
 
-code CR 没有这一环, 也没有下一步: `stepPublish` 在 `config.kind === "code"` 时跳过整个补丁分支推送, 即使某个候选带着补丁也不会推. 代码改动需要人判断, 代码 CR 只给建议文本.
+code CR 没有补丁闸门, 也没有补丁分支: `stepPublish` 在 `config.kind === "code"` 时跳过整个补丁分支推送. 它改为在 PR 上留三样东西, 都由 `GITHUB_TOKEN` 的身份发出. 默认可复用工作流用的是 `github.token`, 也就是 github-actions[bot] 这个 App; 调用方传入可选 secret `GH_APP_TOKEN` 时, 进度评论和行评改由那个 GitHub App 安装令牌发出.
+
+- 一条带 `<!-- hx-context-review -->` 的 issue 评论, 审查过程中按「分组组装 → 分块审查 → 证据校验」原地更新, 结束时换成带分组 diff 摘录和校验表的总结. 没有 PR (纯 push) 时退回一条 commit 评论, 不发行评.
+- 一个「分块审查」review, 正文是各组的 diff 摘录.
+- 一个「证据校验」review. 确认且没被预算裁掉的发现写到 diff 上: 新增行和暴露的上下文行用 `side: RIGHT` (新文件行号), 删除行用 `side: LEFT` (旧文件行号). 驳回和被预算抑制的只出现在 review 正文里. 行评正文带已经核对过的引用, 以及 grade 和 category, 不要求读者再去确认. GitHub 拒绝某一行 (该行不在 PR diff 上) 时, 改为只发正文, 入库不受影响.
+
+总览页运行记录的「进度」读取 `GET /api/runs/{owner}/{repo}/{id}/report` 里的 `trace`. 报告在 publish 时入库, 所以页面上的进度是这次运行结束后的分组和校验; 跑的过程中看 PR 上那条原地更新的评论.
 
 ## 隔离与安全
 
@@ -185,23 +203,26 @@ code CR 没有这一环, 也没有下一步: `stepPublish` 在 `config.kind === 
 
 ## 输出与反馈闭环
 
-- 每条确认的发现是一个 Warning: context 用规则 `CX-AI`, code 用 `CODE-AI`. 消息为 "标题: 说明", 证据附 verifier 理由, 指纹为 规则 + 路径 + 完整标题 (同一条过期陈述或同一个缺陷跨运行保持同一指纹; 标题不截断, 以免指纹变化让抑制失效).
+- 每条确认且没被预算裁掉的发现是一个 Warning: context 用规则 `CX-AI`, code 用 `CODE-AI`. 消息为 "标题: 说明", 证据附 verifier 理由和 repro, 指纹为 规则 + 路径 + 完整标题 (同一条过期陈述或同一个缺陷跨运行保持同一指纹; 标题不截断, 以免指纹变化让抑制失效). code 发现另带 grade, category, confidence, side. 这些字段不改变 severity, 也不进入指纹, 所以改一改 grade 不会让旧的驳回失效.
 - 两种 kind 的指纹命名空间不同, 所以对上下文发现的驳回不会顺带压掉同一行的代码缺陷, 反之亦然.
 - 报告名与报告目录的共享常量在 `context-cr/src/constants.ts`: CI 审查写 `context-review`, 本地 diff 写 `local-review`, 两者使用同一 `ReviewReport` 契约 (含 `kind` 字段); 这些命名不影响 AI 发现语义.
 - 报告 (MD/JSON, 含 `rejections`) 与全部会话记录 (finder 与 verifier 的完整消息, 包括失败会话, JSONL) 存入 R2, 可在总览页追溯每条结论是怎么得出的.
-- 维护者在总览页采纳或驳回发现; 驳回的指纹与理由进入抑制表, 下次 `/init` 下发: finder 在提示词里看到它们, 闸门直接拦下同指纹候选.
+- 维护者在总览页采纳或驳回发现; 驳回的指纹与理由进入抑制表, 下次 `/init` 下发: finder 在提示词里看到它们, 闸门直接拦下同指纹候选. 同一条驳回理由出现至少两次时, `rulesFromDismissals` 把它收成一条仓库规则, 写进下一次 code finder 的提示词 ("Do not report this again"). 采纳数除以采纳加驳回是 resolution rate (`resolutionRate`); 没有反馈时为 null, 不记成 0. 总览页的记录仍在 D1 `feedback`, `/init` 目前不下发这个比率.
 
 ## 怎么判断审得好不好
 
 - 精度: 总览页的采纳率 (accepted / (accepted + rejected)), 按 kind 分开看. 驳回理由按类别归纳后, 回写到对应 kind 的 system prompt 的"不报"清单或闸门里.
-- 召回: 用带已知过期陈述 (context) 或带已知缺陷 (code) 的夹具仓库回放 (目前由单元测试覆盖流程, 真实模型的回放评测尚未建立, 见下).
+- 召回: 离线评测把 code reviewer 的真实流水线 (scope, 意图卡, 闸门, verifier, 评论预算) 重放在版本化的黄金集上, 见 [code-eval.md](../reference/code-eval.md). 模型侧是钉死的回放稿, 不调用托管模型. 指标是 precision, 分类 recall, 干净样例上的 false-positive rate, critical miss 数, 以及每条 PR 的发现数. 每次结果带 promptHash 与 configHash.
 - 成本: 每次运行的 token 与费用随运行入库, 总览页按仓库与 kind 展示.
 - verifier 驳回率: 会话记录里 finder 候选数与确认数之比. 驳回率长期很高说明 finder 提示词过宽.
 
 ## 已知限制与后续
 
-- 真实模型的离线评测集 (固定仓库 + 预期发现) 尚未建立; 改提示词目前只能靠单元测试保证流程, 靠采纳率观察效果.
-- 超大 diff 截断后, 被截掉的部分 (尤其是 base 侧) 用现有只读工具读不到, 只能依赖模型在能看到的部分里判断, 召回会下降. code CR 只在新增行上报告, 这个限制影响的是它对上下文的判断.
-- code CR 的 scope 只含新增行, 纯删除的改动不被审: 删掉一行校验同样可能引入缺陷, 但目前没有可报的新侧行号.
+- 黄金集衡量的是流水线会不会保住钉死的回放稿里的真问题, 并丢掉 nit. 它不调用托管模型, 所以不能代替真实模型的召回. 接上模型时把 `mode` 从 `replay` 换成该模型 id, 并换掉回放稿; promptHash 与 configHash 仍要一起记.
+- 超大 diff 截断后, 被截掉的部分 (尤其是 base 侧) 用现有只读工具读不到, 只能依赖模型在能看到的部分里判断, 召回会下降.
+- 删除行可以报, 锚是旧侧行号, 行评在 LEFT. GitHub 若拒绝该行, publish 退回只发正文, 发现仍入库. 二进制补丁仍然没有 hunk.
+- 上下文行只有在同一个 hunk 里还有删除时才能报. 没被删改碰到的行仍然不能报.
+- 评论预算默认 5. 超过 5 条 critical 时, 置信度较低的 critical 也会被裁掉, 这会计入评测的 critical miss.
 - verifier 只有一票; 是否对高影响发现做多模型投票, 等有采纳率数据后再定.
+- `/init` 不下发 resolution rate. 比率函数在 runner 里, 反馈行仍由总览写入 D1.
 - 修改本文描述的任何角色, 闸门, 上限或失败语义时, 同步更新 `context-cr/test/review.test.ts` 与 `context-cr/test/code-review.test.ts` 中对应的测试.

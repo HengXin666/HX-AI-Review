@@ -8,6 +8,7 @@ import { navEntries, Shell } from "./shell.tsx";
 import type { SectionId } from "./shell.tsx";
 import { Deployment } from "./sections/Deployment.tsx";
 import { Findings } from "./sections/Findings.tsx";
+import { GithubApp } from "./sections/GithubApp.tsx";
 import { Login } from "./sections/Login.tsx";
 import { Overview as OverviewScreen } from "./sections/Overview.tsx";
 import { Prompts } from "./sections/Prompts.tsx";
@@ -17,7 +18,17 @@ import { Review } from "./sections/Review.tsx";
 import { Rules } from "./sections/Rules.tsx";
 import { Runs } from "./sections/Runs.tsx";
 
-const SECTIONS: SectionId[] = ["overview", "runs", "findings", "repos", "providers", "rules", "prompts", "deploy"];
+const SECTIONS: SectionId[] = [
+    "overview",
+    "runs",
+    "findings",
+    "repos",
+    "providers",
+    "github",
+    "rules",
+    "prompts",
+    "deploy",
+];
 
 /** The screen named in the URL hash. `#/runs/<id>` opens that run; the worker already writes this link. */
 function placeFromHash(): { section: SectionId; runId: string | null } {
@@ -197,6 +208,8 @@ export function App() {
                 return <Repos repos={data.repos} onChange={updateRepo} onCreate={createRepo} onRotate={rotate} />;
             case "providers":
                 return <Providers providers={data.providers} onSave={saveProvider} />;
+            case "github":
+                return <GithubApp />;
             case "rules":
                 return <Rules stats={rules} filter={filter} />;
             case "prompts":

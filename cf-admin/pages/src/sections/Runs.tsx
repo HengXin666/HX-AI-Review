@@ -80,7 +80,7 @@ export function runColumns(): DataTableColumn<Run>[] {
 
 type Props = { runs: Run[]; filter: KindFilter; maxHeight?: string; compact?: boolean; onOpen?: (id: string) => void };
 
-/** Recent runs, narrowed by the kind filter. Code CR never produces a patch branch, so that column is "-". */
+/** Recent runs, narrowed by the kind filter. A row opens that run's review. Code CR has no patch branch. */
 export function Runs({ runs, filter, maxHeight = "34rem", compact = false, onOpen }: Props) {
     const rows = runs.filter((row) => matchesKind(row, filter));
     const columns = compact

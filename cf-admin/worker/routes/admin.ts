@@ -3,6 +3,7 @@ import { HttpError, field, json, month, readJson } from "../http.ts";
 import type { Deps } from "../http.ts";
 import type { RepoPatch } from "../store/port.ts";
 import { verdictOf } from "./feedback.ts";
+import { handleGithubGet, handleGithubManifest, handleGithubPut, handleGithubSetup } from "./github.ts";
 import { handlePrompts } from "./prompts.ts";
 import { handleRules } from "./rules.ts";
 import { handleSession } from "./session.ts";
@@ -10,7 +11,29 @@ import { PROVIDER_NAME, handleProviderPut } from "./providers.ts";
 
 const LIST_LIMIT = 50;
 const REPO_NAME = /^[\w.-]+\/[\w.-]+$/;
+const RUN_ID = /^[A-Za-z0-9-]{1,80}$/;
+const NAME_PART = /^[\w.-]{1,100}$/;
+
+function safePart(value: string): boolean {
+    return NAME_PART.test(value) && !value.includes("..");
+}
 const CONFLICT = "repository already registered (names are case-insensitive)";
+
+/** The report JSON a code review stored, including its diff groups and evidence checks. Admin only. */
+async function runReport(deps: Deps, owner: string, name: string, id: string): Promise<Response> {
+    if (!safePart(owner) || !safePart(name) || !RUN_ID.test(id)) {
+        throw new HttpError(404, "not found");
+    }
+    const repo = owner + "/" + name;
+    if (!REPO_NAME.test(repo)) {
+        throw new HttpError(404, "not found");
+    }
+    const text = await deps.blobs.get(`runs/${repo}/${id}/report.json`);
+    if (text === null) {
+        return json({ error: "not found" }, 404);
+    }
+    return new Response(text, { headers: { "content-type": "application/json; charset=utf-8" } });
+}
 
 /** Omitted fields stay untouched; a present field with a wrong type or value is a 400, never ignored. */
 function repoPatch(body: Record<string, unknown>): RepoPatch {
@@ -110,6 +133,10 @@ export async function handleAdmin(request: Request, deps: Deps, parts: string[])
     if (resource === "session") {
         return handleSession(request, deps);
     }
+    // GitHub redirects the browser here with a one-time code. The state row is the credential.
+    if (resource === "github" && method === "GET" && rest[0] === "setup") {
+        return handleGithubSetup(request, deps);
+    }
     const who = await requireAdmin(request, deps);
     if (method === "GET" && resource === "overview") {
         return overview(deps);
@@ -146,8 +173,22 @@ export async function handleAdmin(request: Request, deps: Deps, parts: string[])
     if (resource === "prompts") {
         return handlePrompts(request, deps, rest);
     }
+    if (resource === "github") {
+        if (method === "GET" && rest.length === 1 && rest[0] === "app") {
+            return handleGithubGet(deps);
+        }
+        if (method === "PUT" && rest.length === 1 && rest[0] === "app") {
+            return handleGithubPut(request, deps);
+        }
+        if (method === "POST" && rest.length === 1 && rest[0] === "manifest") {
+            return handleGithubManifest(request, deps);
+        }
+    }
     if (method === "GET" && resource === "rules") {
         return handleRules(request, deps);
+    }
+    if (method === "GET" && resource === "runs" && rest.length === 4 && rest[3] === "report") {
+        return runReport(deps, rest[0], rest[1], rest[2]);
     }
     if (resource === "findings" && rest.length === 2) {
         const finding = await deps.store.finding(rest[0]);

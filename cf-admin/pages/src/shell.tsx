@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import {
     BarChart3,
     BookText,
+    Bot,
     FileClock,
     FolderGit2,
     LayoutDashboard,
@@ -17,7 +18,8 @@ import { KIND_FILTER_ITEMS } from "./kind.ts";
 import type { KindFilter } from "./kind.ts";
 
 /** One entry of the left rail. "overview" is the dashboard; the rest are the detail screens. */
-export type SectionId = "overview" | "runs" | "findings" | "repos" | "providers" | "rules" | "prompts" | "deploy";
+export type SectionId =
+    "overview" | "runs" | "findings" | "repos" | "providers" | "github" | "rules" | "prompts" | "deploy";
 
 export type NavEntry = { id: SectionId; label: string; icon: LucideIcon; badge?: string };
 
@@ -34,6 +36,7 @@ export function navEntries(openFindings: number): NavEntry[] {
         },
         { id: "repos", label: "仓库", icon: FolderGit2 },
         { id: "providers", label: "模型供应商", icon: ServerCog },
+        { id: "github", label: "GitHub App", icon: Bot },
         { id: "rules", label: "规则统计", icon: BarChart3 },
         { id: "prompts", label: "提示词附录", icon: BookText },
         { id: "deploy", label: "部署", icon: Sparkles },
@@ -62,6 +65,7 @@ const SECTION_DESC: Record<SectionId, string> = {
     findings: "待处理发现可以接受或驳回; 驳回需要原因, 会写回抑制表。",
     repos: "登记仓库, 选择它跑哪种 CR, 并设置月度预算与令牌。",
     providers: "模型供应商的地址, 协议与单价; 密钥本身只在 Worker secret 里。",
+    github: "登记一个 GitHub App。安装到仓库后，审查评论以这个 App 的身份发出。",
     rules: "按规则与等级汇总命中次数, 规则命名空间决定它属于哪种 CR。",
     prompts: "运维追加在系统提示词之后的附录, 以及待折叠的驳回记录。",
     deploy: "当前部署的提交, Access 配置状态与重新部署入口。",

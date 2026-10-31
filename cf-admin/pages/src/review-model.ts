@@ -16,7 +16,7 @@ export type ReviewGroup<T> = {
 };
 
 const CODE_STAGES: Stage[] = [
-    { id: "diff", title: "读取 diff", description: "只看新增和修改的行" },
+    { id: "diff", title: "读取 diff", description: "新增行、删除行，以及删除留下的上下文" },
     { id: "group", title: "分组", description: "按目录聚合这次发现" },
     { id: "chunk", title: "分块审查", description: "每一组单独出发现" },
     { id: "prove", title: "证据校验", description: "引用写在发现里，不叫人自己去对" },

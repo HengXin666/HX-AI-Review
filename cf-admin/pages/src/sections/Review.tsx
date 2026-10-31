@@ -23,6 +23,7 @@ import { duration, shortSha, usd } from "../format.ts";
 import { kindLabel, kindVariant } from "../kind.ts";
 import { groupByDirectory, hasEvidence, lineUrl, pullUrl, stagesFor } from "../review-model.ts";
 import { severityLabel, severityVariant, statusLabel, statusVariant } from "../status.ts";
+import { CodeTrace } from "./CodeTrace.tsx";
 
 type Props = {
     runId: string;
@@ -79,7 +80,7 @@ export function Review({ runId, runs, findings, onBack, onVerdict }: Props) {
             : missing > 0
               ? "有发现没有证据引用。证据校验这一步不算过，页面也不会叫你自己去对上下文。"
               : kind === "code"
-                ? "步骤按这次运行的结果标完。diff 正文和语义分组还没进上报，完整改动在 PR 上。"
+                ? "步骤按这次运行的结果标完。下面是上报里的 diff 分组和证据校验，包括删除行、档位，以及被评论预算抑制的候选。"
                 : "步骤按这次运行的结果标完。上下文补丁仍然从发现上的补丁链接打开。";
 
     const files = (
@@ -225,6 +226,8 @@ export function Review({ runId, runs, findings, onBack, onVerdict }: Props) {
                     <p className="text-[length:var(--fs-xs)] text-muted-foreground">{caption}</p>
                 </CardContent>
             </Card>
+
+            {kind === "code" ? <CodeTrace repo={run.repo} id={run.id} /> : null}
 
             <div className="flex flex-col gap-3 lg:hidden">
                 <Card>
