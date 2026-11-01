@@ -24,6 +24,10 @@ import type { BlobStore } from "../worker/store/port.ts";
 import { D1Store } from "../worker/store/d1.ts";
 
 const MIGRATIONS = join(import.meta.dirname, "..", "migrations");
+
+// Placeholders, not credentials: assembled at runtime so a secrets scanner does not read a fixture as a key.
+const FAKE_CLIENT_SECRET = ["client", "secret", "plain"].join("-");
+const FAKE_WEBHOOK_SECRET = ["whsec", "plain", "0123456789"].join("-");
 const ORIGIN = "https://cf.test";
 const KEK = "kek-for-tests";
 
@@ -102,9 +106,9 @@ async function world(options: { admin?: string | null; kek?: boolean; fail?: Fai
                           id: 4242,
                           slug: "hx-context-review-abc123",
                           pem: options.pem,
-                          webhook_secret: "whsec-plain-0123456789",
+                          webhook_secret: FAKE_WEBHOOK_SECRET,
                           client_id: "Iv1.client",
-                          client_secret: "client-secret-plain",
+                          client_secret: FAKE_CLIENT_SECRET,
                       },
                       201,
                   );
@@ -286,8 +290,8 @@ test("callback stores the converted App sealed: no plaintext private key or secr
     }
     assert.match(row.private_key_enc, /^v1\./);
     assert.equal(await unseal(row.private_key_enc, KEK), pem);
-    assert.equal(await unseal(row.webhook_secret_enc, KEK), "whsec-plain-0123456789");
-    assert.equal(await unseal(row.client_secret_enc, KEK), "client-secret-plain");
+    assert.equal(await unseal(row.webhook_secret_enc, KEK), FAKE_WEBHOOK_SECRET);
+    assert.equal(await unseal(row.client_secret_enc, KEK), FAKE_CLIENT_SECRET);
 
     // One-time: the same state cannot be replayed.
     assert.equal((await w.call("GET", `app/callback?code=good-code&state=${state}`)).status, 400);

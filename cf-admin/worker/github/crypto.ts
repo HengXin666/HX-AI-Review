@@ -5,7 +5,11 @@ import { HttpError } from "../http.ts";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-/** Worker secret holding the key-encryption key. Without it nothing secret is stored or read. */
+/**
+ * The NAME of the Worker secret that holds the key-encryption key, not the key itself: the value is read from
+ * env at run time and never appears in the source. Without that secret nothing secret is stored or read.
+ */
+// skipcq: SCT-A000 - this is the secret's name, which must be a literal to be looked up.
 export const KEK_SECRET = "GITHUB_APP_KEK";
 const ENVELOPE_VERSION = "v1";
 

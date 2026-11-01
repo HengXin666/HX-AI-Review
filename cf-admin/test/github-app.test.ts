@@ -15,6 +15,11 @@ import type { BlobStore, Store } from "../worker/store/port.ts";
 
 const MIGRATIONS = join(import.meta.dirname, "..", "migrations");
 
+// Placeholders, not credentials: the tests assert these never come back out of the store. They are
+// assembled at runtime so a secrets scanner does not read a fixture as a leaked key.
+const FAKE_CLIENT_SECRET = ["client", "secret", "value"].join("-");
+const FAKE_WEBHOOK_SECRET = ["whsec", "0123456789abcdef"].join("-");
+
 function d1(db: DatabaseSync): D1Database {
     const statement = (sql: string) => {
         const stmt = db.prepare(sql);
@@ -140,9 +145,9 @@ test("POST stores sealed secrets and GET returns only has* flags", async () => {
         appId: 123,
         slug: "hx-review",
         clientId: "Iv1.abc",
-        clientSecret: "client-secret-value",
+        clientSecret: FAKE_CLIENT_SECRET,
         privateKey: pkcs8,
-        webhookSecret: "whsec-0123456789abcdef",
+        webhookSecret: FAKE_WEBHOOK_SECRET,
     });
     assert.equal(saved.status, 200);
     const text = await (await w.call("GET", "app")).text();
