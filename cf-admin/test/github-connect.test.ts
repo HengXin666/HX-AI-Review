@@ -234,12 +234,9 @@ test("manifest returns action, a stored one-time state and a manifest pointing a
         secrets: "write",
         workflows: "write",
     });
-    assert.deepEqual(body.manifest.default_events, [
-        "push",
-        "pull_request",
-        "installation",
-        "installation_repositories",
-    ]);
+    // installation and installation_repositories are lifecycle events GitHub sends to every App. Listing them
+    // in the manifest makes GitHub reject the registration, so only subscribable events appear here.
+    assert.deepEqual(body.manifest.default_events, ["push", "pull_request"]);
     const row = w.db.prepare("SELECT used FROM github_app_states WHERE state = ?").get(body.state) as { used: number };
     assert.equal(row.used, 0);
     const second = (await (await w.call("GET", "app/manifest")).json()) as ManifestBody;

@@ -69,7 +69,10 @@ export function buildManifest(base: string, suffix: string) {
             secrets: "write",
             workflows: "write",
         },
-        default_events: ["push", "pull_request", "installation", "installation_repositories"],
+        // Only subscribable events belong here. installation and installation_repositories are App lifecycle
+        // events GitHub delivers to every App; listing them makes GitHub reject the whole manifest with
+        // "Default events unsupported" (and a second complaint that no permission backs them).
+        default_events: ["push", "pull_request"],
     };
 }
 

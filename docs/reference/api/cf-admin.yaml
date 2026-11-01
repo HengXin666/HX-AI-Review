@@ -1059,13 +1059,8 @@ paths:
                                                 items:
                                                     {
                                                         type: string,
-                                                        enum:
-                                                            [
-                                                                push,
-                                                                pull_request,
-                                                                installation,
-                                                                installation_repositories,
-                                                            ],
+                                                        enum: [push, pull_request],
+                                                        description: "Subscribable events only. installation and installation_repositories are App lifecycle events GitHub delivers to every App; listing them makes GitHub reject the manifest with Default events unsupported.",
                                                     }
                 "403": { description: Not an admin }
                 "503": { description: GitHub dependencies not wired }
