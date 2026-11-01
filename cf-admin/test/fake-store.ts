@@ -19,6 +19,11 @@ import type {
     RunRow,
     Store,
     Suppression,
+    UsageAggregate,
+    UsageBucket,
+    UsageCounts,
+    UsageGroup,
+    UsageRange,
 } from "../worker/store/port.ts";
 import { isStale } from "../worker/store/rounds.ts";
 
@@ -270,6 +275,57 @@ export class FakeStore implements Store {
             changed++;
         }
         return changed;
+    }
+    /** Mirrors D1Store.usage: same buckets, same counters, same ordering. */
+    async usage(range: UsageRange, group: UsageGroup): Promise<UsageAggregate> {
+        const rows = this.runs.filter((run) => run.createdAt >= range.from && run.createdAt < range.to);
+        const repoOf = (id: number) => this.repos.find((item) => item.id === id);
+        const keyOf = (run: RunRow): string => {
+            switch (group) {
+                case "day":
+                    return run.createdAt.slice(0, 10);
+                case "repo":
+                    return repoOf(run.repoId)?.name ?? "repo#" + run.repoId;
+                case "provider":
+                    return repoOf(run.repoId)?.provider ?? "";
+                case "kind":
+                    return run.kind;
+                case "status":
+                    return run.status;
+            }
+        };
+        const empty = (): UsageCounts => ({
+            runs: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            costUsd: 0,
+            failedRuns: 0,
+            incompleteRuns: 0,
+            zeroTokenRuns: 0,
+        });
+        const add = (sum: UsageCounts, run: RunRow) => {
+            sum.runs += 1;
+            sum.inputTokens += run.inputTokens;
+            sum.outputTokens += run.outputTokens;
+            sum.costUsd += run.costUsd;
+            sum.failedRuns += run.status === "failed" ? 1 : 0;
+            sum.incompleteRuns += run.status === "incomplete" ? 1 : 0;
+            sum.zeroTokenRuns += run.inputTokens + run.outputTokens === 0 ? 1 : 0;
+        };
+        const totals = empty();
+        const buckets = new Map<string, UsageBucket>();
+        for (const run of rows) {
+            add(totals, run);
+            const key = keyOf(run);
+            const bucket = buckets.get(key) ?? { key, ...empty() };
+            add(bucket, run);
+            buckets.set(key, bucket);
+        }
+        const total = (item: UsageCounts) => item.inputTokens + item.outputTokens;
+        const sorted = [...buckets.values()].sort((a, b) =>
+            group === "day" ? b.key.localeCompare(a.key) : total(b) - total(a) || a.key.localeCompare(b.key),
+        );
+        return { totals: { ...totals, repos: new Set(rows.map((run) => run.repoId)).size }, buckets: sorted };
     }
     async ruleStats(filter: RuleFilter, limit: number): Promise<RuleAggregate> {
         const repoOf = new Map(this.runs.map((run) => [run.id, run.repoId]));

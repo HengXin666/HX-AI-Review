@@ -83,11 +83,24 @@ export type Finding = {
     line: number;
     message: string;
     evidence?: string;
+    /** One-line criteria of the rule that produced the finding; empty or absent for older runs. */
+    criteria?: string;
     patchKey: string | null;
     status?: string;
     /** The run that reported this finding. Present on overview payloads; older pages ignored it. */
     runId?: string;
     fingerprint?: string;
+};
+
+/** One rule definition from GET /api/rules/catalog: what every rule checks, whether or not it ever fired. */
+export type CatalogRule = {
+    id: string;
+    /** none: the id is declared but no check reports it yet. */
+    severity: "error" | "warning" | "none";
+    description: string;
+    criteria: string;
+    /** ci: L0 CI gate rules; local: extra ids of the local diff check; test: local test categories. */
+    source: "ci" | "local" | "test";
 };
 
 export type RuleSummary = {
@@ -192,9 +205,73 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     return (await response.json()) as T;
 }
 
+/** Aggregation dimension of GET /api/stats/usage. */
+export type UsageGroup = "day" | "repo" | "provider" | "kind" | "status";
+
+/** One bucket or one totals row of the usage aggregate. Tokens are the headline: free models cost 0. */
+export type UsageBucket = {
+    key: string;
+    runs: number;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    /** Runs that ended failed. */
+    failedRuns: number;
+    /** Runs that ended incomplete, e.g. the model refused or the budget ran out. */
+    incompleteRuns: number;
+    /** Runs that spent no tokens at all; a run count with zero tokens must never read as "free". */
+    zeroTokenRuns: number;
+};
+
+export type UsageStats = {
+    from: string;
+    to: string;
+    group: UsageGroup;
+    totals: UsageBucket & { cachedTokens: number; repos: number };
+    buckets: UsageBucket[];
+};
+
+/** One day of the seven-day trend. */
+export type UsageTrendDay = {
+    day: string;
+    runs: number;
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    costUsd: number;
+    failedRuns: number;
+    incompleteRuns: number;
+    zeroTokenRuns: number;
+};
+
+/** GET /api/stats/summary: this month against the last, plus the seven-day trend. */
+export type UsageSummary = {
+    month: string;
+    previousMonth: string;
+    current: Omit<UsageTrendDay, "day">;
+    previous: Omit<UsageTrendDay, "day">;
+    /** Percent change in total tokens; null when the previous month has none to compare against. */
+    tokenChangePct: number | null;
+    activeRepos: number;
+    last7Days: UsageTrendDay[];
+};
+
 export const api = {
     overview: () => call<Overview>("GET", "overview"),
     rules: () => call<RuleStats>("GET", "rules"),
+    rulesCatalog: () => call<CatalogRule[]>("GET", "rules/catalog"),
+    /** Omitted bounds default on the Worker side: from = 30 days back, to = today. */
+    usage: (input: { from?: string; to?: string; group: UsageGroup }) => {
+        const query = new URLSearchParams({ group: input.group });
+        if (input.from !== undefined) {
+            query.set("from", input.from);
+        }
+        if (input.to !== undefined) {
+            query.set("to", input.to);
+        }
+        return call<UsageStats>("GET", "stats/usage?" + query.toString());
+    },
+    usageSummary: () => call<UsageSummary>("GET", "stats/summary"),
     updateRepo: (name: string, patch: Partial<Repo>) => call<{ repo: Repo }>("PATCH", "repos/" + name, patch),
     createRepo: (input: RepoInput) => call<{ repo: Repo; token: string }>("POST", "repos", input),
     rotateToken: (name: string) => call<{ token: string }>("POST", `repos/${name}/rotate-token`),

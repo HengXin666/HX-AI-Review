@@ -28,6 +28,7 @@ const scope: ContextScope = {
     kind: "context",
     base: "b",
     head: "h",
+    skipped: [],
     changed: ["api/user.ts"],
     contexts: [{ path: "api/AGENTS.md", reasons: ["ancestor of api/user.ts"] }],
 };

@@ -18,6 +18,8 @@ Worker 服务两种 CR: 一次运行带一个 `kind` (`context` 或 `code`), 仓
 | `DELETE /api/session` | 无 | 清除会话 cookie |
 | `GET /api/prompts`, `POST /api/prompts`, `POST /api/prompts/fold` | Access 或会话 | 列出, 发布或把未折叠的驳回笔记折进下一版附录 |
 | `GET /api/rules` | Access 或会话 cookie | 按规则 id 与严重级聚合 rule_results; `repo`, `severity`, `kind`, `limit` 四个查询参数分别限定仓库, 等级, CR 种类与返回条数 |
+| `GET /api/stats/usage` | Access 或会话 cookie | token 用量聚合, 由 D1 `GROUP BY` 计算; `from`, `to` (UTC 日期, 含两端, 缺省最近 30 天) 与 `group` (day, repo, provider, kind, status) |
+| `GET /api/stats/summary` | Access 或会话 cookie | 总览用的本月 token 总量, 与上月的百分比变化, 本月运行/失败/未完成数, 活跃仓库数, 最近 7 天每日 token |
 | `GET /api/status` | Cloudflare Access | 部署的 commit, 时间, 运行链接, Access 是否配置 |
 | `POST /api/repos` | Access | 登记仓库, 返回一次性明文 token |
 | `PATCH /api/repos/{owner}/{repo}` | Access | 开关, 模式 (full/l0), kind (context/code/both), provider, 模型分级, 月预算 |
@@ -131,6 +133,7 @@ provider 名只允许字母, 数字, `.`, `_`, `-`; 新建 provider 必须显式
 - Model providers: 列表 (key 只显示是否存在) 与新增/修改表单. 新 provider 仍必须填写价格.
 - 提示词附录: 发布 finder/verifier 附录, 或把驳回笔记折进下一版.
 - 审查: 最近运行的列表。点开一行，或打开 worker 写回的 `#/runs/<id>`，进入这一次运行。步骤条按 CR 类型画出（代码 CR 是读取 diff、分组、分块审查、证据校验、钉到行上；上下文 CR 是 L0、对照、证据、补丁）。文件按目录分组，每条发现展示说明和证据引用，并链到 GitHub 上的那一行。没有证据引用的发现标失败，页面不要求人去核对上下文。代码 CR 在步骤条下面读 `trace`: diff 分组摘录、删除行、档位、类别，以及被评论预算抑制的候选。这是摘录，不是带行锚点的只读 diff（[HX-UI#36](https://github.com/HengXin666/HX-UI/issues/36)）。已接受或已驳回的发现不在总览接口里。
+- Token 用量 (`#/usage`): 四张卡片 (本月 input token, 本月 output token, 本月运行数, 失败率), 可切换 日 / 仓库 / provider / kind / status 的聚合表与 7 / 30 / 90 天 / 全部 的时间窗. 主指标是 token, 美元只作参考列 (免费模型恒为 0). 0 token 的行写明是失败还是未完成. 总览顶部有一条精简版 (本月 token 总量与 7 天迷你趋势), 点击进入此页.
 - 待处理发现: 查看补丁, 采纳, 驳回 (必须填写原因, 原因回流抑制表和 prompt_notes). 另列已被后续提交标为 resolved 的发现.
 
 ## 部署与 Access

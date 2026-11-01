@@ -1,9 +1,8 @@
 // Code CR scope: the lines a diff adds, changes, or deletes, not the context files around them.
 // Design and rationale: docs/decisions/2026-10-25-dual-cr-kind.md.
-import { isExcluded } from "../config.ts";
+import { isIgnoredPath } from "../config.ts";
 import type { RepoConfig } from "../config.ts";
 import type { Change } from "../git.ts";
-import { baseName } from "../l0/snapshot.ts";
 
 /**
  * One diff line. `number` is the new-side line (added and context lines).
@@ -30,12 +29,20 @@ export type CodeHunk = {
     exposed: number[];
 };
 
-export type CodeScope = { kind: "code"; base: string; head: string; changed: string[]; hunks: CodeHunk[] };
+export type CodeScope = {
+    kind: "code";
+    base: string;
+    head: string;
+    changed: string[];
+    hunks: CodeHunk[];
+    /** Paths the ignore list kept out of review. Reported, never silently dropped. */
+    skipped: string[];
+};
 
 const HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
 
-function ignored(config: RepoConfig, path: string): boolean {
-    return isExcluded(config, path) || config.scopeIgnore.some((item) => path === item || baseName(path) === item);
+function ignored(config: RepoConfig, path: string, deleted = false): boolean {
+    return isIgnoredPath(config, path, deleted);
 }
 
 /**
@@ -124,10 +131,17 @@ export function computeCodeScope(
 ): CodeScope {
     const changed = changes.flatMap((item) => (item.oldPath ? [item.path, item.oldPath] : [item.path]));
     const hunks: CodeHunk[] = [];
+    const skipped: string[] = [];
     for (const path of new Set(changes.map((item) => item.path))) {
         // An ignored path is vendored or generated content. A deleted file is still reviewed:
         // the defect may be the deletion itself, reported against the old line.
-        if (ignored(config, path)) {
+        // A deletion is reviewable even when the path would be ignored: removing a config file can be the
+        // defect, so the ignore list applies to files that still exist.
+        const deleted = changes.some((item) => item.path === path && item.status === "D");
+        if (ignored(config, path, deleted)) {
+            if (!deleted) {
+                skipped.push(path);
+            }
             continue;
         }
         for (const hunk of parseHunks(readDiff(path))) {
@@ -137,5 +151,5 @@ export function computeCodeScope(
             }
         }
     }
-    return { kind: "code", base, head, changed: [...new Set(changed)].sort(), hunks };
+    return { kind: "code", base, head, changed: [...new Set(changed)].sort(), hunks, skipped: skipped.sort() };
 }

@@ -6,6 +6,7 @@ import { kindLabel, kindVariant, totals } from "../kind.ts";
 import type { KindFilter } from "../kind.ts";
 import { severityLabel, severityVariant, statusLabel, statusVariant } from "../status.ts";
 import type { SectionId } from "../shell.tsx";
+import { UsageStrip } from "./Usage.tsx";
 
 type Props = {
     data: OverviewData;
@@ -30,6 +31,7 @@ export function Overview({ data, filter, onSection, onOpenRun, onVerdict }: Prop
 
     return (
         <>
+            <UsageStrip onOpen={() => onSection("usage")} />
             <StatGrid columns={5}>
                 <StatCard
                     label="错误"

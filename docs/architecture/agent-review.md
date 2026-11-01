@@ -65,7 +65,10 @@ scope (确定性)            diff -> 有新增或删除的 hunk; 两者都没有
 - 审查区间: PR 用与 base 的 merge-base; push 优先用 D1 里的 last_sha (是 head 的祖先时), 否则用事件的 before, 再否则默认分支 merge-base, 都没有时以空树为基 (`context-cr/src/scope/base.ts`). `/init` 只对 context 运行下发 `lastSha`, code 运行拿不到这个游标也不推进它.
 - 对每个变更路径 (改名时新旧路径都算, 忽略 lockfile 等 `scopeIgnore`): 变更的上下文文件本身; 所有祖先目录的 AGENTS.md; 通过链接或反引号路径引用了该文件或其祖先目录的上下文文件 (反向引用索引, 由 runner 在 checkout 上现建, 不依赖 Worker 下发); 变更的 AGENTS.md 的所有后代 AGENTS.md.
 - 每个入选文件带上入选原因 (例如 `ancestor of api/user.ts`), 原因会进入 finder 提示词, 帮模型知道该看哪部分.
-- `exclude` 中的路径 (vendor 内容) 不进 scope. scope 为空时本次运行直接结束, 0 次模型调用.
+- 四条排除规则由同一个判定 `isIgnoredPath` 统一执行, 两个 scope 不再各写一份: `exclude` (路径前缀, vendor 与生成内容), `scopeIgnore` (精确路径或文件名, lockfile 一类), `ignoreExtensions` (后缀, 图片/字体/媒体/压缩包/证书/`.map`/`.min.js` 这类模型无法逐行判断的内容), `ignoreGlobs` (最小 glob, 支持 `*` `**` `?`, 用于 `**/fixtures/**` 这种后缀表达不了的路径).
+- 排除只对**仍然存在**的文件生效: 一个被删除的文件始终进 scope, 因为缺陷可能就是这次删除本身.
+- 被排除的路径不静默消失: 计入 `stages.scope`, 写成 "N skipped by ignore list (前 5 个路径...)". 读者看不到某个文件被跳过, 就会以为它审过了.
+- scope 为空时本次运行直接结束, 0 次模型调用.
 
 `computeCodeScope` 同样只读 git:
 

@@ -97,6 +97,8 @@ export function finding(row: Row): FindingRow & { repo: string } {
         line: Number(row.line),
         message: String(row.message),
         evidence: String(row.evidence),
+        // Rows from before migration 0011 have the column with its default; a missing key reads as empty too.
+        criteria: row.criteria === null || row.criteria === undefined ? "" : String(row.criteria),
         patchKey: row.patch_key === null || row.patch_key === undefined ? null : String(row.patch_key),
         status: statusOf(row.status),
         resolvedByRun: row.resolved_by_run ? String(row.resolved_by_run) : null,

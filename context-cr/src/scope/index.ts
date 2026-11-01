@@ -1,6 +1,6 @@
 import { posix } from "node:path";
 import { AGENTS_FILE } from "../constants.ts";
-import { isExcluded } from "../config.ts";
+import { isExcluded, isIgnoredPath } from "../config.ts";
 import type { RepoConfig } from "../config.ts";
 import type { Change } from "../git.ts";
 import { candidates, contextRefs } from "../l0/refs.ts";
@@ -15,6 +15,8 @@ export type ContextScope = {
     head: string;
     changed: string[];
     contexts: ScopeEntry[];
+    /** Paths the ignore list kept out of review. Reported, never silently dropped. */
+    skipped: string[];
 };
 
 /** Reverse reference index: referenced path (file or directory) -> context files pointing at it. */
@@ -38,8 +40,8 @@ export function buildRefIndex(snapshot: Snapshot, config: RepoConfig): RefIndex 
     return index;
 }
 
-function ignored(config: RepoConfig, path: string): boolean {
-    return isExcluded(config, path) || config.scopeIgnore.some((item) => path === item || baseName(path) === item);
+function ignored(config: RepoConfig, path: string, deleted = false): boolean {
+    return isIgnoredPath(config, path, deleted);
 }
 
 /**
@@ -68,8 +70,13 @@ export function computeScope(
         }
     };
     const changed = changes.flatMap((item) => (item.oldPath ? [item.path, item.oldPath] : [item.path]));
+    const skipped: string[] = [];
     for (const path of new Set(changed)) {
-        if (ignored(config, path)) {
+        const deleted = changes.some((item) => item.path === path && item.status === "D");
+        if (ignored(config, path, deleted)) {
+            if (!deleted) {
+                skipped.push(path);
+            }
             continue;
         }
         if (isContextFile(path)) {
@@ -96,5 +103,5 @@ export function computeScope(
     const contexts = [...entries.entries()]
         .map(([path, reasons]) => ({ path, reasons: [...reasons].sort() }))
         .sort((a, b) => a.path.localeCompare(b.path));
-    return { kind: "context", base, head, changed: [...new Set(changed)].sort(), contexts };
+    return { kind: "context", base, head, changed: [...new Set(changed)].sort(), contexts, skipped: skipped.sort() };
 }

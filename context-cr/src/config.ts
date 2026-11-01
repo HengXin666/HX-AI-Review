@@ -13,6 +13,13 @@ export type RepoConfig = {
     orphanRoots: string[];
     /** Path prefixes excluded from every L0 rule (vendored or generated content). */
     exclude: string[];
+    /**
+     * File extensions no review reads. Binary and generated data cost tokens without anything to judge:
+     * a changed lockfile-sized JSON or an edited image is never a defect a model can see.
+     */
+    ignoreExtensions: string[];
+    /** Glob patterns no review reads, for paths an extension cannot express: `*.min.js`, `fixtures/**`. */
+    ignoreGlobs: string[];
     /** Changed paths that never pull context into scope (lockfiles and similar). */
     scopeIgnore: string[];
     /** Generated or external path prefixes that references may name without them being tracked. */
@@ -35,11 +42,77 @@ export type RepoConfig = {
  */
 export const DEFAULT_EXCLUDES = [".agents/notes/"];
 
+/**
+ * Extensions no review reads. Everything here is either binary (an image, a font, an archive) or data a
+ * model cannot judge (a lockfile, a source map, a certificate). The list is deliberately conservative:
+ * source, config and documentation stay in scope, because a wrong call there is a real defect.
+ */
+export const DEFAULT_IGNORE_EXTENSIONS = [
+    // Images and fonts.
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".avif",
+    ".bmp",
+    ".ico",
+    ".tif",
+    ".tiff",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".otf",
+    ".eot",
+    // Media.
+    ".mp3",
+    ".mp4",
+    ".wav",
+    ".flac",
+    ".ogg",
+    ".webm",
+    ".mov",
+    ".avi",
+    ".mkv",
+    // Archives and binaries.
+    ".zip",
+    ".tar",
+    ".gz",
+    ".bz2",
+    ".xz",
+    ".7z",
+    ".rar",
+    ".pdf",
+    ".exe",
+    ".dll",
+    ".so",
+    ".dylib",
+    ".wasm",
+    ".node",
+    ".class",
+    ".jar",
+    ".pyc",
+    // Generated data a model cannot judge line by line.
+    ".map",
+    ".min.js",
+    ".min.css",
+    ".pem",
+    ".crt",
+    ".key",
+    ".p12",
+    ".pfx",
+    ".lock",
+    ".lockb",
+    ".snap",
+];
+
 export const DEFAULT_CONFIG: RepoConfig = {
     skillRoots: [".agents/skills"],
     concurrentSkills: 1,
     orphanRoots: [DOCS_ROOT],
     exclude: DEFAULT_EXCLUDES,
+    ignoreExtensions: DEFAULT_IGNORE_EXTENSIONS,
+    ignoreGlobs: [],
     scopeIgnore: ["pnpm-lock.yaml", "package-lock.json", "uv.lock", "yarn.lock"],
     virtualPaths: ["scripts/.hx_code_quality/"],
     evidencePrs: 5,
@@ -74,6 +147,10 @@ export function parseConfig(text: string): RepoConfig {
                 : DEFAULT_CONFIG.concurrentSkills,
         orphanRoots: stringList(raw.orphanRoots, DEFAULT_CONFIG.orphanRoots),
         exclude: stringList(raw.exclude, DEFAULT_CONFIG.exclude),
+        ignoreExtensions: stringList(raw.ignoreExtensions, DEFAULT_CONFIG.ignoreExtensions).map((item) =>
+            item.toLowerCase(),
+        ),
+        ignoreGlobs: stringList(raw.ignoreGlobs, DEFAULT_CONFIG.ignoreGlobs),
         scopeIgnore: stringList(raw.scopeIgnore, DEFAULT_CONFIG.scopeIgnore),
         virtualPaths: stringList(raw.virtualPaths, DEFAULT_CONFIG.virtualPaths),
         baseline: typeof raw.baseline === "string" ? raw.baseline : undefined,
@@ -114,4 +191,62 @@ export function loadTrustedConfig(root: string, base: string): RepoConfig {
 
 export function isExcluded(config: RepoConfig, path: string): boolean {
     return config.exclude.some((prefix) => path === prefix || path.startsWith(prefix.replace(/\/?$/, "/")));
+}
+
+/**
+ * The one predicate every scope uses to decide a path is out of review. It replaces two copies of a
+ * weaker check that only knew path prefixes: a changed image or a regenerated lockfile was still sent to
+ * the model, spending tokens on content nothing can judge.
+ *
+ * `deleted` is passed because a deletion is itself reviewable: removing a config file can be the defect,
+ * so the ignore list applies to files that still exist, not to the change that removed them.
+ */
+export function isIgnoredPath(config: RepoConfig, path: string, deleted = false): boolean {
+    if (isExcluded(config, path)) {
+        return true;
+    }
+    if (config.scopeIgnore.some((item) => path === item || path.endsWith("/" + item) || baseNameOf(path) === item)) {
+        return true;
+    }
+    if (deleted) {
+        return false;
+    }
+    const lower = path.toLowerCase();
+    if (config.ignoreExtensions.some((ext) => lower.endsWith(ext))) {
+        return true;
+    }
+    return config.ignoreGlobs.some((glob) => globMatch(glob, path));
+}
+
+/** Last path segment; a local copy keeps config.ts free of a snapshot.ts import just for this. */
+function baseNameOf(path: string): string {
+    const cut = path.lastIndexOf("/");
+    return cut < 0 ? path : path.slice(cut + 1);
+}
+
+/**
+ * Minimal glob: `*` matches within one segment, `**` matches across segments, `?` one character. Anything
+ * else is literal. A full glob engine is not worth a dependency for the two patterns a repo config uses.
+ */
+export function globMatch(glob: string, path: string): boolean {
+    let pattern = "";
+    for (let index = 0; index < glob.length; index += 1) {
+        const char = glob[index];
+        if (char === "*" && glob[index + 1] === "*") {
+            pattern += ".*";
+            index += 1;
+            // `**/` also matches zero segments, so a/b matches **/b.
+            if (glob[index + 1] === "/") {
+                pattern = pattern.slice(0, -2) + "(?:.*/)?";
+                index += 1;
+            }
+        } else if (char === "*") {
+            pattern += "[^/]*";
+        } else if (char === "?") {
+            pattern += "[^/]";
+        } else {
+            pattern += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+        }
+    }
+    return new RegExp("^" + pattern + "$").test(path);
 }

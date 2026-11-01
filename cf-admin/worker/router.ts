@@ -1,5 +1,6 @@
 // Request routing, kept apart from the Worker entry so plain node tests can import it: index.ts must re-export
 // the RealtimeHub Durable Object class, which imports cloudflare:workers and does not load outside workerd.
+import { requireAdmin } from "./auth.ts";
 import type { GitHubDeps } from "./github/deps.ts";
 import { handleGitHub, handleRunnerToken } from "./github/routes.ts";
 import { HttpError, json } from "./http.ts";
@@ -10,9 +11,22 @@ import { handleAdmin } from "./routes/admin.ts";
 import { handleFeedback } from "./routes/feedback.ts";
 import { handleInit } from "./routes/init.ts";
 import { handleRuns, handleSpend } from "./routes/runs.ts";
+import { handleStats } from "./routes/stats.ts";
 import { handleGithubWebhook } from "./routes/webhook.ts";
+import { RULES_CATALOG } from "./rules-catalog.ts";
 
 const GITHUB_PREFIX = "/api/github/";
+const STATS_PREFIX = "/api/stats/";
+const RULES_CATALOG_PATH = "/api/rules/catalog";
+
+/**
+ * GET /api/rules/catalog: every rule definition with its criteria, admin only. Matched before the generic
+ * /api/* dispatch, which would otherwise send it to GET /api/rules (hit statistics, a different thing).
+ */
+async function handleRulesCatalog(request: Request, deps: Deps): Promise<Response> {
+    await requireAdmin(request, deps);
+    return json(RULES_CATALOG);
+}
 
 // http.ts widens Deps.gh to unknown and Deps.live to a loose shape on purpose, so it never imports github/ or
 // realtime/ and cannot close an import cycle. index.ts fills them with githubDeps() and hubFromNamespace(), so the
@@ -64,6 +78,13 @@ export function route(request: Request, deps: Deps): Promise<Response> {
     if (pathname.startsWith(GITHUB_PREFIX)) {
         const segments = pathname.slice(GITHUB_PREFIX.length).split("/").filter(Boolean);
         return handleGitHub(request, deps, githubOrFail(deps.gh as GitHubDeps | undefined), segments);
+    }
+    // Read-only usage statistics; handleStats runs requireAdmin itself.
+    if (pathname.startsWith(STATS_PREFIX)) {
+        return handleStats(request, deps, pathname.slice(STATS_PREFIX.length).split("/").filter(Boolean));
+    }
+    if (method === "GET" && pathname === RULES_CATALOG_PATH) {
+        return handleRulesCatalog(request, deps);
     }
     if (pathname.startsWith("/api/")) {
         return handleAdmin(request, deps, pathname.slice(5).split("/").filter(Boolean));

@@ -39,8 +39,33 @@ components:
                 line: { type: integer, minimum: 1 }
                 message: { type: string }
                 evidence: { type: string }
+                criteria:
+                    type: string
+                    description: >-
+                        One-line criteria of the rule that produced the finding. Optional: runners that predate it
+                        omit the field (or send null) and the finding is stored with an empty criteria, never a 400.
+                        Stored in findings.criteria and rule_results.criteria (migration 0011) and returned on every
+                        finding the admin API lists.
                 fingerprint: { type: string }
                 origin: { type: string, enum: [new, historical] }
+        CatalogRule:
+            type: object
+            description: One rule id the runner can report, with the set it belongs to
+            required: [id, severity, description, criteria, source]
+            properties:
+                id: { type: string }
+                severity:
+                    type: string
+                    enum: [error, warning, none]
+                    description: none marks an id that is declared but reported by no check yet
+                source:
+                    type: string
+                    enum: [ci, local, test]
+                    description: >-
+                        ci is context-cr/src/rules (L0 CI gate), local the extra LOCAL_RULE ids of the local diff
+                        check, test the local test categories (TEST-001..TEST-006)
+                description: { type: string }
+                criteria: { type: string, description: The yardstick the rule applies when it reports a finding }
         Patch:
             type: object
             required: [fingerprint, diff, applies]
@@ -562,6 +587,22 @@ paths:
                 "400": { description: Unknown severity, or a limit outside 1..200 }
                 "403": { description: No Access identity and no valid session }
                 "404": { description: Unknown repository }
+    /api/rules/catalog:
+        get:
+            operationId: getRulesCatalog
+            security: [{ access: [] }, { session: [] }]
+            description: >-
+                All 20 rule ids the runner can report, across the CI gate (context-cr/src/rules), the local diff
+                check (LOCAL_RULE) and the local test categories, in id order, each with its criteria and source,
+                whether or not it ever fired. A static copy kept in cf-admin/worker/rules-catalog.ts; a test fails
+                when it drifts from the runner. This is not /api/rules, which counts hits.
+            responses:
+                "200":
+                    description: Rule definitions
+                    content:
+                        application/json:
+                            schema: { type: array, items: { $ref: "#/components/schemas/CatalogRule" } }
+                "403": { description: No Access identity and no valid session }
     /api/status:
         get:
             operationId: getStatus

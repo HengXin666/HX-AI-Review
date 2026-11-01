@@ -144,6 +144,9 @@ export function Review({ runId, runs, findings, onBack, onVerdict }: Props) {
                             ) : null}
                         </div>
                         <p className="text-[length:var(--fs-sm)] leading-relaxed">{item.message}</p>
+                        {item.criteria ? (
+                            <p className="text-[length:var(--fs-xs)] text-muted-foreground">判据: {item.criteria}</p>
+                        ) : null}
                         {hasEvidence(item) ? (
                             <CodeBlock
                                 code={item.evidence ?? ""}

@@ -107,6 +107,52 @@ function labelSvg(text: string, tone: Tone): string {
     return picture(svg(color.dark), svg(color.light), text, Math.round(width), 20);
 }
 
+type ReportRule = { id: string; severity: string; criteria: string };
+
+/**
+ * The rules this report touched, one row per rule id: an error anywhere makes the row an error, and the first
+ * non-empty criteria wins. The report carries findings, not the rule registry, so the table is built from them.
+ */
+function reportRules(report: ReviewReport): ReportRule[] {
+    const byId = new Map<string, ReportRule>();
+    for (const item of report.findings) {
+        const seen = byId.get(item.ruleId);
+        if (!seen) {
+            byId.set(item.ruleId, { id: item.ruleId, severity: item.severity, criteria: item.criteria ?? "" });
+            continue;
+        }
+        if (item.severity === "error") {
+            seen.severity = "error";
+        }
+        if (!seen.criteria && item.criteria) {
+            seen.criteria = item.criteria;
+        }
+    }
+    return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/** Collapsed rule table at the top, so a reader knows what each rule measures before reading verdicts. */
+function rulesDetails(rules: ReportRule[]): string[] {
+    if (rules.length === 0) {
+        return [];
+    }
+    return [
+        "<details>",
+        `<summary>本次报告涉及的规则 (${rules.length} 条): 先看判据, 再看结论</summary>`,
+        "",
+        "<table>",
+        '<tr><th align="left">ID</th><th align="left">等级</th><th align="left">判据</th></tr>',
+        ...rules.map(
+            (rule) =>
+                `<tr><td><code>${escapeHtml(rule.id)}</code></td><td>${escapeHtml(rule.severity)}</td>` +
+                `<td>${rule.criteria ? escapeHtml(rule.criteria) : "-"}</td></tr>`,
+        ),
+        "</table>",
+        "</details>",
+        "",
+    ];
+}
+
 /** One summary row: label, badge, and the plain number so it survives a client that drops images. */
 function metricRow(label: string, value: number, tone: Tone, note: string): string {
     return `<tr><td><strong>${label}</strong></td><td align="right">${countSvg(value, tone, label)} ${value}</td><td>${note}</td></tr>`;
@@ -142,6 +188,7 @@ export function renderComment(report: ReviewReport, links: CommentLinks, note?: 
     if (note) {
         out.push(`> ${escapeMd(note)}`, "");
     }
+    out.push(...rulesDetails(reportRules(report)));
     // Note stays Markdown (it is operator text in a blockquote); findings are HTML table cells and are
     // escaped by escapeHtml at the point they are interpolated.
 
@@ -174,11 +221,16 @@ export function renderComment(report: ReviewReport, links: CommentLinks, note?: 
             '<tr><th align="left">等级</th><th align="left">规则</th><th align="left">位置</th><th align="left">说明</th></tr>',
             ...report.findings.map((item) => {
                 const tone: Tone = item.severity === "error" ? "bad" : "warn";
+                // Criteria sits on its own row under the finding: a fifth column would squeeze the message.
+                const criteria = item.criteria
+                    ? `<tr><td></td><td colspan="3"><sub>判据: ${escapeHtml(item.criteria)}</sub></td></tr>`
+                    : "";
                 return (
                     `<tr><td>${labelSvg(item.severity, tone)}</td>` +
                     `<td><code>${escapeHtml(item.ruleId)}</code></td>` +
                     `<td><code>${escapeHtml(item.path)}:${item.line}</code></td>` +
-                    `<td>${escapeHtml(item.message)}</td></tr>`
+                    `<td>${escapeHtml(item.message)}</td></tr>` +
+                    criteria
                 );
             }),
             "</table>",

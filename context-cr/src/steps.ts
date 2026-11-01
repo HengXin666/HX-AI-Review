@@ -532,9 +532,21 @@ async function reviewRun(root: string, state: InitState, live: LiveReport): Prom
     return ai;
 }
 
-/** One line per scope kind, so the report says what was actually in scope. */
+/**
+ * One line per scope kind, so the report says what was actually in scope. A skipped path is named rather
+ * than silently absent: a reader who cannot see that a file was left out will believe it was reviewed.
+ */
 function scopeStage(scope: RunScope): string {
-    return scope.kind === "code" ? `${scope.hunks.length} diff hunk(s)` : `${scope.contexts.length} context file(s)`;
+    const base =
+        scope.kind === "code" ? `${scope.hunks.length} diff hunk(s)` : `${scope.contexts.length} context file(s)`;
+    // A scope written by an older runner has no skipped list; an absent list means nothing was skipped.
+    const skipped = scope.skipped ?? [];
+    if (!skipped.length) {
+        return base;
+    }
+    const shown = skipped.slice(0, 5).join(", ");
+    const more = skipped.length > 5 ? ` and ${skipped.length - 5} more` : "";
+    return `${base}, ${skipped.length} skipped by ignore list (${shown}${more})`;
 }
 
 function aiStage(ai: AiState): string {

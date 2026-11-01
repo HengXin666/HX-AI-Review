@@ -16,6 +16,10 @@ import type {
     RunRow,
     Store,
     Suppression,
+    UsageAggregate,
+    UsageCounts,
+    UsageGroup,
+    UsageRange,
 } from "./port.ts";
 
 const REPO_COLUMNS: Record<keyof RepoPatch, string> = {
@@ -28,6 +32,42 @@ const REPO_COLUMNS: Record<keyof RepoPatch, string> = {
     budgetUsd: "budget_usd",
     perRunCapUsd: "per_run_cap_usd",
 };
+
+/**
+ * SQL key of each usage dimension. Fixed strings, never user input: the route validates `group` against
+ * UsageGroup first, and this table is the only place a group turns into SQL.
+ */
+const USAGE_KEYS: Record<UsageGroup, string> = {
+    day: "substr(runs.created_at, 1, 10)",
+    repo: "COALESCE(repos.name, 'repo#' || runs.repo_id)",
+    provider: "COALESCE(repos.provider, '')",
+    kind: "runs.kind",
+    status: "runs.status",
+};
+
+/** One SELECT list for totals and buckets, so both count failures and zero-token runs the same way. */
+const USAGE_SUMS = `COUNT(*) AS runs,
+            COALESCE(SUM(runs.input_tokens), 0) AS input_tokens,
+            COALESCE(SUM(runs.output_tokens), 0) AS output_tokens,
+            COALESCE(SUM(runs.cost_usd), 0) AS cost_usd,
+            COALESCE(SUM(CASE WHEN runs.status = 'failed' THEN 1 ELSE 0 END), 0) AS failed_runs,
+            COALESCE(SUM(CASE WHEN runs.status = 'incomplete' THEN 1 ELSE 0 END), 0) AS incomplete_runs,
+            COALESCE(SUM(CASE WHEN runs.input_tokens + runs.output_tokens = 0 THEN 1 ELSE 0 END), 0) AS zero_token_runs`;
+
+const USAGE_FROM = `FROM runs LEFT JOIN repos ON repos.id = runs.repo_id
+            WHERE runs.created_at >= ? AND runs.created_at < ?`;
+
+function usageCounts(row: Row | null | undefined): UsageCounts {
+    return {
+        runs: Number(row?.runs ?? 0),
+        inputTokens: Number(row?.input_tokens ?? 0),
+        outputTokens: Number(row?.output_tokens ?? 0),
+        costUsd: Number(row?.cost_usd ?? 0),
+        failedRuns: Number(row?.failed_runs ?? 0),
+        incompleteRuns: Number(row?.incomplete_runs ?? 0),
+        zeroTokenRuns: Number(row?.zero_token_runs ?? 0),
+    };
+}
 
 export class D1Store implements Store {
     private readonly db: D1Database;
@@ -139,9 +179,9 @@ export class D1Store implements Store {
             input_tokens, output_tokens, cost_usd, duration_ms, patch_branch, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
         const findingSql = `INSERT INTO findings (id, run_id, repo_id, kind, fingerprint, rule_id, severity, path, line, message, evidence,
-            patch_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`;
-        const ruleSql = `INSERT INTO rule_results (finding_id, run_id, rule_id, severity, file, line, status, waived)
-            VALUES (?, ?, ?, ?, ?, ?, 'open', 0)`;
+            criteria, patch_key, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')`;
+        const ruleSql = `INSERT INTO rule_results (finding_id, run_id, rule_id, severity, file, line, criteria, status, waived)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'open', 0)`;
         await this.db.batch([
             this.db
                 .prepare(runSql)
@@ -179,10 +219,13 @@ export class D1Store implements Store {
                         f.line,
                         f.message,
                         f.evidence,
+                        f.criteria ?? "",
                         f.patchKey,
                     ),
             ),
-            ...findings.map((f) => this.db.prepare(ruleSql).bind(f.id, f.runId, f.ruleId, f.severity, f.path, f.line)),
+            ...findings.map((f) =>
+                this.db.prepare(ruleSql).bind(f.id, f.runId, f.ruleId, f.severity, f.path, f.line, f.criteria ?? ""),
+            ),
         ]);
     }
 
@@ -424,6 +467,25 @@ export class D1Store implements Store {
             byRule,
             bySeverity,
             topRule: byRule[0]?.ruleId ?? null,
+        };
+    }
+
+    async usage(range: UsageRange, group: UsageGroup): Promise<UsageAggregate> {
+        const key = USAGE_KEYS[group];
+        // Aggregation happens in D1: one row for the window, one row per bucket, never the raw runs.
+        const totalsSql = `SELECT ${USAGE_SUMS}, COUNT(DISTINCT runs.repo_id) AS repos ${USAGE_FROM}`;
+        const order =
+            group === "day"
+                ? "bucket DESC"
+                : "(COALESCE(SUM(runs.input_tokens), 0) + COALESCE(SUM(runs.output_tokens), 0)) DESC, bucket";
+        const bucketsSql = `SELECT ${key} AS bucket, ${USAGE_SUMS} ${USAGE_FROM} GROUP BY bucket ORDER BY ${order}`;
+        const [totals, buckets] = await Promise.all([
+            this.one(totalsSql, range.from, range.to),
+            this.all(bucketsSql, range.from, range.to),
+        ]);
+        return {
+            totals: { ...usageCounts(totals), repos: Number(totals?.repos ?? 0) },
+            buckets: buckets.map((row) => ({ key: String(row.bucket), ...usageCounts(row) })),
         };
     }
 

@@ -82,9 +82,11 @@ workflow_call (业务仓库调用, 本仓库自身不跑)
 
 ## L0 规则 (context-cr)
 
-配置在根目录 `.hx-context-review.json` (技能根, 排除路径, 孤儿检查根, 基线), 基线 `scripts/quality/context-baseline.json`. 每条规则独立运行, 某条崩溃记为工具错误而不是空通过.
+配置在根目录 `.hx-context-review.json` (技能根, 排除路径, 孤儿检查根, 基线, 忽略的后缀与 glob), 基线 `scripts/quality/context-baseline.json`. 每条规则独立运行, 某条崩溃记为工具错误而不是空通过.
 
 `exclude` 里的路径从不注入, 因此既不计入 HC-BUDGET 的祖先 AGENTS.md 字节数, 也不计入技能注入上界: 被排除的 AGENTS.md 或 SKILL.md 不会因为体积大而把 CI 卡住. 这与 HC-CONTEXT, HC-DOCNAME, CX-SKILL 已有的排除行为一致.
+
+`ignoreExtensions` 与 `ignoreGlobs` 只影响 review 送审的文件 (scope), 不影响 L0 规则与质量流水线本身: 它们挡掉的是图片, 字体, 媒体, 压缩包, 证书, `.map`, `.min.js`, `**/dist/**` 这类模型无法逐行判断的内容, 省的是 token 而不是检查. 命中的文件会计入报告的 `stages.scope`, 被删除的文件不跳过, 因为删除本身可能是缺陷.
 
 | 规则 | 等级 | 验证内容 |
 |---|---|---|

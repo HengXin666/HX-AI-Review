@@ -16,17 +16,21 @@ import { Prompts } from "./sections/Prompts.tsx";
 import { Providers } from "./sections/Providers.tsx";
 import { Repos } from "./sections/Repos.tsx";
 import { Review } from "./sections/Review.tsx";
+import { RuleCatalog } from "./sections/RuleCatalog.tsx";
 import { Rules } from "./sections/Rules.tsx";
 import { Runs } from "./sections/Runs.tsx";
+import { Usage } from "./sections/Usage.tsx";
 
 const SECTIONS: SectionId[] = [
     "overview",
     "runs",
+    "usage",
     "findings",
     "repos",
     "providers",
     "github",
     "rules",
+    "rules-catalog",
     "prompts",
     "deploy",
     "live",
@@ -197,6 +201,8 @@ export function App() {
                 ) : (
                     <Runs runs={data.runs} filter={filter} onOpen={openRun} />
                 );
+            case "usage":
+                return <Usage />;
             case "findings":
                 return (
                     <Findings
@@ -212,6 +218,8 @@ export function App() {
                 return <Providers providers={data.providers} onSave={saveProvider} />;
             case "rules":
                 return <Rules stats={rules} filter={filter} />;
+            case "rules-catalog":
+                return <RuleCatalog />;
             case "prompts":
                 return <Prompts prompts={data.prompts ?? []} notes={data.notes ?? []} onDone={reload} onError={fail} />;
             case "deploy":

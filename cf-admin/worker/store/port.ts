@@ -81,6 +81,11 @@ export type FindingRow = {
     line: number;
     message: string;
     evidence: string;
+    /**
+     * One-line criteria of the rule that produced the finding, as the runner reported it. Empty when the
+     * runner predates criteria or the finding came from a source without one (migration 0011).
+     */
+    criteria?: string;
     patchKey: string | null;
     status: FindingStatus;
     /** Run that marked this finding resolved, when status is resolved. */
@@ -155,6 +160,34 @@ export type PromptNote = {
     createdAt: string;
 };
 
+/** Dimension one usage bucket is keyed by. provider is the repo's configured provider, since runs do not store one. */
+export type UsageGroup = "day" | "repo" | "provider" | "kind" | "status";
+
+/** Half-open window over runs.created_at, both bounds ISO timestamps in UTC: from <= created_at < to. */
+export type UsageRange = { from: string; to: string };
+
+/**
+ * Token counts summed over runs. failedRuns counts status failed (blocking L0 errors) and incompleteRuns
+ * status incomplete (the model stage did not finish, for example a 402 from the provider); zeroTokenRuns
+ * counts runs that reported no input and no output tokens at all, so "4 runs, 0 tokens" can be explained.
+ */
+export type UsageCounts = {
+    runs: number;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    failedRuns: number;
+    incompleteRuns: number;
+    zeroTokenRuns: number;
+};
+
+export type UsageBucket = UsageCounts & { key: string };
+
+/** Totals over the whole window plus how many distinct repos ran in it. */
+export type UsageTotals = UsageCounts & { repos: number };
+
+export type UsageAggregate = { totals: UsageTotals; buckets: UsageBucket[] };
+
 export interface Store {
     repoByTokenHash(hash: string): Promise<RepoRow | null>;
     repoByName(name: string): Promise<RepoRow | null>;
@@ -208,6 +241,12 @@ export interface Store {
     finding(id: string): Promise<FindingRow | null>;
     /** Rule and severity totals over recorded rule results, most frequent rule first. */
     ruleStats(filter: RuleFilter, limit: number): Promise<RuleAggregate>;
+    /**
+     * Token usage of the runs in `range`, summed by SQL: totals over the window and one bucket per value of
+     * `group`. day buckets are UTC dates (YYYY-MM-DD), newest first; the other groups are ordered by total
+     * tokens, largest first. An empty window is all zeros, never an error.
+     */
+    usage(range: UsageRange, group: UsageGroup): Promise<UsageAggregate>;
     /** Mark every open finding of the repo with this fingerprint; rejected also feeds suppressions and prompt notes. */
     feedback(input: FeedbackInput): Promise<number>;
     /**

@@ -115,10 +115,25 @@ function findings(value: unknown): InFinding[] {
             line: line(item.line),
             message: field(item, "message"),
             evidence: text(item.evidence, "finding evidence") ?? "",
+            criteria: criteriaOf(item.criteria),
             fingerprint: field(item, "fingerprint"),
             origin: originOf(item.origin),
         };
     });
+}
+
+/**
+ * Rule criteria is optional: runners older than criteria send no such field, and the AI stage may send null.
+ * Both mean "no criteria" and store as the empty string; only a present non-string value is a 400.
+ */
+function criteriaOf(value: unknown): string {
+    if (value === undefined || value === null) {
+        return "";
+    }
+    if (typeof value !== "string") {
+        throw new HttpError(400, "finding criteria must be a string");
+    }
+    return value;
 }
 
 function originOf(value: unknown): string {

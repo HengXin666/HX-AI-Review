@@ -4,10 +4,11 @@ import {
     BarChart3,
     BookText,
     Bot,
+    ClipboardList,
     FileClock,
     FolderGit2,
+    Gauge,
     LayoutDashboard,
-    Plug,
     ServerCog,
     Sparkles,
     TriangleAlert,
@@ -21,7 +22,18 @@ import type { KindFilter } from "./kind.ts";
 
 /** One entry of the left rail. "overview" is the dashboard; the rest are the detail screens. */
 export type SectionId =
-    "overview" | "runs" | "findings" | "repos" | "providers" | "rules" | "prompts" | "deploy" | "live" | "github";
+    | "overview"
+    | "runs"
+    | "usage"
+    | "findings"
+    | "repos"
+    | "providers"
+    | "rules"
+    | "rules-catalog"
+    | "prompts"
+    | "deploy"
+    | "live"
+    | "github";
 
 export type NavEntry = { id: SectionId; label: string; icon: LucideIcon; badge?: string };
 
@@ -30,6 +42,7 @@ export function navEntries(openFindings: number): NavEntry[] {
     return [
         { id: "overview", label: "总览", icon: LayoutDashboard },
         { id: "runs", label: "审查", icon: FileClock },
+        { id: "usage", label: "Token 用量", icon: Gauge },
         {
             id: "findings",
             label: "待处理发现",
@@ -40,10 +53,10 @@ export function navEntries(openFindings: number): NavEntry[] {
         { id: "providers", label: "模型供应商", icon: ServerCog },
         { id: "github", label: "GitHub App", icon: Bot },
         { id: "rules", label: "规则统计", icon: BarChart3 },
+        { id: "rules-catalog", label: "规则一览", icon: ClipboardList },
         { id: "prompts", label: "提示词附录", icon: BookText },
         { id: "deploy", label: "部署", icon: Sparkles },
         { id: "live", label: "实时", icon: Activity },
-        { id: "github", label: "GitHub App", icon: Plug },
     ];
 }
 
@@ -66,10 +79,12 @@ function StatusStrip({ data }: { data: Overview }) {
 const SECTION_DESC: Record<SectionId, string> = {
     overview: "两种 CR 的健康度一屏看完: 错误与告警, 待处理发现, 花费与运行数。",
     runs: "打开一次运行，看步骤、按目录分的文件，以及每条发现的证据引用。",
+    usage: "token 消耗: 本月总量, 按日 / 仓库 / provider / kind / status 聚合, 以及 0 token 的运行是否因失败。",
     findings: "待处理发现可以接受或驳回; 驳回需要原因, 会写回抑制表。",
     repos: "登记仓库, 选择它跑哪种 CR, 并设置月度预算与令牌。",
     providers: "模型供应商的地址, 协议与单价; 密钥本身只在 Worker secret 里。",
     rules: "按规则与等级汇总命中次数, 规则命名空间决定它属于哪种 CR。",
+    "rules-catalog": "全部规则的定义: 每条规则的等级, 它管什么, 以及判定命中的判据。",
     prompts: "运维追加在系统提示词之后的附录, 以及待折叠的驳回记录。",
     deploy: "当前部署的提交, Access 配置状态与重新部署入口。",
     live: "正在运行的检查: 哪些仓库与类型在跑, 阶段进度, 实时日志与本次发现.",

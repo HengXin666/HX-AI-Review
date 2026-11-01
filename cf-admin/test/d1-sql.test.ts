@@ -455,3 +455,63 @@ test("a context round never resolves a code finding it did not look at", async (
     const status = (id: string) => (db.prepare("SELECT status FROM findings WHERE id = ?").get(id) as Row).status;
     assert.equal(status("code1-0"), "open");
 });
+
+test("migration 0011: criteria round-trips through findings and rule_results, and a row without it reads empty", async () => {
+    const { db, store, repo } = await seeded();
+    const run = {
+        id: "c1",
+        repoId: repo.id,
+        kind: "context" as const,
+        sha: "c1",
+        baseSha: "base",
+        event: "push",
+        prNumber: null,
+        status: "warned",
+        l0Only: false,
+        errors: 0,
+        warnings: 2,
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0,
+        durationMs: 1,
+        patchBranch: null,
+        createdAt: NOW,
+    };
+    const base = {
+        runId: "c1",
+        repoId: repo.id,
+        kind: "context" as const,
+        severity: "warning",
+        path: "src",
+        line: 1,
+        message: "m",
+        evidence: "e",
+        patchKey: null,
+        status: "open" as const,
+    };
+    await store.insertRun(run, [
+        { ...base, id: "c1-0", fingerprint: "a", ruleId: "ARCH-003", criteria: "at most 6 files per directory" },
+        // An older runner never sent criteria: the row must still insert and read back as empty.
+        { ...base, id: "c1-1", fingerprint: "b", ruleId: "CX-AI" },
+    ]);
+    const stored = db.prepare("SELECT id, criteria FROM findings ORDER BY id").all() as Row[];
+    assert.deepEqual(
+        stored.map((row) => [row.id, row.criteria]),
+        [
+            ["c1-0", "at most 6 files per directory"],
+            ["c1-1", ""],
+        ],
+    );
+    const results = db.prepare("SELECT finding_id, criteria FROM rule_results ORDER BY finding_id").all() as Row[];
+    assert.deepEqual(
+        results.map((row) => [row.finding_id, row.criteria]),
+        [
+            ["c1-0", "at most 6 files per directory"],
+            ["c1-1", ""],
+        ],
+    );
+    const open = await store.openFindings(10);
+    assert.equal(open.find((item) => item.id === "c1-0")!.criteria, "at most 6 files per directory");
+    assert.equal(open.find((item) => item.id === "c1-1")!.criteria, "");
+    assert.equal((await store.finding("c1-0"))!.criteria, "at most 6 files per directory");
+});

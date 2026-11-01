@@ -82,3 +82,43 @@ test("the marker stays first, so the publisher still finds and updates its own c
     assert.ok(renderComment(report([]), {}).startsWith("<!-- hx-context-review:code -->"));
     assert.ok(renderComment(report([], "context"), {}).startsWith("<!-- hx-context-review:context -->"));
 });
+
+test("each finding with criteria gets a criteria line under it, and an empty criteria adds nothing", () => {
+    const body = renderComment(
+        report([
+            finding({ ruleId: "ARCH-003", criteria: "at most 6 files per directory", fingerprint: "a" }),
+            finding({ ruleId: "CODE-AI", criteria: "", fingerprint: "b", line: 20 }),
+        ]),
+        {},
+    );
+    assert.match(body, /<tr><td><\/td><td colspan="3"><sub>判据: at most 6 files per directory<\/sub><\/td><\/tr>/);
+    assert.equal(body.match(/<sub>判据: /g)?.length, 1);
+    // The findings table keeps its four columns: criteria is a row, not a fifth header.
+    assert.match(
+        body,
+        /<th align="left">等级<\/th><th align="left">规则<\/th><th align="left">位置<\/th><th align="left">说明<\/th><\/tr>/,
+    );
+});
+
+test("a collapsed rule table at the top lists each rule of the report once with its severity and criteria", () => {
+    const body = renderComment(
+        report([
+            finding({ ruleId: "ARCH-003", severity: "warning", criteria: "", fingerprint: "a" }),
+            finding({ ruleId: "ARCH-003", severity: "error", criteria: "at most 6 files", fingerprint: "b", line: 2 }),
+            finding({ ruleId: "CODE-AI", criteria: "", fingerprint: "c", line: 3 }),
+        ]),
+        {},
+    );
+    const details = body.slice(body.indexOf("<details>"), body.indexOf("</details>"));
+    assert.ok(body.indexOf("<details>") > 0 && body.indexOf("<details>") < body.indexOf('<th align="left">位置'));
+    assert.match(details, /本次报告涉及的规则 \(2 条\)/);
+    assert.match(details, /<code>ARCH-003<\/code><\/td><td>error<\/td><td>at most 6 files<\/td>/);
+    assert.match(details, /<code>CODE-AI<\/code><\/td><td>warning<\/td><td>-<\/td>/);
+    assert.equal(renderComment(report([]), {}).includes("<details>"), false);
+});
+
+test("criteria text is escaped like any other finding field", () => {
+    const body = renderComment(report([finding({ criteria: "<script>x</script>" })]), {});
+    assert.doesNotMatch(body, /<script>/);
+    assert.match(body, /判据: &lt;script&gt;/);
+});

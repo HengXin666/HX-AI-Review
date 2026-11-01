@@ -244,6 +244,7 @@ test("a scope left by the other kind is refused instead of reviewed under the wr
             base: "b",
             head: "h",
             changed: ["src/a.ts"],
+            skipped: [],
             contexts: [{ path: "AGENTS.md", reasons: ["changed"] }],
         },
         { ...base, run: fake(calls) },
