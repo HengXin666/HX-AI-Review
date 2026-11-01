@@ -55,11 +55,13 @@ test("hunks keep only the lines the diff added, with their new-side numbers", ()
             .join(","),
         "1,2,3,4",
     );
-    // The removed line has no new-side number, so it can never be reported against the new file.
-    assert.equal(hunk.lines.find((item) => item.raw.startsWith("-"))?.number, undefined);
+    // The removed line has no new-side number. It keeps the old number so a deletion can be reported.
+    const removed = hunk.lines.find((item) => item.raw.startsWith("-"));
+    assert.equal(removed?.number, undefined);
+    assert.equal(removed?.old, 2);
 });
 
-test("code scope covers added lines, skips deleted and ignored files, and keeps both rename names", () => {
+test("code scope covers added lines, skips an empty diff and ignored files, and keeps both rename names", () => {
     const read = (path: string): string => (path === "src/a.ts" ? DIFF : "");
     const changes = [
         { status: "M", path: "src/a.ts" },
@@ -80,12 +82,35 @@ test("code scope covers added lines, skips deleted and ignored files, and keeps 
     assert.equal(scope.kind, "code");
 });
 
-test("a hunk that only removes lines yields nothing to review", () => {
-    const removal = ["diff --git a/x.ts b/x.ts", "--- a/x.ts", "+++ b/x.ts", "@@ -1,2 +1,1 @@", "-a", "-b", " c"].join(
+test("a hunk that only removes lines stays in scope, numbered on the old side", () => {
+    const removal = ["diff --git a/x.ts b/x.ts", "--- a/x.ts", "+++ b/x.ts", "@@ -1,3 +1,1 @@", "-a", "-b", " c"].join(
         "\n",
     );
     const scope = computeCodeScope(() => removal, DEFAULT_CONFIG, [{ status: "M", path: "x.ts" }], "b", "h");
-    assert.deepEqual(scope.hunks, []);
+    assert.equal(scope.hunks.length, 1);
+    assert.deepEqual(scope.hunks[0].lines, []);
+    assert.deepEqual(scope.hunks[0].removed, [1, 2]);
+    // The surviving context line is exposed because this hunk deleted something.
+    assert.deepEqual(scope.hunks[0].exposed, [1]);
+    assert.match(scope.hunks[0].body, /L1\| -a/);
+});
+
+test("a deleted file is reviewed from its old-side hunks", () => {
+    const removal = [
+        "diff --git a/src/gone.ts b/src/gone.ts",
+        "deleted file mode 100644",
+        "--- a/src/gone.ts",
+        "+++ /dev/null",
+        "@@ -1,2 +0,0 @@",
+        "-export const guard = true;",
+        "-export const other = false;",
+    ].join("\n");
+    const scope = computeCodeScope(() => removal, DEFAULT_CONFIG, [{ status: "D", path: "src/gone.ts" }], "b", "h");
+    assert.deepEqual(
+        scope.hunks.map((item) => item.path),
+        ["src/gone.ts"],
+    );
+    assert.deepEqual(scope.hunks[0].removed, [1, 2]);
 });
 test("an older Worker that omits kind answers with the kind the run asked for", () => {
     // A caller that asked for a code CR must not silently get a context CR from an older Worker.

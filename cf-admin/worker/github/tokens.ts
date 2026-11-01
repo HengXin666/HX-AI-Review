@@ -21,6 +21,29 @@ export async function jwtFor(gh: GitHubDeps): Promise<string> {
     return appJwt(pem, app.appId, gh.now());
 }
 
+/**
+ * A token for one repository, narrowed to it, and never cached: a per-repository token in a shared cache is how
+ * one repository ends up acting as another. The runner is the only caller that needs this scope, and it owns
+ * exactly one repository.
+ */
+export async function repoScopedToken(gh: GitHubDeps, installationId: number, repo: string): Promise<string> {
+    return (await mintScoped(gh, installationId, repo)).token;
+}
+
+/** Same exchange, keeping the expiry so GET /github/token can report it without a second call. */
+export async function mintScoped(
+    gh: GitHubDeps,
+    installationId: number,
+    repo: string,
+): Promise<{ token: string; expiresAt: string }> {
+    const fresh = await createInstallationToken(gh.fetch, await jwtFor(gh), installationId, repo);
+    return { token: fresh.token, expiresAt: fresh.expires_at };
+}
+
+/**
+ * An installation-wide token, cached until shortly before GitHub expires it. Dispatching a workflow and listing
+ * installations need the installation itself rather than one repository.
+ */
 export async function installationToken(gh: GitHubDeps, installationId: number): Promise<string> {
     const kek = requireKek(gh.secret);
     const now = gh.now();
@@ -28,7 +51,7 @@ export async function installationToken(gh: GitHubDeps, installationId: number):
     if (cached && Date.parse(cached.expiresAt) - TOKEN_EARLY_EXPIRY_MS > now.getTime()) {
         return cached.token;
     }
-    const fresh = await createInstallationToken(gh.fetch, await jwtFor(gh), installationId);
+    const fresh = await createInstallationToken(gh.fetch, await jwtFor(gh), installationId, "");
     await gh.store.cacheToken(installationId, fresh.token, fresh.expires_at, kek, now.toISOString());
     return fresh.token;
 }

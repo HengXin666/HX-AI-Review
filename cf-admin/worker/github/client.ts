@@ -97,12 +97,29 @@ export function listInstallations(fetchFn: Fetch, jwt: string): Promise<GitHubIn
     return githubRequest(fetchFn, "GET", "/app/installations?per_page=100", jwt);
 }
 
+/** The same permission set main asked for: what posting a review and writing a caller workflow need. */
+const INSTALLATION_PERMISSIONS = {
+    contents: "write",
+    issues: "write",
+    pull_requests: "write",
+    metadata: "read",
+} as const;
+
+/**
+ * `repo` narrows the token to one repository; an empty string asks for an installation-wide token. Narrowing
+ * matters: the runner only ever acts on its own repository, so its token should not reach the others.
+ */
 export function createInstallationToken(
     fetchFn: Fetch,
     jwt: string,
     installationId: number,
+    repo: string,
 ): Promise<InstallationToken> {
-    return githubRequest(fetchFn, "POST", `/app/installations/${installationId}/access_tokens`, jwt);
+    const name = repo.split("/")[1];
+    const scope = name
+        ? { repositories: [name], permissions: INSTALLATION_PERMISSIONS }
+        : { permissions: INSTALLATION_PERMISSIONS };
+    return githubRequest(fetchFn, "POST", `/app/installations/${installationId}/access_tokens`, jwt, scope);
 }
 
 export async function listInstallationRepos(

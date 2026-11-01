@@ -48,6 +48,11 @@
             "doc": "docs/architecture/agent-review.md",
             "watch": ["context-cr/src/review/", "context-cr/src/scope/", "context-cr/src/constants.ts"],
             "reason": "AI review agent design: roles, inputs, gates, limits"
+        },
+        {
+            "doc": "docs/reference/code-eval.md",
+            "watch": ["context-cr/src/eval/", "context-cr/eval/"],
+            "reason": "offline golden-set replay of the code reviewer"
         }
     ]
 }

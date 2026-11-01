@@ -175,6 +175,11 @@ function StatusCard({ app }: { app: Load<GitHubAppInfo> }) {
                 <span>
                     slug: <span className="font-mono">{view?.slug || "-"}</span>
                 </span>
+                {/* The login reviews actually appear as. Without it an admin cannot tell whether a comment will
+                    come from the App or from github-actions[bot]. */}
+                <span>
+                    评论身份: <span className="font-mono">{view?.slug ? view.slug + "[bot]" : "-"}</span>
+                </span>
                 <span>
                     clientId: <span className="font-mono">{view?.clientId || "-"}</span>
                 </span>

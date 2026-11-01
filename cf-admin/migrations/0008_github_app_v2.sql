@@ -22,20 +22,18 @@ CREATE TABLE github_apps (
     installed_at TEXT
 );
 
-CREATE TABLE github_installations (
-    installation_id INTEGER PRIMARY KEY,
-    account TEXT NOT NULL DEFAULT '',
-    account_type TEXT NOT NULL DEFAULT '',
-    repository_selection TEXT NOT NULL DEFAULT 'selected',
-    -- JSON array of owner/repo names the installation can reach, kept current by installation_repositories.
-    repos TEXT NOT NULL DEFAULT '[]',
-    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended', 'deleted')),
-    -- Token cache: treated as expired 5 minutes before token_expires_at.
-    token_enc TEXT,
-    token_expires_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
+-- github_installations already exists from 0006_github_app.sql, which owns the columns that routes/github.ts
+-- reads (account_login, repos_json, all_repos). The columns below are the ones this side reads: repos as a JSON
+-- array for installationIdForRepo, status for suspension, and the sealed installation-token cache. During this
+-- merge both method sets write the same table; 0010_installation_columns.sql drops the unused side.
+ALTER TABLE github_installations ADD COLUMN account TEXT NOT NULL DEFAULT '';
+ALTER TABLE github_installations ADD COLUMN repository_selection TEXT NOT NULL DEFAULT 'selected';
+ALTER TABLE github_installations ADD COLUMN repos TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE github_installations ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE github_installations ADD COLUMN token_enc TEXT;
+ALTER TABLE github_installations ADD COLUMN token_expires_at TEXT;
+ALTER TABLE github_installations ADD COLUMN created_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE github_installations ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE run_queue (
     id TEXT PRIMARY KEY,

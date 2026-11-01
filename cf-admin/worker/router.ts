@@ -1,7 +1,7 @@
 // Request routing, kept apart from the Worker entry so plain node tests can import it: index.ts must re-export
 // the RealtimeHub Durable Object class, which imports cloudflare:workers and does not load outside workerd.
 import type { GitHubDeps } from "./github/deps.ts";
-import { handleGitHub } from "./github/routes.ts";
+import { handleGitHub, handleRunnerToken } from "./github/routes.ts";
 import { HttpError, json } from "./http.ts";
 import type { Deps } from "./http.ts";
 import type { HubPort } from "./realtime/emit.ts";
@@ -50,6 +50,10 @@ export function route(request: Request, deps: Deps): Promise<Response> {
     // GitHub instead of requireAdmin, and the live and GitHub App routes have their own handlers.
     if (method === "POST" && pathname === "/api/webhook/github") {
         return handleGithubWebhook(request, githubOrFail(deps.gh as GitHubDeps | undefined));
+    }
+    // The runner, not an admin, calls this: its HX_CTX_TOKEN is the credential and limits it to its own repo.
+    if (method === "GET" && pathname === "/github/token") {
+        return handleRunnerToken(request, deps, githubOrFail(deps.gh as GitHubDeps | undefined));
     }
     if (pathname === LIVE_EMIT_PATH) {
         return handleEmit(request, deps, liveHub(deps));

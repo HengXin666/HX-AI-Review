@@ -1,6 +1,6 @@
 # GitHub App 与 webhook 触发
 
-除了业务仓库里的调用方 workflow 自己按 push / PR 触发, hx-context-review 也可以注册一个 GitHub App: Worker 收到 App 的 webhook 后写入 `run_queue`, 再用 installation token 调 `workflow_dispatch` 启动审查. 代码在 [cf-admin/worker/github/](../../cf-admin/worker/github/routes.ts) 与 [routes/webhook.ts](../../cf-admin/worker/routes/webhook.ts), 表结构在 [migrations/0007_github_app.sql](../../cf-admin/migrations/0007_github_app.sql) 与 [0008_app_manifest.sql](../../cf-admin/migrations/0008_app_manifest.sql), HTTP 契约见 [cf-admin.yaml](../reference/api/cf-admin.yaml) 的 `/api/github/*` 与 `/api/webhook/github`. 总体位置见 [overview.md](overview.md#webhook-触发).
+除了业务仓库里的调用方 workflow 自己按 push / PR 触发, hx-context-review 也可以注册一个 GitHub App: Worker 收到 App 的 webhook 后写入 `run_queue`, 再用 installation token 调 `workflow_dispatch` 启动审查. 代码在 [cf-admin/worker/github/](../../cf-admin/worker/github/routes.ts) 与 [routes/webhook.ts](../../cf-admin/worker/routes/webhook.ts), 表结构在 [0008_github_app_v2.sql](../../cf-admin/migrations/0008_github_app_v2.sql) 与 [0009_app_manifest.sql](../../cf-admin/migrations/0009_app_manifest.sql), HTTP 契约见 [cf-admin.yaml](../reference/api/cf-admin.yaml) 的 `/api/github/*` 与 `/api/webhook/github`. 总体位置见 [overview.md](overview.md#webhook-触发).
 
 ## App 注册
 

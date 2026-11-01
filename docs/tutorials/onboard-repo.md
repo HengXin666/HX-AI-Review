@@ -78,6 +78,8 @@ jobs:
             kind: code
         secrets:
             HX_CTX_TOKEN: ${{ secrets.HX_CTX_TOKEN }}
+            # 可选. 不传时行评和进度评论由 github-actions[bot] 发出.
+            GH_APP_TOKEN: ${{ secrets.GH_APP_TOKEN }}
 ```
 
 两个 job 的关键差别:
@@ -86,7 +88,7 @@ jobs:
 |---|---|---|
 | 审什么 | 上下文文件是否还和代码一致 | diff 新增或修改的行本身 |
 | L0 | 跑, 有 Error 会让 job 红 | 不跑, 整条链上没有 Error |
-| 补丁分支 | 可能推 `hx-ctx/patch-<sha>` | 永不推, 只给建议文本 |
+| 补丁分支 | 可能推 `hx-ctx/patch-<sha>` | 永不推. PR 上更新进度评论, 并提交分块审查与证据校验两个 review, 确认项写到 diff 行 |
 | `last_sha` | 推进 (push 且完整时) | 不读也不推进 |
 | 规则 id | `HC-*`, `CX-*`, `CX-AI` | `CODE-AI` |
 

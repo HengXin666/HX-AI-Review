@@ -1,0 +1,35 @@
+{
+    "id": "deleted-guard",
+    "note": "The unpaid-order guard file is deleted, so a zero amount is no longer rejected.",
+    "path": "src/guard.ts",
+    "status": "D",
+    "diff": "diff --git a/src/guard.ts b/src/guard.ts\ndeleted file mode 100644\n--- a/src/guard.ts\n+++ /dev/null\n@@ -1,3 +0,0 @@\n-export function assertPaid(order: Order): void {\n-    if (order.amount <= 0) throw new Error(\"unpaid\");\n-}",
+    "replay": {
+        "finder": [
+            {
+                "path": "src/guard.ts",
+                "line": 2,
+                "side": "left",
+                "title": "unpaid guard deleted",
+                "message": "deleting assertPaid removes the amount <= 0 rejection",
+                "evidence": "`order.amount <= 0`",
+                "category": "breaking",
+                "grade": "critical",
+                "confidence": 0.94,
+                "repro": "an order with amount 0 is no longer rejected",
+                "requires": "assertPaid"
+            }
+        ],
+        "verdicts": {
+            "unpaid guard deleted": "confirmed"
+        }
+    },
+    "expect": [
+        {
+            "category": "breaking",
+            "grade": "critical",
+            "path": "src/guard.ts",
+            "titleIncludes": "unpaid"
+        }
+    ]
+}

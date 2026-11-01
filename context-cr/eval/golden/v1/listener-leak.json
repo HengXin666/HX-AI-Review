@@ -1,0 +1,34 @@
+{
+    "id": "listener-leak",
+    "note": "A click listener is added and never removed.",
+    "path": "src/widget.ts",
+    "diff": "diff --git a/src/widget.ts b/src/widget.ts\n--- a/src/widget.ts\n+++ b/src/widget.ts\n@@ -1,3 +1,4 @@\n export function mount(target: HTMLElement, onClick: () => void): void {\n+    target.addEventListener(\"click\", onClick);\n }",
+    "replay": {
+        "finder": [
+            {
+                "path": "src/widget.ts",
+                "line": 2,
+                "side": "right",
+                "title": "click listener is never removed",
+                "message": "mount adds a listener and nothing removes it, so remounting leaks handlers",
+                "evidence": "`addEventListener(\"click\", onClick)`",
+                "category": "stability",
+                "grade": "major",
+                "confidence": 0.86,
+                "repro": "call mount twice and both handlers fire",
+                "requires": "addEventListener"
+            }
+        ],
+        "verdicts": {
+            "click listener is never removed": "confirmed"
+        }
+    },
+    "expect": [
+        {
+            "category": "stability",
+            "grade": "major",
+            "path": "src/widget.ts",
+            "titleIncludes": "never removed"
+        }
+    ]
+}

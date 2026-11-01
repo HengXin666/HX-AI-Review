@@ -1,0 +1,27 @@
+{
+    "id": "clean-rename",
+    "note": "A rename with no behavior change. The replay still emits a low-confidence nit, which the budget must drop.",
+    "path": "src/name.ts",
+    "diff": "diff --git a/src/name.ts b/src/name.ts\n--- a/src/name.ts\n+++ b/src/name.ts\n@@ -1,3 +1,3 @@\n export function show(input: string): string {\n-    const userName = input;\n+    const nameOfUser = input;\n     return input;\n }",
+    "replay": {
+        "finder": [
+            {
+                "path": "src/name.ts",
+                "line": 2,
+                "side": "right",
+                "title": "rename is less clear",
+                "message": "nameOfUser is a style preference over userName",
+                "evidence": "`const nameOfUser = input`",
+                "category": "other",
+                "grade": "nit",
+                "confidence": 0.4,
+                "repro": "none; both names compile",
+                "requires": "nameOfUser"
+            }
+        ],
+        "verdicts": {
+            "rename is less clear": "confirmed"
+        }
+    },
+    "expect": []
+}

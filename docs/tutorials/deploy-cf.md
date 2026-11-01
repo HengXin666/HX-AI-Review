@@ -1,6 +1,19 @@
 # 部署 Cloudflare 侧 (一键部署)
 
-Cloudflare 侧 (D1 + 迁移, R2, Worker, Pages 总览页) 用手动触发的工作流 [deploy-cf.yml](../../.github/workflows/deploy-cf.yml) 一键部署. 工作流调用 `cf-admin/scripts/deploy.ts`, 可重复执行: 资源不存在就创建, 已存在就复用.
+Cloudflare 侧 (D1 + 迁移, R2, Worker, 总览页) 用 [deploy-cf.yml](../../.github/workflows/deploy-cf.yml) 部署. 工作流调用 `cf-admin/scripts/deploy.ts`, 可重复执行: 资源不存在就创建, 已存在就复用.
+
+总览页不是单独的 Pages 项目. Vite 把它构建进 Worker 的静态资源, 所以「更新前端」就是再部署一次 Worker. 凭证用仓库里已经配好的 `CLOUDFLARE_API_TOKEN` 和 `CLOUDFLARE_ACCOUNT_ID`, 自动部署不再要人填.
+
+## 自动更新前端
+
+`main` 上的推送只要改了下面任一路径, 就会自动跑 `target=worker`:
+
+- `cf-admin/pages/**` (总览页源码)
+- `cf-admin/package.json` (前端依赖)
+
+顺序与手动部署相同: 先 typecheck 和测试, 再应用迁移, 再构建总览页并部署 Worker. 不会改模型 key. PR 分支不会部署, 只有合进 `main` 才动线上.
+
+只改了 runner、文档或 Worker 逻辑、没动上面的路径时, 不会自动部署. 那种情况仍用下面的手动按钮, `target` 选 `worker` 或 `all`.
 
 ## 1. 准备 Cloudflare API token
 
@@ -36,10 +49,12 @@ Settings -> Secrets and variables -> Actions.
 
 ## 3. 运行部署
 
-Actions -> deploy-cf -> Run workflow:
+两种方式:
 
-- `target`: `all` (默认), 或只部署 `migrations`, `worker`. 三者都会先检查并在缺失时创建 D1 再应用迁移; 单独部署 `worker` 不会跳过迁移.
-- `provider-key-name`: 填 Worker secret 名 (例如 `PROVIDER_DEFAULT_KEY`) 时, 用 `HX_PROVIDER_API_KEY` 设置该 secret; 只在 `target` 为 `all` 或 `worker` 时有效. 填了名字但 `HX_PROVIDER_API_KEY` 为空, 或 target 不部署 Worker, 部署直接失败, 不会静默跳过. 留空则不动 secret.
+- 自动: 前端改动合进 `main` (见上面「自动更新前端」). 等价于手动选 `target=worker`, 且不重写 provider secret.
+- 手动: Actions -> deploy-cf -> Run workflow.
+    - `target`: `all` (默认), 或只部署 `migrations`, `worker`. 三者都会先检查并在缺失时创建 D1 再应用迁移; 单独部署 `worker` 不会跳过迁移.
+    - `provider-key-name`: 填 Worker secret 名 (例如 `PROVIDER_DEFAULT_KEY`) 时, 用 `HX_PROVIDER_API_KEY` 设置该 secret; 只在 `target` 为 `all` 或 `worker` 时有效. 填了名字但 `HX_PROVIDER_API_KEY` 为空, 或 target 不部署 Worker, 部署直接失败, 不会静默跳过. 留空则不动 secret. 自动部署不传这个字段.
 
 部署顺序: 先跑 typecheck 与测试; 创建或复用 D1, 生成带真实 database_id 与部署信息 (commit, 时间, 运行链接) 的 wrangler 配置; 应用 D1 迁移; 创建或复用 R2 bucket; 用 Vite 把总览页构建到 `cf-admin/.deploy/assets`; 部署 Worker (脚本 + 静态资源 + `workers_dev`); 再幂等重放一次 rule_results 回填 (补上迁移完成到新 Worker 生效之间旧 Worker 写入的命中); 最后按 `HX_OVERVIEW_DOMAIN` 注册 zone route. 运行摘要 (Summary) 会列出 Worker 地址 (即业务仓库的 `HX_CTX_ENDPOINT`) 与总览页地址.
 

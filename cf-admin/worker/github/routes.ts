@@ -1,6 +1,6 @@
 // Admin handlers for the GitHub App, plus handleGitHub, which router.ts mounts for /api/github/*. Every handler here
 // requires an admin; the one-click handlers in connect.ts are routed here too (app/callback is the one public route).
-import { requireAdmin } from "../auth.ts";
+import { repoFromToken, requireAdmin } from "../auth.ts";
 import { HttpError, json, readJson } from "../http.ts";
 import type { Deps } from "../http.ts";
 import { getApp, listInstallationRepos, listInstallations, toHttpError } from "./client.ts";
@@ -9,7 +9,7 @@ import { requireKek } from "./crypto.ts";
 import type { GitHubDeps } from "./deps.ts";
 import { importAppKey } from "./jwt.ts";
 import type { AppInput, AppView } from "./store.ts";
-import { installationToken, jwtFor } from "./tokens.ts";
+import { installationFor, installationToken, jwtFor, mintScoped } from "./tokens.ts";
 
 const WORKFLOW_FILE = /^[\w.-]+\.ya?ml$/;
 
@@ -170,6 +170,23 @@ export async function handleListInstallations(request: Request, deps: Deps, gh: 
         await gh.store.markInstalled(now);
     }
     return json({ installations: out });
+}
+
+/**
+ * GET /github/token: the runner's HX_CTX_TOKEN mints an installation token for its own repository only, so a
+ * review comment appears as the App instead of github-actions[bot]. Any admin route could not serve this: the
+ * caller is the runner, which has no admin session, and the repo comes from the token it already holds.
+ */
+export async function handleRunnerToken(request: Request, deps: Deps, gh: GitHubDeps): Promise<Response> {
+    const repo = await repoFromToken(request, deps);
+    const app = await gh.store.app();
+    if (!app || !app.hasPrivateKey) {
+        throw new HttpError(404, "GitHub App is not configured");
+    }
+    const installationId = await installationFor(gh, repo.name);
+    // Scoped to the runner's own repository and uncached: a shared cache is how one repo would act as another.
+    const minted = await mintScoped(gh, installationId, repo.name);
+    return json({ token: minted.token, expiresAt: minted.expiresAt, bot: app.slug + "[bot]", installationId });
 }
 
 /** GET /api/github/queue?repo=o/r&limit=50: webhook-triggered reviews, newest first. */

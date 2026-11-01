@@ -1,0 +1,34 @@
+{
+    "id": "null-deref",
+    "note": "A new line trims email without checking that user exists.",
+    "path": "src/user.ts",
+    "diff": "diff --git a/src/user.ts b/src/user.ts\n--- a/src/user.ts\n+++ b/src/user.ts\n@@ -1,3 +1,4 @@\n export function label(user: User | undefined): string {\n+    return user.email.trim();\n     return \"\";\n }",
+    "replay": {
+        "finder": [
+            {
+                "path": "src/user.ts",
+                "line": 2,
+                "side": "right",
+                "title": "email trim on a missing user",
+                "message": "user is optional and user.email throws when the lookup misses",
+                "evidence": "`user.email.trim()`",
+                "category": "stability",
+                "grade": "major",
+                "confidence": 0.9,
+                "repro": "label(undefined) throws",
+                "requires": "user.email.trim()"
+            }
+        ],
+        "verdicts": {
+            "email trim on a missing user": "confirmed"
+        }
+    },
+    "expect": [
+        {
+            "category": "stability",
+            "grade": "major",
+            "path": "src/user.ts",
+            "titleIncludes": "missing user"
+        }
+    ]
+}

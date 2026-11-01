@@ -627,6 +627,23 @@ paths:
                         content: { application/json: { schema: { $ref: "#/components/schemas/Token" } } },
                     }
                 "404": { description: Unknown repo }
+    /api/runs/{owner}/{repo}/{id}/report:
+        get:
+            operationId: getRunReport
+            security: [{ access: [] }, { session: [] }]
+            parameters:
+                - { name: owner, in: path, required: true, schema: { type: string } }
+                - { name: repo, in: path, required: true, schema: { type: string } }
+                - { name: id, in: path, required: true, schema: { type: string } }
+            responses:
+                "200":
+                    description: >
+                        Report JSON stored for the run. A code review includes trace.groups (the assembled
+                        pull-request diff) and trace.checks (the evidence verdict for every candidate).
+                    content:
+                        application/json:
+                            schema: { type: object, additionalProperties: true }
+                "404": { description: Unknown run, or the id or repository name is not safe to look up }
     /api/providers/{name}:
         put:
             operationId: upsertProvider
@@ -1063,25 +1080,6 @@ paths:
                 with POST /app-manifests/{code}/conversions and the pem, webhook_secret and client_secret are sealed
                 into github_apps (status configured).
             security: []
-            parameters:
-                - { name: code, in: query, required: true, schema: { type: string } }
-                - { name: state, in: query, required: true, schema: { type: string } }
-            responses:
-                "302":
-                    description: >-
-                        Success: Location <origin>/#/github?connected=1&slug=<slug>. Failure after the state check:
-                        Location <origin>/#/github?error=<reason>, reason one of kek_missing (GITHUB_APP_KEK not set,
-                        code not spent), conversion_failed (GitHub refused the code), incomplete_credentials (no pem
-                        or webhook_secret in the conversion), save_failed (pem cannot be imported or the save failed).
-                    headers:
-                        location: { schema: { type: string } }
-                        cache-control: { schema: { type: string, const: no-store } }
-                "400":
-                    description: code or state missing; state unknown, older than 10 minutes, or already used
-                    content:
-                        application/json:
-                            schema: { $ref: "#/components/schemas/Error" }
-                "503": { description: GitHub dependencies not wired }
     /api/github/repos:
         get:
             operationId: listGitHubRepos
@@ -1316,3 +1314,15 @@ paths:
                 "401":
                     { description: Invalid X-Hub-Signature-256, or no webhook secret / GITHUB_APP_KEK to verify with }
                 "503": { description: GitHub dependencies not wired }
+                "200": { description: HTML that returns to the overview }
+                "400": { description: Unknown or expired state }
+    /github/token:
+        get:
+            operationId: githubInstallationToken
+            security: [{ repoToken: [] }]
+            description: >-
+                Mints an installation token for the repository that owns the bearer token.
+                The runner uses it so reviews are authored by the app.
+            responses:
+                "200": { description: token, expiresAt, bot login, installationId }
+                "404": { description: App is not configured, or not installed on this repository }
