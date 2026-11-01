@@ -1,76 +1,117 @@
 #!/usr/bin/env python3
-"""hx-context-review icon generator.
-Circle badge + white check whose last stroke ends in a sharp "code pointer" tip.
-Flat, no gradients/shadows. Rendered at 2048px then downsampled (LANCZOS) for clean AA.
-Usage: python3 gen_logo.py [outdir]   (default: parent dir of this script, i.e. public/)
-Edit COLORS / geometry below and re-run.
+"""Generate hx-context-review console favicons from the HXLoLi badge (logo.png).
+
+Usage: python3 gen.py [REFERENCE_PNG] [OUT_DIR]
+Defaults: reference = HXLoLi/static/img/logo.png, out = the pages/public dir (parent of .logo-gen).
+
+Large sizes (512/192/180): the full badge (girl, cat, clouds, star) resized with
+a circular alpha mask so everything outside the ring is truly transparent.
+32px: a dedicated close-up crop of the character's head + ahoge + raised hand,
+framed by a thick #3573C7 ring with a #1F4E8C outline, so the character still
+reads as a face at favicon size instead of a blob.
+Deterministic: same input -> byte-identical output.
 """
-import os, sys, math
-from PIL import Image, ImageDraw
+import os
+import sys
+from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
 
-COLORS = {
-    "primary": "#3573C7",  # circle fill
-    "dark":    "#1F4E8C",  # outer ring
-    "light":   "#D6E9FA",  # thin inner ring (only drawn at >=128px)
-    "fg":      "#FFFFFF",  # check
-}
-OUTPUTS = [("favicon-32.png", 32), ("favicon-192.png", 192),
-           ("favicon-512.png", 512), ("apple-touch-icon.png", 180)]
-S = 2048  # supersample canvas
+HERE = os.path.dirname(os.path.abspath(__file__))
+REF = sys.argv[1] if len(sys.argv) > 1 else "/home/hx/Loli/code/HXLoLis/HXLoLi/static/img/logo.png"
+OUT = sys.argv[2] if len(sys.argv) > 2 else os.path.dirname(HERE)
 
-# geometry in unit coords (0..1)
-MARGIN = 0.02          # transparent padding around the badge
-RING = 0.075           # dark ring thickness
-LIGHT_RING = 0.018     # light hairline ring inside the dark ring (large sizes only)
-CHECK = [(0.275, 0.525), (0.435, 0.680), (0.665, 0.400)]  # A (start), B (elbow), C (tip base)
-STROKE = 0.125         # check stroke width
-TIP = 2.4             # pointer length as a multiple of half stroke
+MAIN_BLUE = (0x35, 0x73, 0xC7, 255)
+DEEP_BLUE = (0x1F, 0x4E, 0x8C, 255)
+LIGHT_BLUE = (0xD6, 0xE9, 0xFA, 255)
+SS = 4  # supersampling for masks
 
-def _offset_line(p, q, h):
-    dx, dy = q[0]-p[0], q[1]-p[1]; L = math.hypot(dx, dy)
-    nx, ny = -dy/L*h, dx/L*h
-    return (p[0]+nx, p[1]+ny), (q[0]+nx, q[1]+ny), (dx/L, dy/L), (nx, ny)
 
-def _intersect(p1, p2, p3, p4):
-    x1,y1=p1; x2,y2=p2; x3,y3=p3; x4,y4=p4
-    d=(x1-x2)*(y3-y4)-(y1-y2)*(x3-x4)
-    t=((x1-x3)*(y3-y4)-(y1-y3)*(x3-x4))/d
-    return (x1+t*(x2-x1), y1+t*(y2-y1))
+def circle_mask(size, inset=0.0):
+    big = size * SS
+    m = Image.new("L", (big, big), 0)
+    d = ImageDraw.Draw(m)
+    p = inset * SS
+    d.ellipse((p, p, big - 1 - p, big - 1 - p), fill=255)
+    return m.resize((size, size), Image.LANCZOS)
 
-def check_polygon():
-    A, B, C = CHECK; h = STROKE/2
-    l1a, l1b, d1, n1 = _offset_line(A, B, h)
-    l2a, l2b, d2, n2 = _offset_line(B, C, h)
-    r1a, r1b, _, _ = _offset_line(A, B, -h)
-    r2a, r2b, _, _ = _offset_line(B, C, -h)
-    BL = _intersect(l1a, l1b, l2a, l2b)
-    BR = _intersect(r1a, r1b, r2a, r2b)
-    tip = (C[0]+d2[0]*h*TIP, C[1]+d2[1]*h*TIP)
-    return [l1a, BL, l2b, tip, r2b, BR, r1a]
 
-def render(size):
-    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    u = lambda v: v*S
-    m = MARGIN
-    d.ellipse([u(m), u(m), u(1-m), u(1-m)], fill=COLORS["dark"])
-    r = m + RING
-    if size >= 128:
-        d.ellipse([u(r), u(r), u(1-r), u(1-r)], fill=COLORS["light"])
-        r += LIGHT_RING
-    d.ellipse([u(r), u(r), u(1-r), u(1-r)], fill=COLORS["primary"])
-    d.polygon([(u(x), u(y)) for x, y in check_polygon()], fill=COLORS["fg"])
-    out = img.resize((size, size), Image.LANCZOS)
-    assert out.mode == "RGBA"
-    return out
+def apply_mask(im, mask):
+    r, g, b, a = im.split()
+    a = Image.composite(a, Image.new("L", im.size, 0), mask)
+    a = Image.fromarray_like = None  # placeholder removed below
+    return None
+
+
+def masked(im, mask):
+    r, g, b, a = im.split()
+    from PIL import ImageChops
+    a = ImageChops.multiply(a, mask)
+    return Image.merge("RGBA", (r, g, b, a))
+
+
+def zero_corners(im):
+    # Guarantee true transparency in the four corners.
+    px = im.load()
+    w, h = im.size
+    for x, y in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
+        px[x, y] = (0, 0, 0, 0)
+    return im
+
+
+def shrink_colors(im, colors=256):
+    # Quantize RGB to cut file size, keep full 8-bit alpha, return RGBA.
+    rgb = im.convert("RGB").quantize(colors=colors, method=Image.MEDIANCUT, dither=Image.FLOYDSTEINBERG).convert("RGB")
+    r, g, b = rgb.split()
+    return Image.merge("RGBA", (r, g, b, im.getchannel("A")))
+
+
+def full_badge(ref, size):
+    # Ref badge spans roughly x 21..997, y 9..1015 -> centre crop square.
+    box = (12, 12, 1012, 1012)
+    im = ref.crop(box).resize((size, size), Image.LANCZOS)
+    im = masked(im, circle_mask(size, inset=0.5))
+    if size >= 256:
+        im = shrink_colors(im)
+    return zero_corners(im)
+
+
+def tiny_face(ref, size=32):
+    # Close-up of head (ahoge to chin) with a bit of the raised hand.
+    W = 256
+    crop = ref.crop((300, 110, 800, 610)).resize((W, W), Image.LANCZOS)
+    crop = ImageEnhance.Contrast(crop).enhance(1.15)
+    crop = ImageEnhance.Color(crop).enhance(1.2)
+    canvas = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+    inner = circle_mask(W, inset=W * 0.13)
+    canvas.paste(crop, (0, 0), inner)
+    # thick blue ring + deep-blue outline
+    ring = Image.new("RGBA", (W * SS, W * SS), (0, 0, 0, 0))
+    d = ImageDraw.Draw(ring)
+    d.ellipse((0, 0, W * SS - 1, W * SS - 1), fill=DEEP_BLUE)
+    o = int(W * SS * 0.03)
+    d.ellipse((o, o, W * SS - 1 - o, W * SS - 1 - o), fill=MAIN_BLUE)
+    i = int(W * SS * 0.13)
+    d.ellipse((i, i, W * SS - 1 - i, W * SS - 1 - i), fill=(0, 0, 0, 0))
+    ring = ring.resize((W, W), Image.LANCZOS)
+    canvas = Image.alpha_composite(canvas, ring)
+    im = canvas.resize((size, size), Image.LANCZOS)
+    im = im.filter(ImageFilter.UnsharpMask(radius=1, percent=60, threshold=2))
+    im = masked(im, circle_mask(size, inset=0.3))
+    return zero_corners(im)
+
 
 def main():
-    outdir = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    os.makedirs(outdir, exist_ok=True)
-    for name, size in OUTPUTS:
-        p = os.path.join(outdir, name)
-        render(size).save(p, "PNG", optimize=True)
-        print(name, size, os.path.getsize(p), "bytes")
+    ref = Image.open(REF).convert("RGBA")
+    outs = {
+        "favicon-512.png": full_badge(ref, 512),
+        "favicon-192.png": full_badge(ref, 192),
+        "apple-touch-icon.png": full_badge(ref, 180),
+        "favicon-32.png": tiny_face(ref, 32),
+    }
+    for name, im in outs.items():
+        path = os.path.join(OUT, name)
+        im.save(path, "PNG", optimize=True)
+        print(name, im.size, os.path.getsize(path))
+
 
 if __name__ == "__main__":
     main()
