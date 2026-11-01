@@ -22,3 +22,13 @@ migrations_dir = "migrations"
 [[r2_buckets]]
 binding = "BLOBS"
 bucket_name = "hx-context-review"
+
+# Live channel (/api/live, /api/live/emit): one RealtimeHub Durable Object per repository room.
+# SQLite-backed class (required on the Workers free plan); the class must be exported from worker/index.ts.
+[[durable_objects.bindings]]
+name = "REALTIME"
+class_name = "RealtimeHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RealtimeHub"]

@@ -15,7 +15,8 @@ export type RulesReport = {
     base: string;
     head: string;
     ok: boolean;
-    counts: { error: number; warning: number; blocking: number; exempt: number };
+    /** historical: findings on files outside the range or accepted by the base baseline; never blocking. */
+    counts: { error: number; warning: number; blocking: number; exempt: number; historical: number };
     rules: RuleSummary[];
     findings: Finding[];
     durationMs: number;
@@ -46,13 +47,14 @@ export function buildRulesReport(input: RulesReportInput): RulesReport {
     const error = findings.filter((item) => item.severity === ERROR).length;
     const exempt = findings.filter((item) => item.exemption?.state === "exempt").length;
     const blocking = findings.filter(isBlocking).length;
+    const historical = findings.filter((item) => item.origin === "historical").length;
     return {
         tool: TOOL_NAME,
         version: TOOL_VERSION,
         base: input.base,
         head: input.head,
         ok: blocking === 0,
-        counts: { error, warning: findings.length - error, blocking, exempt },
+        counts: { error, warning: findings.length - error, blocking, exempt, historical },
         rules: summarizeRules(input.rules),
         findings,
         durationMs: input.durationMs,
@@ -76,7 +78,9 @@ export function renderRulesMarkdown(report: RulesReport): string {
         "# " + TOOL_NAME + " rules report",
         "",
         rangeLine(report),
-        `Errors: ${report.counts.error}, warnings: ${report.counts.warning}, blocking: ${report.counts.blocking}, exempt: ${report.counts.exempt}`,
+        `Errors: ${report.counts.error}, warnings: ${report.counts.warning}, blocking: ${report.counts.blocking}, ` +
+            `exempt: ${report.counts.exempt}, historical: ${report.counts.historical}`,
+        "Only findings on files changed in the range block; the rest are historical and reported only.",
         "",
         "## Rules",
         "",
@@ -91,10 +95,20 @@ export function renderRulesMarkdown(report: RulesReport): string {
         lines.push("No findings.", "");
         return lines.join("\n");
     }
-    lines.push("| Severity | Rule | Location | Criteria | Exemption | Message |", "|---|---|---|---|---|---|");
+    lines.push(
+        "| Severity | Origin | Rule | Location | Criteria | Exemption | Message |",
+        "|---|---|---|---|---|---|---|",
+    );
     for (const item of report.findings) {
         const where = escapeMd(item.path) + ":" + item.line;
-        const row = [item.severity, item.ruleId, where, escapeMd(item.criteria ?? ""), exemptionCell(item)];
+        const row = [
+            item.severity,
+            item.origin,
+            item.ruleId,
+            where,
+            escapeMd(item.criteria ?? ""),
+            exemptionCell(item),
+        ];
         lines.push("| " + row.join(" | ") + " | " + escapeMd(item.message) + " |");
     }
     lines.push("");

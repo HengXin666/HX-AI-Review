@@ -37,6 +37,8 @@ export function repo(row: Row): RepoRow {
         finderModel: String(row.finder_model),
         verifierModel: String(row.verifier_model),
         budgetUsd: Number(row.budget_usd),
+        // Absent before migration 0006; 0 means no explicit cap.
+        perRunCapUsd: Number(row.per_run_cap_usd ?? 0),
         spentUsd: Number(row.spent_usd),
         budgetMonth: String(row.budget_month),
         lastSha: row.last_sha === null ? null : String(row.last_sha),

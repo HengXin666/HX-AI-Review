@@ -55,6 +55,14 @@ function repoPatch(body: Record<string, unknown>): RepoPatch {
         }
         patch.budgetUsd = budget;
     }
+    if (body.perRunCapUsd !== undefined) {
+        // null clears the cap back to 0, which init reads as "a quarter of budgetUsd".
+        const cap = body.perRunCapUsd;
+        if (cap !== null && (typeof cap !== "number" || !Number.isFinite(cap) || cap < 0)) {
+            throw bad("perRunCapUsd", "a non-negative number, or null for a quarter of budgetUsd");
+        }
+        patch.perRunCapUsd = cap ?? 0;
+    }
     return patch;
 }
 

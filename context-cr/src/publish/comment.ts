@@ -1,4 +1,4 @@
-import { COMMENT_MARKER, DETAIL_LIMIT, TOOL_NAME, TOOL_VERSION } from "../constants.ts";
+import { commentMarker, DETAIL_LIMIT, TOOL_NAME, TOOL_VERSION } from "../constants.ts";
 import { escapeMd } from "../contract/report.ts";
 import type { ReviewReport } from "../contract/report.ts";
 
@@ -131,7 +131,7 @@ export function renderComment(report: ReviewReport, links: CommentLinks, note?: 
             ? `${report.counts.warning} 个告警, 无阻断`
             : "无发现";
 
-    const out: string[] = [COMMENT_MARKER];
+    const out: string[] = [commentMarker(report.kind)];
     out.push(
         `<h3>${gradeSvg(grade.letter, grade.tone)} ${TOOL_NAME} · ${kindLabel}</h3>`,
         "",

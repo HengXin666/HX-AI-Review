@@ -42,7 +42,7 @@ type Script = { finder?: Record<string, unknown>[]; verdict?: (prompt: string) =
 function fake(calls: AgentRequest[], script: Script = {}): AgentRunner {
     const reported = script.finder ?? [
         { path: "api/AGENTS.md", line: 3, title: "real stale path", patch: "diff --git a/x b/x\n" },
-        { path: "api/AGENTS.md", line: 3, title: "style nit" },
+        { path: "api/AGENTS.md", line: 4, title: "style nit" },
         { path: "web/AGENTS.md", line: 3, title: "real outside scope" },
     ];
     return async (request) => {
@@ -127,8 +127,9 @@ test("lines past the end and duplicates are gated before the verifier", async ()
     const calls: AgentRequest[] = [];
     const finder = [
         { path: "api/AGENTS.md", line: 99, title: "real beyond" },
+        // Same accused line, reworded title: still one defect, because the fingerprint anchors on the line.
         { path: "api/AGENTS.md", line: 4, title: "real dup" },
-        { path: "api/AGENTS.md", line: 5, title: "real dup" },
+        { path: "api/AGENTS.md", line: 4, title: "real duplicate, reworded" },
     ];
     const result = await runReview(config, scope, { ...base, run: fake(calls, { finder }) });
     assert.equal(calls.filter((item) => item.role === "verifier").length, 1);
@@ -167,7 +168,9 @@ test("context files are split into finder batches; the candidate cap leaves the 
     const one = { ...config, limits: { ...config.limits, maxCandidates: 1 } };
     const capped = await runReview(one, many, { ...base, readFile, run: fake([], { finder }) });
     assert.deepEqual(capped.notReviewed, ["b/AGENTS.md (candidate limit)", "c/AGENTS.md (candidate limit)"]);
+    // No session failed, but two files were never read: the run is truncated, so last_sha must not advance.
     assert.equal(capped.complete, true);
+    assert.equal(capped.truncated, true);
 });
 
 test("refused candidates do not consume the cap, so real findings still get through", async () => {
@@ -177,13 +180,13 @@ test("refused candidates do not consume the cap, so real findings still get thro
     const suppressed = [{ fingerprint: first.findings[0].fingerprint, reason: "intended wording" }];
     const calls: AgentRequest[] = [];
     const finder = [
-        // Suppressed: same path and title as the first run's confirmed finding.
-        { path: "api/AGENTS.md", line: 3, title: "real stale path" },
+        // Suppressed: same path and accused line as the first run's confirmed finding, title reworded.
+        { path: "api/AGENTS.md", line: 3, title: "real stale path, said differently" },
         // Refused by the gate for a line past the end and for a path outside this batch.
         { path: "api/AGENTS.md", line: 99, title: "real beyond" },
         { path: "nope/AGENTS.md", line: 1, title: "real outside" },
         // The only candidate that should reach the verifier.
-        { path: "api/AGENTS.md", line: 3, title: "real genuine" },
+        { path: "api/AGENTS.md", line: 5, title: "real genuine" },
     ];
     // maxCandidates is 2: with the refused candidates not counted, the genuine one still gets through.
     const one = { ...config, suppressions: suppressed, limits: { ...config.limits, maxCandidates: 2 } };
@@ -223,6 +226,24 @@ test("a failed session still charges usage; the run deadline stops new sessions"
     assert.equal(calls.length, 1);
     assert.equal(late.complete, false);
     assert.match(late.errors[0], /deadline/);
+});
+
+test("the AI fingerprint anchors on the accused line, not on the model-written title", async () => {
+    const once = await runReview(config, scope, {
+        ...base,
+        run: fake([], { finder: [{ path: "api/AGENTS.md", line: 7, title: "real stale" }] }),
+    });
+    const reworded = await runReview(config, scope, {
+        ...base,
+        run: fake([], { finder: [{ path: "api/AGENTS.md", line: 7, title: "real outdated wording" }] }),
+    });
+    const other = await runReview(config, scope, {
+        ...base,
+        run: fake([], { finder: [{ path: "api/AGENTS.md", line: 8, title: "real stale" }] }),
+    });
+    assert.equal(once.findings[0].fingerprint, reworded.findings[0].fingerprint);
+    assert.notEqual(once.findings[0].fingerprint, other.findings[0].fingerprint);
+    assert.equal(once.truncated, false);
 });
 
 test("unreadable context files are reported as not reviewed", async () => {

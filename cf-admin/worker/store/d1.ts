@@ -26,6 +26,7 @@ const REPO_COLUMNS: Record<keyof RepoPatch, string> = {
     finderModel: "finder_model",
     verifierModel: "verifier_model",
     budgetUsd: "budget_usd",
+    perRunCapUsd: "per_run_cap_usd",
 };
 
 export class D1Store implements Store {
@@ -185,45 +186,59 @@ export class D1Store implements Store {
         ]);
     }
 
+    /**
+     * Claims run against the budget_claims table (migration 0006), one row per run, so runs in different
+     * concurrency groups each hold their own claim and only share the month's remainder.
+     *
+     * The whole reservation is one D1 batch, i.e. one transaction: settlement of the claims this call
+     * takes over, and the insert of the new claim sized from what is left, so two interleaved /init calls
+     * can never both be granted the same remainder. Numbered parameters let one bind set drive each
+     * statement.
+     *
+     * Taken over are the live claims of the same non-empty group (GitHub cancelled that run) and every
+     * expired claim (an abandoned run). A taken-over run that opened a model session is charged its
+     * allowance, which is at most the per-run cap, never the month; one cancelled before its first session
+     * is charged nothing. A claim from an earlier month settles into nothing here and never reduces this
+     * month. The settled row is kept so a late POST /runs replaces that allowance with the real cost.
+     */
     async reserveBudget(
         repoId: number,
         claim: string,
         group: string,
-        allowanceUsd: number,
+        perRunCapUsd: number,
         month: string,
         now: string,
         expiresAt: string,
     ) {
-        // Settlement and claim are one statement: a claim is only ever visible with its allowance already
-        // recorded, so two interleaved /init calls cannot both read the same remainder and both be granted
-        // it. Numbered parameters (?1...) let one bind set drive the whole expression.
-        //
-        // Taking over a claim settles it first. A run that opened a model session is charged its allowance,
-        // the only safe bound on a cost that will never be reported; a run cancelled before its first
-        // session is charged nothing, so rapid pushes on one branch do not each burn the month. A claim from
-        // an earlier month settles into its own month and never reduces this month's budget.
-        const settle = `CASE WHEN claim_started = 1 AND claim_month = ?1 THEN claim_usd ELSE 0 END`;
-        // Settlements from earlier months are pruned here: a run that reports late is charged in the month
-        // it reports, so keeping its old entry would only grow the row without ever matching again.
-        const kept = `COALESCE((SELECT json_group_array(value) FROM json_each(settled_claims)
-            WHERE json_extract(value, '$.m') = ?1), '[]')`;
-        const settled = `CASE WHEN claim_started = 1 AND claim_month = ?1 AND claim_usd > 0
-            THEN json_insert((${kept}), '$[#]', json_object('c', budget_claim, 'u', claim_usd, 'm', claim_month))
-            ELSE (${kept}) END`;
-        const sql = `UPDATE repos SET
-            spent_usd = CASE WHEN budget_month = ?1 THEN spent_usd + (${settle}) ELSE (${settle}) END,
-            budget_month = ?1,
-            budget_claim = ?2, claim_group = ?3, claim_expires_at = ?4,
-            claim_usd = MAX(0, MIN(?5, budget_usd - (CASE WHEN budget_month = ?1 THEN spent_usd + (${settle}) ELSE (${settle}) END))),
-            claim_month = ?1, claim_started = 0, settled_claims = (${settled}),
+        // ?1 repo, ?2 month, ?3 now, ?4 group
+        const due = `repo_id = ?1 AND settled = 0 AND (expires_at < ?3 OR (?4 != '' AND group_key = ?4))`;
+        const charged = `COALESCE((SELECT SUM(usd) FROM budget_claims WHERE ${due} AND started = 1 AND month = ?2), 0)`;
+        const settleRepo = `UPDATE repos SET
+            spent_usd = (CASE WHEN budget_month = ?2 THEN spent_usd ELSE 0 END) + ${charged},
+            budget_month = ?2,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE id = ?6 AND (claim_expires_at = '' OR claim_expires_at < ?7 OR (?3 != '' AND claim_group = ?3))
-            RETURNING claim_usd AS allowance`;
-        const row = await this.db
-            .prepare(sql)
-            .bind(month, claim, group, expiresAt, allowanceUsd, repoId, now)
-            .first<{ allowance: number }>();
-        return row ? ({ claimed: true, remainingUsd: row.allowance } as const) : ({ claimed: false } as const);
+            WHERE id = ?1`;
+        // Charged claims stay as settled rows for a late report; the rest are simply dropped. Settled rows
+        // of earlier months are pruned: a late report is charged in the month it arrives.
+        const markSettled = `UPDATE budget_claims SET settled = 1
+            WHERE ${due} AND started = 1 AND month = ?2 AND usd > 0`;
+        const dropFree = `DELETE FROM budget_claims WHERE ${due}`;
+        const prune = `DELETE FROM budget_claims WHERE repo_id = ?1 AND settled = 1 AND month != ?2`;
+        // ?1 repo, ?2 month, ?3 claim, ?4 group, ?5 cap, ?6 expiresAt
+        const open = `COALESCE((SELECT SUM(usd) FROM budget_claims WHERE repo_id = ?1 AND settled = 0 AND month = ?2), 0)`;
+        const insert = `INSERT INTO budget_claims (claim, repo_id, group_key, usd, started, expires_at, month, settled)
+            SELECT ?3, ?1, ?4, allowance, 0, ?6, ?2, 0 FROM (
+                SELECT MAX(0, MIN(?5, budget_usd - spent_usd - ${open})) AS allowance FROM repos WHERE id = ?1
+            ) WHERE allowance > 0`;
+        await this.db.batch([
+            this.db.prepare(settleRepo).bind(repoId, month, now, group),
+            this.db.prepare(markSettled).bind(repoId, month, now, group),
+            this.db.prepare(dropFree).bind(repoId, month, now, group),
+            this.db.prepare(prune).bind(repoId, month),
+            this.db.prepare(insert).bind(repoId, month, claim, group, perRunCapUsd, expiresAt),
+        ]);
+        const row = await this.one("SELECT usd FROM budget_claims WHERE claim = ? AND repo_id = ?", claim, repoId);
+        return row ? ({ claimed: true, remainingUsd: Number(row.usd) } as const) : ({ claimed: false } as const);
     }
 
     /**
@@ -231,39 +246,52 @@ export class D1Store implements Store {
      * Returns false when the claim is no longer current: the run was superseded and must not spend.
      */
     async startSpend(repoId: number, claim: string) {
-        const sql = `UPDATE repos SET claim_started = 1,
-            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND budget_claim = ?`;
+        const sql = "UPDATE budget_claims SET started = 1 WHERE repo_id = ? AND claim = ? AND settled = 0";
         const result = await this.db.prepare(sql).bind(repoId, claim).run();
         return result.meta.changes > 0;
     }
 
     async releaseBudget(repoId: number, claim: string) {
-        // Only the holder may release: a run that was refused the budget must not free someone else's.
-        const sql = `UPDATE repos SET budget_claim = '', claim_group = '', claim_usd = 0, claim_month = '',
-            claim_started = 0, claim_expires_at = '',
-            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND budget_claim = ?`;
-        await this.db.prepare(sql).bind(repoId, claim).run();
+        // Only the holder may release: a run that was refused the budget has no row, so it frees nothing.
+        await this.db
+            .prepare("DELETE FROM budget_claims WHERE repo_id = ? AND claim = ? AND settled = 0")
+            .bind(repoId, claim)
+            .run();
     }
 
     async charge(repoId: number, costUsd: number, month: string, claim: string) {
-        // A takeover already charged this claim its allowance on the assumption it would never report. If
-        // it reports after all, the real cost replaces that allowance instead of being added on top, so the
-        // month is not charged twice for one run.
-        const settled = `COALESCE((SELECT json_extract(value, '$.u') FROM json_each(settled_claims)
-            WHERE json_extract(value, '$.c') = ?3 AND json_extract(value, '$.m') = ?1), 0)`;
-        const drop = `COALESCE((SELECT json_group_array(value) FROM json_each(settled_claims)
-            WHERE json_extract(value, '$.c') != ?3 AND json_extract(value, '$.m') = ?1), '[]')`;
-        const sql = `UPDATE repos SET
-            spent_usd = CASE WHEN budget_month = ?1 THEN spent_usd + ?2 - (${settled}) ELSE ?2 END,
-            budget_month = ?1, settled_claims = (${drop}),
-            budget_claim = CASE WHEN budget_claim = ?3 THEN '' ELSE budget_claim END,
-            claim_group = CASE WHEN budget_claim = ?3 THEN '' ELSE claim_group END,
-            claim_usd = CASE WHEN budget_claim = ?3 THEN 0 ELSE claim_usd END,
-            claim_month = CASE WHEN budget_claim = ?3 THEN '' ELSE claim_month END,
-            claim_started = CASE WHEN budget_claim = ?3 THEN 0 ELSE claim_started END,
-            claim_expires_at = CASE WHEN budget_claim = ?3 THEN '' ELSE claim_expires_at END,
+        // A takeover may already have charged this claim its allowance on the assumption it would never
+        // report. If it reports after all, the real cost replaces that allowance instead of being added on
+        // top, so the month is not charged twice for one run. ?1 month, ?2 cost, ?3 claim, ?4 repo
+        const settled = `COALESCE((SELECT usd FROM budget_claims
+            WHERE repo_id = ?4 AND claim = ?3 AND settled = 1 AND month = ?1), 0)`;
+        const spend = `UPDATE repos SET
+            spent_usd = CASE WHEN budget_month = ?1 THEN spent_usd + ?2 - ${settled} ELSE ?2 END,
+            budget_month = ?1,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?4`;
-        await this.db.prepare(sql).bind(month, costUsd, claim, repoId).run();
+        // Frees this run's own claim (live or settled); an empty or foreign claim id matches no row.
+        const free = "DELETE FROM budget_claims WHERE repo_id = ? AND claim = ?";
+        await this.db.batch([
+            this.db.prepare(spend).bind(month, costUsd, claim, repoId),
+            this.db.prepare(free).bind(repoId, claim),
+        ]);
+    }
+
+    /** Unsettled claims of the repo in `month`, oldest first; the overview and tests read budget use here. */
+    async openClaims(repoId: number, month: string) {
+        const rows = await this.all(
+            `SELECT claim, group_key, usd, started, expires_at FROM budget_claims
+            WHERE repo_id = ? AND settled = 0 AND month = ? ORDER BY created_at, claim`,
+            repoId,
+            month,
+        );
+        return rows.map((row) => ({
+            claim: String(row.claim),
+            group: String(row.group_key),
+            usd: Number(row.usd),
+            started: Number(row.started) === 1,
+            expiresAt: String(row.expires_at),
+        }));
     }
 
     async setLastSha(repoId: number, sha: string) {

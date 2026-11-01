@@ -197,3 +197,162 @@ export function commitUrl(runUrl: string | undefined, sha: string): string | und
     const match = runUrl ? /^(https:\/\/[^/]+\/[^/]+\/[^/]+)\//.exec(runUrl) : null;
     return match ? `${match[1]}/commit/${sha}` : undefined;
 }
+
+// ---- GitHub App configuration (T5). Appended only; the client above is unchanged. ----
+
+export type GitHubAppStatus = "configured" | "verified" | "invalid";
+
+/** The stored App as GET/POST /api/github/app return it. Secrets are never sent back, only has* flags. */
+export type GitHubAppView = {
+    appId: string;
+    slug: string;
+    clientId: string;
+    workflowFile: string;
+    status: GitHubAppStatus;
+    hasPrivateKey: boolean;
+    hasClientSecret: boolean;
+    hasWebhookSecret: boolean;
+    createdAt: string;
+    updatedAt: string;
+    installedAt: string | null;
+};
+
+/** What GET /api/github/app (and a successful POST) returns. webhookUrl is computed by the Worker. */
+export type GitHubAppInfo = {
+    configured: boolean;
+    app: GitHubAppView | null;
+    webhookUrl: string;
+};
+
+/** Body of POST /api/github/app. Secret fields left out keep the stored value. */
+export type GitHubAppInput = {
+    appId: string;
+    slug: string;
+    clientId?: string;
+    workflowFile?: string;
+    privateKey?: string;
+    clientSecret?: string;
+    webhookSecret?: string;
+};
+
+/** One repository an installation reaches, with whether it is registered here and for which review. */
+export type GitHubInstallationRepo = {
+    fullName: string;
+    defaultBranch: string;
+    private: boolean;
+    registered: boolean;
+    kind: RepoKind | null;
+};
+
+export type GitHubInstallation = {
+    installationId: number;
+    account: string;
+    accountType: string;
+    repositorySelection: string;
+    suspended: boolean;
+    repos: GitHubInstallationRepo[];
+};
+
+/** POST /api/github/app/verify success body. Failures are 422/403 with { error }, thrown as ApiError. */
+export type GitHubVerifyResult = {
+    ok: true;
+    app: { id: number; slug: string; name: string; owner: string | null };
+    installations: number;
+};
+
+/** 404 from a route the parallel backend task has not shipped yet: the page shows "not ready", not an error. */
+export function isNotReady(error: unknown): boolean {
+    return error instanceof ApiError && error.status === 404;
+}
+
+/**
+ * Like call(), but the thrown message is the backend's own readable error when it sent one
+ * ({ error } or { message } as JSON, or plain text), so a failed save or verify says why.
+ */
+async function callReadable<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const response = await fetch("/api/" + path, {
+        method,
+        credentials: "same-origin",
+        headers: body === undefined ? {} : { "content-type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        let message = text.trim();
+        try {
+            const parsed = JSON.parse(text) as { error?: unknown; message?: unknown };
+            if (typeof parsed.error === "string" && parsed.error) {
+                message = parsed.error;
+            } else if (typeof parsed.message === "string" && parsed.message) {
+                message = parsed.message;
+            }
+        } catch {
+            // Not JSON: the raw text is the most readable thing we have.
+        }
+        throw new ApiError(
+            response.status,
+            message ? `${response.status}: ${message.slice(0, 500)}` : `${method} /api/${path}: ${response.status}`,
+        );
+    }
+    return (await response.json()) as T;
+}
+
+export const githubApi = {
+    getApp: () => callReadable<GitHubAppInfo>("GET", "github/app"),
+    saveApp: (input: GitHubAppInput) => callReadable<GitHubAppInfo>("POST", "github/app", input),
+    verifyApp: () => callReadable<GitHubVerifyResult>("POST", "github/app/verify"),
+    installations: () => callReadable<{ installations: GitHubInstallation[] }>("GET", "github/installations"),
+};
+
+// ---- GitHub account connect + one-click enable. Appended only; the contract is fixed by the backend task. ----
+
+/** GET /api/github/app/manifest: the page POSTs manifest + state to action as a real form, never with fetch. */
+export type GitHubManifestStart = {
+    action: string;
+    state: string;
+    manifest: Record<string, unknown>;
+};
+
+/** One repository of an installation as GET /api/github/repos returns it. */
+export type GitHubRepoStatus = {
+    fullName: string;
+    defaultBranch: string;
+    private: boolean;
+    registered: boolean;
+    kind: RepoKind | null;
+    enabled: boolean;
+    workflowInstalled: boolean;
+    secretInstalled: boolean;
+};
+
+export type GitHubEnableStep = { name: string; ok: boolean; message: string };
+
+/**
+ * POST /api/github/enable body. manualSecret is present only when the Worker could not write HX_CTX_TOKEN into the
+ * repository: the freshly issued runner token is returned once so the user can set the secret by hand.
+ */
+export type GitHubEnableResult = {
+    ok: boolean;
+    steps: GitHubEnableStep[];
+    manualSecret?: { name: string; value: string };
+};
+
+export type GitHubEnableInput = { fullName: string; kind: RepoKind; installationId: number };
+
+/** GET /api/github/repos body: one page (32 by default) of the installation's repositories. */
+export type GitHubReposPage = { installationId: number; page: number; totalCount: number; repos: GitHubRepoStatus[] };
+
+/** Fixed page size of the repositories list; the page never changes it. */
+export const GITHUB_REPOS_PER_PAGE = 32;
+
+export const githubConnectApi = {
+    manifest: () => callReadable<GitHubManifestStart>("GET", "github/app/manifest"),
+    repos: (installationId: number, page?: number) =>
+        callReadable<GitHubReposPage>(
+            "GET",
+            "github/repos?installationId=" + installationId + (page === undefined ? "" : "&page=" + page),
+        ),
+    enable: (input: GitHubEnableInput) => callReadable<GitHubEnableResult>("POST", "github/enable", input),
+    disable: (fullName: string) => callReadable<{ ok: boolean }>("POST", "github/disable", { fullName }),
+    installUrl: (slug: string) => "https://github.com/apps/" + encodeURIComponent(slug) + "/installations/new",
+};

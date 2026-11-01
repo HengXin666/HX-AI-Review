@@ -1,10 +1,12 @@
 import type { ReactNode } from "react";
 import {
+    Activity,
     BarChart3,
     BookText,
     FileClock,
     FolderGit2,
     LayoutDashboard,
+    Plug,
     ServerCog,
     Sparkles,
     TriangleAlert,
@@ -17,7 +19,8 @@ import { KIND_FILTER_ITEMS } from "./kind.ts";
 import type { KindFilter } from "./kind.ts";
 
 /** One entry of the left rail. "overview" is the dashboard; the rest are the detail screens. */
-export type SectionId = "overview" | "runs" | "findings" | "repos" | "providers" | "rules" | "prompts" | "deploy";
+export type SectionId =
+    "overview" | "runs" | "findings" | "repos" | "providers" | "rules" | "prompts" | "deploy" | "live" | "github";
 
 export type NavEntry = { id: SectionId; label: string; icon: LucideIcon; badge?: string };
 
@@ -37,6 +40,8 @@ export function navEntries(openFindings: number): NavEntry[] {
         { id: "rules", label: "规则统计", icon: BarChart3 },
         { id: "prompts", label: "提示词附录", icon: BookText },
         { id: "deploy", label: "部署", icon: Sparkles },
+        { id: "live", label: "实时", icon: Activity },
+        { id: "github", label: "GitHub App", icon: Plug },
     ];
 }
 
@@ -65,6 +70,8 @@ const SECTION_DESC: Record<SectionId, string> = {
     rules: "按规则与等级汇总命中次数, 规则命名空间决定它属于哪种 CR。",
     prompts: "运维追加在系统提示词之后的附录, 以及待折叠的驳回记录。",
     deploy: "当前部署的提交, Access 配置状态与重新部署入口。",
+    live: "正在运行的检查: 哪些仓库与类型在跑, 阶段进度, 实时日志与本次发现.",
+    github: "GitHub App 凭据, webhook 回调地址, 所需权限与已安装的仓库.",
 };
 
 function BUDGET_DESC(month: string): string {

@@ -8,6 +8,8 @@ import { navEntries, Shell } from "./shell.tsx";
 import type { SectionId } from "./shell.tsx";
 import { Deployment } from "./sections/Deployment.tsx";
 import { Findings } from "./sections/Findings.tsx";
+import { GitHubApp } from "./sections/GitHubApp.tsx";
+import { Live } from "./sections/Live.tsx";
 import { Login } from "./sections/Login.tsx";
 import { Overview as OverviewScreen } from "./sections/Overview.tsx";
 import { Prompts } from "./sections/Prompts.tsx";
@@ -16,7 +18,18 @@ import { Repos } from "./sections/Repos.tsx";
 import { Rules } from "./sections/Rules.tsx";
 import { Runs } from "./sections/Runs.tsx";
 
-const SECTIONS: SectionId[] = ["overview", "runs", "findings", "repos", "providers", "rules", "prompts", "deploy"];
+const SECTIONS: SectionId[] = [
+    "overview",
+    "runs",
+    "findings",
+    "repos",
+    "providers",
+    "rules",
+    "prompts",
+    "deploy",
+    "live",
+    "github",
+];
 
 /** The screen named in the URL hash, so a section can be linked and survives a reload. */
 function sectionFromHash(): SectionId {
@@ -173,6 +186,10 @@ export function App() {
                 return <Prompts prompts={data.prompts ?? []} notes={data.notes ?? []} onDone={reload} onError={fail} />;
             case "deploy":
                 return <Deployment info={data.deployment} />;
+            case "live":
+                return <Live repos={data.repos.map((repo) => repo.name)} />;
+            case "github":
+                return <GitHubApp />;
         }
     };
 

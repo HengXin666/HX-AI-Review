@@ -1,53 +1,22 @@
 // Cloudflare Worker entry. Model traffic never passes through here: the runner calls api_url directly.
+// Routing lives in router.ts; this module only builds Deps from Env and exports what workerd needs.
 import { verifyAccess } from "./auth.ts";
-import { HttpError, json } from "./http.ts";
+import { githubDeps } from "./github/deps.ts";
 import type { Deps, Env } from "./http.ts";
-import { handleAdmin } from "./routes/admin.ts";
-import { handleFeedback } from "./routes/feedback.ts";
-import { handleInit } from "./routes/init.ts";
-import { handleRuns, handleSpend } from "./routes/runs.ts";
+import { hubFromNamespace } from "./realtime/index.ts";
+import { serve } from "./router.ts";
 import { D1Store, R2Blobs } from "./store/d1.ts";
 
-export function route(request: Request, deps: Deps): Promise<Response> {
-    const { pathname } = new URL(request.url);
-    const method = request.method;
-    if (method === "GET" && pathname === "/healthz") {
-        return Promise.resolve(json({ status: "ok" }));
-    }
-    if (method === "GET" && pathname === "/init") {
-        return handleInit(request, deps);
-    }
-    if (method === "POST" && pathname === "/spend") {
-        return handleSpend(request, deps);
-    }
-    if (method === "POST" && pathname === "/runs") {
-        return handleRuns(request, deps);
-    }
-    if (method === "POST" && pathname === "/feedback") {
-        return handleFeedback(request, deps);
-    }
-    if (pathname.startsWith("/api/")) {
-        return handleAdmin(request, deps, pathname.slice(5).split("/").filter(Boolean));
-    }
-    // Anything else is the overview SPA. The Worker runs before assets, so it has to hand them over itself;
-    // single-page-app handling turns unknown paths into index.html so client routing works on a deep link.
-    if (deps.assets && (method === "GET" || method === "HEAD")) {
-        return deps.assets.fetch(request);
-    }
-    throw new HttpError(404, "not found");
-}
+// Durable Object classes must be exported from the Worker's main module, or the deploy fails.
+export { RealtimeHub } from "./realtime/index.ts";
+export { route, serve } from "./router.ts";
 
-export async function serve(request: Request, deps: Deps): Promise<Response> {
-    try {
-        return await route(request, deps);
-    } catch (error) {
-        if (error instanceof HttpError) {
-            return json({ error: error.message }, error.status);
-        }
-        console.error(error);
-        return json({ error: "internal error" }, 500);
-    }
-}
+// router.ts matches these before the generic /api/* admin dispatch, in this order:
+//   POST /api/webhook/github  -> handleGithubWebhook(request, deps.gh)       X-Hub-Signature-256, no admin login
+//   LIVE_EMIT_PATH            -> handleEmit(request, deps, deps.live)        HX_CTX_TOKEN of the repo, or admin
+//   LIVE_PATH                 -> handleLive(request, deps, deps.live)        WebSocket upgrade, admin
+//   /api/github/*             -> handleGitHub(request, deps, deps.gh, ...)   admin
+// fetch() below fills deps.live from env.REALTIME and deps.gh from githubDeps(env, deps).
 
 export default {
     fetch(request: Request, env: Env): Promise<Response> {
@@ -71,6 +40,8 @@ export default {
             now: () => new Date(),
             id: () => crypto.randomUUID(),
         };
+        deps.live = env.REALTIME ? hubFromNamespace(env.REALTIME) : undefined;
+        deps.gh = githubDeps(env, deps);
         return serve(request, deps);
     },
 } satisfies ExportedHandler<Env>;

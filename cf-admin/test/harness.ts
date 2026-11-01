@@ -1,6 +1,6 @@
 // Shared in-memory Worker harness for the cf-admin tests.
 import type { Deps } from "../worker/http.ts";
-import { serve } from "../worker/index.ts";
+import { serve } from "../worker/router.ts";
 import { FakeBlobs, FakeStore } from "./fake-store.ts";
 
 export const ORIGIN = "https://cf.test";

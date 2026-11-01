@@ -38,6 +38,44 @@ function budgetBlur(repo: Repo, onChange: (patch: Partial<Repo>) => void) {
     };
 }
 
+/** The overview carries perRunCapUsd (0 = not set); the shared Repo type in api.ts does not name it yet. */
+type CappedRepo = Repo & { perRunCapUsd?: number };
+/** Without an explicit cap the server grants this share of the monthly budget (init.ts DEFAULT_RUN_SHARE). */
+const DEFAULT_RUN_SHARE = 4;
+
+function runCapOf(repo: Repo): number {
+    return (repo as CappedRepo).perRunCapUsd ?? 0;
+}
+
+/** The cap /init applies now: the explicit perRunCapUsd, or a quarter of the monthly budget. */
+function runCapLabel(repo: Repo): string {
+    const cap = runCapOf(repo);
+    if (repo.budgetUsd <= 0) {
+        return "月预算不设上限, 单次上限不生效";
+    }
+    return cap > 0 ? `生效: ${usd(cap)}` : `默认: 月预算的 1/4 (${usd(repo.budgetUsd / DEFAULT_RUN_SHARE)})`;
+}
+
+/**
+ * An empty box means "back to the default" and is sent as null (stored as 0); an invalid value restores the old
+ * one instead of being sent, so a typo never silently changes the per-run cap.
+ */
+function runCapBlur(repo: Repo, onChange: (patch: Partial<Repo>) => void) {
+    return (event: FocusEvent<HTMLInputElement>) => {
+        const raw = event.target.value.trim();
+        const current = runCapOf(repo);
+        const value = raw === "" ? 0 : Number(raw);
+        if (!Number.isFinite(value) || value < 0) {
+            event.target.value = current > 0 ? String(current) : "";
+            return;
+        }
+        if (value !== current) {
+            // Repo in api.ts does not list the field; the PATCH body carries it through unchanged.
+            onChange({ perRunCapUsd: value > 0 ? value : null } as unknown as Partial<Repo>);
+        }
+    };
+}
+
 const KIND_ITEMS = KIND_OPTIONS.map((option) => ({ value: option, label: repoKindLabel(option) }));
 const MODE_ITEMS = [
     { value: "full", label: "full" },
@@ -171,6 +209,27 @@ export function Repos({ repos, onChange, onCreate, onRotate }: Props) {
                         onBlur={budgetBlur(repo, (patch) => onChange(repo.name, patch))}
                     />
                     <span className="text-[length:var(--fs-2xs)] text-muted-foreground">USD</span>
+                </span>
+            ),
+        },
+        {
+            key: "perRunCap",
+            header: "单次上限 (USD)",
+            width: "16rem",
+            render: (repo) => (
+                <span className="flex items-center gap-1 tabular-nums">
+                    <Input
+                        type="number"
+                        min={0}
+                        step={0.1}
+                        placeholder="1/4"
+                        aria-label={`${repo.name} 单次上限 (USD)`}
+                        title="留空表示按月预算的 1/4"
+                        defaultValue={runCapOf(repo) > 0 ? runCapOf(repo) : ""}
+                        className="h-7 w-20 px-1.5 text-right text-[length:var(--fs-xs)]"
+                        onBlur={runCapBlur(repo, (patch) => onChange(repo.name, patch))}
+                    />
+                    <span className="text-[length:var(--fs-2xs)] text-muted-foreground">{runCapLabel(repo)}</span>
                 </span>
             ),
         },

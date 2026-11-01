@@ -1,5 +1,6 @@
 // Shared literals for the runner. HC-LITERAL requires repeated values to live here.
 import type { Severity } from "./contract/finding.ts";
+import type { CrKind } from "./contract/kind.ts";
 
 export const TOOL_NAME = "hx-context-review";
 export const TOOL_VERSION = "0.3.0";
@@ -87,6 +88,8 @@ export const RULE = {
     codeAi: "CODE-AI",
     tool: "tool-error",
     exemption: "EXEMPT-001",
+    /** The reviewed change edits the repository config; this run used the trusted base copy instead. */
+    config: "HX-CONFIG",
 } as const;
 
 export const ENV = {
@@ -107,10 +110,41 @@ export const ENV = {
     githubServerUrl: "GITHUB_SERVER_URL",
     githubSha: "GITHUB_SHA",
     githubHeadRef: "GITHUB_HEAD_REF",
+    githubRef: "GITHUB_REF",
+    /** Live event runId is `${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}`, so every step of one job shares it. */
+    githubRunId: "GITHUB_RUN_ID",
+    githubRunAttempt: "GITHUB_RUN_ATTEMPT",
 } as const;
 
-export const COMMENT_MARKER = "<!-- hx-context-review -->";
+/**
+ * Prefix of every PR comment marker. The full marker carries the CR kind, so a context CR and a code CR on
+ * the same pull request each update their own comment instead of overwriting each other's.
+ */
+export const COMMENT_MARKER = "<!-- hx-context-review";
+/** The marker written by versions before the kind suffix; a new run of either kind may take it over. */
+export const LEGACY_COMMENT_MARKER = COMMENT_MARKER + " -->";
+/** GitHub list endpoints return at most 100 items a page; a pathological PR is cut off after this many pages. */
+export const COMMENT_PAGE_SIZE = 100;
+export const COMMENT_PAGE_LIMIT = 10;
+
+export function commentMarker(kind: CrKind): string {
+    return `${COMMENT_MARKER}:${kind === "code" ? "code" : "context"} -->`;
+}
 export const PATCH_BRANCH_PREFIX = "hx-ctx/patch-";
 export const PI_PROVIDER = "hx-ctx";
 export const REPORT_FINDING_TOOL = "report_finding";
 export const REPORT_VERDICT_TOOL = "report_verdict";
+
+/** Live channel (cf-admin/worker/realtime): POST one event per request, best effort, never blocking a run. */
+export const LIVE_EMIT_PATH = "/api/live/emit";
+export const LIVE_TIMEOUT_MS = 3000;
+/** events.ts rejects a log message longer than MAX_LOG_MESSAGE (4000); clip below it and mark the cut. */
+export const LIVE_LOG_MAX = 4000;
+export const LIVE_LOG_CLIP = 3900;
+/** events.ts MAX_TEXT and MAX_RUN_ID; the ruleId cap is the literal 200 in findingPayload. */
+export const LIVE_TEXT_MAX = 1000;
+export const LIVE_RULE_MAX = 200;
+export const LIVE_RUN_ID_MAX = 128;
+/** Events queued beyond this are dropped with a warning, so a runaway producer cannot pile up requests. */
+export const LIVE_QUEUE_LIMIT = 200;
+export const ELLIPSIS = "...";

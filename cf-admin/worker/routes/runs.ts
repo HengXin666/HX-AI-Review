@@ -150,29 +150,77 @@ function patches(value: unknown): InPatch[] {
         .map((item) => ({ fingerprint: item.fingerprint, diff: item.diff }));
 }
 
+type Counts = { error: number; warning: number; blocking: number };
+
+/**
+ * The run's real totals. The runner caps findings at MAX_FINDINGS, so counting the list it sent would
+ * under-report a truncated run (and could even miss its blocking Errors). A runner that truncated says so
+ * with truncated: true and must then send totalCounts; totalCounts, when present, is authoritative and may
+ * never be below what the list itself shows. Without either, the list is complete and is counted.
+ */
+function totals(body: Record<string, unknown>, list: InFinding[]): Counts {
+    const errors = list.filter((item) => item.severity === "error");
+    const listed: Counts = {
+        error: errors.length,
+        warning: list.length - errors.length,
+        blocking: errors.filter((item) => item.origin === "new").length,
+    };
+    const truncated = flag(body.truncated, "truncated", false);
+    if (body.totalCounts === undefined) {
+        if (truncated) {
+            throw new HttpError(400, "totalCounts is required when truncated is true");
+        }
+        return listed;
+    }
+    const raw = object(body.totalCounts, "totalCounts");
+    const given: Counts = {
+        error: count(raw.error, "totalCounts.error"),
+        warning: count(raw.warning, "totalCounts.warning"),
+        blocking: count(raw.blocking, "totalCounts.blocking"),
+    };
+    if (given.blocking > given.error) {
+        throw new HttpError(400, "totalCounts.blocking must not exceed totalCounts.error");
+    }
+    for (const key of ["error", "warning", "blocking"] as const) {
+        if (given[key] < listed[key]) {
+            throw new HttpError(400, `totalCounts.${key} is below the ${listed[key]} findings sent`);
+        }
+    }
+    return given;
+}
+
 /**
  * Status derives from facts: blocking Errors are failed, an unfinished run (complete false, or the runner
  * saying incomplete) is incomplete, otherwise warned or passed by the findings. The only label the runner
  * adds is skipped (nothing in scope), and only when there are no findings.
  */
 function derive(body: Record<string, unknown>, list: InFinding[]) {
-    const errors = list.filter((item) => item.severity === "error");
-    const blocking = errors.filter((item) => item.origin === "new").length;
-    const counts = { error: errors.length, warning: list.length - errors.length };
+    const counts = totals(body, list);
     if (body.status !== undefined && (typeof body.status !== "string" || !STATUSES.has(body.status))) {
         throw new HttpError(400, `status must be one of ${[...STATUSES].join(", ")}`);
     }
     const incomplete = !flag(body.complete, "complete", true) || body.status === "incomplete";
-    const status = blocking
+    const status = counts.blocking
         ? "failed"
         : incomplete
           ? "incomplete"
-          : list.length
+          : counts.error + counts.warning
             ? "warned"
             : body.status === "skipped"
               ? "skipped"
               : "passed";
     return { counts, status, incomplete };
+}
+
+/** "refs/heads/main" and "main" name the same branch; a tag or other ref is not a branch at all. */
+function branchOf(ref: string | null): string | null {
+    if (!ref) {
+        return null;
+    }
+    if (ref.startsWith("refs/heads/")) {
+        return ref.slice("refs/heads/".length) || null;
+    }
+    return ref.startsWith("refs/") ? null : ref;
 }
 
 /** Charge from token counts with the provider's prices, never less than what the runner reported. */
@@ -231,6 +279,10 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
     const usage = body.usage === undefined ? {} : object(body.usage, "usage");
     const { counts, status, incomplete } = derive(body, list);
     const prNumber = int(body.prNumber, "prNumber", 1);
+    // The pushed ref and the repository's default branch, both from the runner (GITHUB_REF and the event's
+    // repository.default_branch). Validated here, before any write.
+    const ref = text(body.ref, "ref");
+    const defaultBranch = text(body.defaultBranch, "defaultBranch");
     // Token counts are integers; usage.cost stays fractional because prices are per-million tokens.
     for (const key of ["input", "output", "cacheRead", "cacheWrite"]) {
         count(usage[key], "usage." + key);
@@ -318,7 +370,11 @@ export async function handleRuns(request: Request, deps: Deps): Promise<Response
     await deps.store.charge(repo.id, costUsd, month(now), budgetClaim);
     // last_sha is the "context reviewed up to here" cursor. A code review says nothing about whether the
     // context files are current, so advancing it from a code run would silently skip context coverage.
-    if (kind === "context" && run.event === "push" && prNumber === null && !incomplete) {
+    // Only the default branch moves it: a push to a feature branch would otherwise set the cursor to a
+    // commit the default branch may never contain. A runner that sends no ref or defaultBranch moves nothing.
+    const pushed = branchOf(ref);
+    const onDefaultBranch = pushed !== null && pushed === branchOf(defaultBranch);
+    if (kind === "context" && run.event === "push" && prNumber === null && !incomplete && onDefaultBranch) {
         await deps.store.setLastSha(repo.id, sha);
     }
     const overviewUrl = deps.overviewUrl ? `${deps.overviewUrl.replace(/\/$/, "")}/#/runs/${runId}` : undefined;

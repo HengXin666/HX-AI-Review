@@ -6,10 +6,21 @@ import type { Kind, ProviderRow, RepoKind, RepoRow } from "../store/port.ts";
 const MAX_CANDIDATES = 12;
 /** A claim older than this is treated as abandoned (job timeout is 30 minutes), so a crashed run cannot block. */
 const RESERVE_TTL_MS = 60 * 60 * 1000;
-const BUSY = "another run is using this month's budget";
+const BUSY = "other runs hold the rest of this month's budget";
+/** Without an explicit per_run_cap_usd a run may take this share of the monthly budget (4 -> a quarter). */
+const DEFAULT_RUN_SHARE = 4;
 
 function spentThisMonth(repo: RepoRow, now: Date): number {
     return repo.budgetMonth === month(now) ? repo.spentUsd : 0;
+}
+
+/**
+ * Most one run may be granted. Claiming the whole remainder per run made a same-group takeover of a run
+ * cancelled after its first session settle the entire month; with a cap it settles at most one cap, and
+ * the remainder stays available to concurrent runs in other groups.
+ */
+export function perRunCap(repo: RepoRow): number {
+    return repo.perRunCapUsd > 0 ? repo.perRunCapUsd : repo.budgetUsd / DEFAULT_RUN_SHARE;
 }
 
 type L0 = { cause: "disabled" | "mode" | "budget" | "config"; reason: string };
@@ -47,16 +58,16 @@ async function promptPayload(deps: Deps) {
 }
 
 /**
- * This request's budget claim, echoed back by POST /runs so only the holder can release it. The allowance
- * is the remaining budget, recorded on the claim so a later takeover settles it instead of handing the
- * same remainder out again to a run whose predecessor was cancelled before it could report.
+ * This request's budget claim, echoed back by POST /runs so only the holder can release it. The claim is
+ * one budget_claims row sized at most `perRunCapUsd`: other groups keep claiming their own rows from what
+ * is left, and a later same-group takeover settles only this capped allowance.
  */
 async function claimBudget(
     deps: Deps,
     repoId: number,
     now: Date,
     group: string,
-    allowanceUsd: number,
+    perRunCapUsd: number,
 ): Promise<{ claim: string; allowanceUsd: number } | null> {
     const claim = deps.id();
     const expiresAt = new Date(now.getTime() + RESERVE_TTL_MS).toISOString();
@@ -64,7 +75,7 @@ async function claimBudget(
         repoId,
         claim,
         group,
-        allowanceUsd,
+        perRunCapUsd,
         month(now),
         now.toISOString(),
         expiresAt,
@@ -133,8 +144,10 @@ export async function handleInit(request: Request, deps: Deps): Promise<Response
     // Only a capped repo that would otherwise get a model run needs a claim; the concurrency group lets
     // a run take over the claim of the run GitHub just cancelled to start it.
     const group = new URL(request.url).searchParams.get("group") ?? "";
-    const remaining = Math.max(0, repo.budgetUsd - spentThisMonth(repo, now));
-    const held = !reason && repo.budgetUsd > 0 ? await claimBudget(deps, repo.id, now, group, remaining) : null;
+    // Request at most one per-run cap, not the month: the claim is what a takeover would settle.
+    const cap = perRunCap(repo);
+    const remaining = Math.max(0, Math.min(cap, repo.budgetUsd - spentThisMonth(repo, now)));
+    const held = !reason && repo.budgetUsd > 0 ? await claimBudget(deps, repo.id, now, group, cap) : null;
     const l0 = reason ?? (repo.budgetUsd > 0 && !held ? { cause: "budget" as const, reason: BUSY } : null);
     const base = {
         repo: repo.name,
@@ -149,9 +162,8 @@ export async function handleInit(request: Request, deps: Deps): Promise<Response
             contextWindow: provider?.contextWindow ?? 0,
             maxTokens: provider?.maxTokens ?? 0,
             maxCandidates: MAX_CANDIDATES,
-            // Remaining monthly budget; the runner stops opening model sessions once a run reaches it.
-            // The claim's settled allowance is the authoritative figure: taking over a cancelled run's
-            // claim charges that allowance first, and the raw row is only re-read for uncapped repos.
+            // This run's allowance: the claim's grant (at most the per-run cap); the runner stops opening
+            // model sessions once the run reaches it. A refused run gets its would-be cap for display only.
             maxRunUsd: repo.budgetUsd > 0 ? (held ? held.allowanceUsd : remaining) : null,
         },
         pricing: {

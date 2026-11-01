@@ -21,6 +21,13 @@ components:
             in: cookie
             name: hxctx_admin
             description: HMAC session from POST /api/session. HttpOnly, 12h.
+        webhookSignature:
+            type: apiKey
+            in: header
+            name: X-Hub-Signature-256
+            description: >-
+                sha256=<HMAC-SHA256 of the raw body> with the GitHub App webhook secret, which D1 stores sealed
+                under GITHUB_APP_KEK. Only /api/webhook/github uses it.
     schemas:
         Finding:
             type: object
@@ -279,6 +286,115 @@ components:
                 byRule: { type: array, items: { $ref: "#/components/schemas/RuleSummary" } }
                 bySeverity: { type: array, items: { $ref: "#/components/schemas/SeveritySummary" } }
                 topRule: { type: [string, "null"], description: Most triggered rule id }
+        LiveEvent:
+            type: object
+            description: >-
+                One live-channel event. Producers POST it to /api/live/emit; subscribers receive it with id added.
+                Any missing or invalid field is a 400, never silently defaulted.
+            required: [type, repo, runId, kind, payload]
+            properties:
+                type: { type: string, enum: [stage, log, finding, progress, done] }
+                repo: { type: string, description: owner/name }
+                runId: { type: string, minLength: 1, maxLength: 128 }
+                kind: { $ref: "#/components/schemas/Kind" }
+                at:
+                    {
+                        type: string,
+                        format: date-time,
+                        description: Defaults to server time,
+                        normalized with toISOString,
+                    }
+                id: { type: integer, description: Downstream only. Strictly increasing per repo room, used for resume }
+                payload:
+                    description: >-
+                        stage {stage, status running|done|failed, durationMs?, message? (<=1000)};
+                        log {stage, level debug|info|warn|error, message 1-4000};
+                        finding {ruleId (<=200), path (<=1000), line?, severity? error|warning, message? (<=1000), origin? new|historical};
+                        progress {stage? (default review), finder? {batch, batches?}, candidates?, verifier? {done, total?}}, at least one of the last three;
+                        done {complete, counts {findings, errors, warnings, candidates?, verified?}, status? passed|warned|failed|skipped|incomplete, durationMs?}.
+                        stage is one of init, l0, rules, scope, review, publish.
+                    type: object
+        ActiveRun:
+            type: object
+            required: [runId, kind, stage, status, startedAt, updatedAt, lastEventId]
+            properties:
+                runId: { type: string }
+                kind: { $ref: "#/components/schemas/Kind" }
+                stage: { type: [string, "null"], enum: [init, l0, rules, scope, review, publish, null] }
+                status: { type: [string, "null"], enum: [running, done, failed, null] }
+                startedAt: { type: string, format: date-time }
+                updatedAt: { type: string, format: date-time }
+                lastEventId: { type: integer }
+        SnapshotFrame:
+            type: object
+            description: First frame of every live connection.
+            required: [type, repo, at, payload]
+            properties:
+                type: { type: string, const: snapshot }
+                repo: { type: string }
+                at: { type: string, format: date-time }
+                payload:
+                    type: object
+                    required: [runs, lastEventId, oldestEventId, replayed, gap]
+                    properties:
+                        runs: { type: array, items: { $ref: "#/components/schemas/ActiveRun" } }
+                        lastEventId: { type: integer, description: Newest event id in the room, 0 when empty }
+                        oldestEventId: { type: integer, description: Oldest buffered event id, 0 when empty }
+                        replayed:
+                            { type: integer, description: Events that follow this frame because the client resumed }
+                        gap:
+                            {
+                                type: boolean,
+                                description: Resumed from an id behind the 200-event ring or ahead of the room; refetch state,
+                            }
+        GitHubAppView:
+            type: object
+            required:
+                [
+                    appId,
+                    slug,
+                    clientId,
+                    workflowFile,
+                    status,
+                    hasPrivateKey,
+                    hasClientSecret,
+                    hasWebhookSecret,
+                    createdAt,
+                    updatedAt,
+                    installedAt,
+                ]
+            properties:
+                appId: { type: string }
+                slug: { type: string }
+                clientId: { type: string, description: Empty string when unset }
+                workflowFile: { type: string, description: Defaults to hx-context-review.yml }
+                status: { type: string, enum: [configured, verified, invalid] }
+                hasPrivateKey: { type: boolean }
+                hasClientSecret: { type: boolean }
+                hasWebhookSecret: { type: boolean }
+                createdAt: { type: string, format: date-time }
+                updatedAt: { type: string, format: date-time }
+                installedAt: { type: [string, "null"], format: date-time }
+        GitHubAppState:
+            type: object
+            description: Never carries a private key, client secret or webhook secret.
+            required: [configured, app, webhookUrl]
+            properties:
+                configured: { type: boolean, description: The app exists with a private key and a webhook secret }
+                app:
+                    oneOf:
+                        - { $ref: "#/components/schemas/GitHubAppView" }
+                        - { type: "null" }
+                webhookUrl:
+                    {
+                        type: string,
+                        description: "<this Worker>/api/webhook/github, to paste into the GitHub App settings",
+                    }
+        Error:
+            type: object
+            required: [error]
+            properties:
+                error: { type: string }
 paths:
     /healthz:
         get:
@@ -611,3 +727,592 @@ paths:
             responses:
                 "201": { description: Notes folded into a new active addendum }
                 "400": { description: No unfolded notes, or the folded text exceeds 4000 bytes }
+    /api/live:
+        get:
+            operationId: liveSubscribe
+            summary: WebSocket subscription to one repository's live room
+            description: >-
+                Requires a WebSocket upgrade. Authorized with requireAdmin (Access JWT or the hxctx_admin session
+                cookie). When an Origin header is present it must match this host. The first frame is a
+                SnapshotFrame, then the events after lastEventId (at most the 200 buffered), then live events and
+                {"type":"ping","at"} frames every 30 s. Clients answer {"type":"pong"} (plain text pong also
+                accepted); a socket silent for more than 90 s is closed with code 4000 "heartbeat timeout".
+            security: [{ access: [] }, { session: [] }]
+            parameters:
+                - { name: repo, in: query, required: true, schema: { type: string }, description: owner/name }
+                - {
+                      name: lastEventId,
+                      in: query,
+                      required: false,
+                      schema: { type: integer },
+                      description: Resume after this event id,
+                  }
+                - {
+                      name: Last-Event-ID,
+                      in: header,
+                      required: false,
+                      schema: { type: string },
+                      description: Same as lastEventId,
+                      for non-browser clients,
+                  }
+            responses:
+                "101": { description: Switched to WebSocket; frames are SnapshotFrame, LiveEvent and ping }
+                "400": { description: repo is not a full name like owner/name }
+                "403": { description: Not logged in, or cross-origin upgrade }
+                "405": { description: Not GET }
+                "426": { description: Not a WebSocket upgrade }
+                "503": { description: REALTIME binding missing }
+    /api/live/emit:
+        post:
+            operationId: liveEmit
+            summary: Publish one event to a repository's live room
+            description: >-
+                With Authorization Bearer HX_CTX_TOKEN the token must belong to event.repo. Without a Bearer
+                header requireAdmin applies (session cookie or Access).
+            security: [{ repoToken: [] }, { access: [] }, { session: [] }]
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema: { $ref: "#/components/schemas/LiveEvent" }
+            responses:
+                "202":
+                    description: Stored and fanned out
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                required: [id, at]
+                                properties:
+                                    id: { type: integer }
+                                    at: { type: string, format: date-time }
+                "400": { description: Body is not a JSON object, or any event field is missing or invalid }
+                "401": { description: Unknown HX_CTX_TOKEN }
+                "403": { description: Token belongs to another repository, or no token and no admin login }
+                "405": { description: Not POST }
+                "503": { description: REALTIME binding missing }
+    /api/github/app:
+        get:
+            operationId: getGitHubApp
+            security: [{ access: [] }, { session: [] }]
+            responses:
+                "200":
+                    description: App configuration without secrets
+                    content:
+                        application/json:
+                            schema: { $ref: "#/components/schemas/GitHubAppState" }
+                "403": { description: Not an admin }
+                "503": { description: GitHub dependencies not wired }
+        post:
+            operationId: saveGitHubApp
+            description: >-
+                Create or update the single GitHub App. Secrets are sealed with the GITHUB_APP_KEK envelope before
+                they reach D1. A secret omitted on update keeps its stored value. Every save resets status to
+                configured; a changed appId drops every cached installation token.
+            security: [{ access: [] }, { session: [] }]
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            required: [appId, slug]
+                            properties:
+                                appId:
+                                    {
+                                        type: [integer, string],
+                                        description: Numeric GitHub App id,
+                                        number or digit string,
+                                    }
+                                slug: { type: string }
+                                privateKey:
+                                    {
+                                        type: string,
+                                        description: "PEM, BEGIN RSA PRIVATE KEY (as GitHub downloads it) or BEGIN PRIVATE KEY. Required the first time",
+                                    }
+                                webhookSecret: { type: string, minLength: 16, description: Required the first time }
+                                clientId: { type: string }
+                                clientSecret: { type: string, description: Empty string clears it }
+                                workflowFile:
+                                    {
+                                        type: string,
+                                        description: "File name like hx-context-review.yml (^[\\w.-]+\\.ya?ml$), default hx-context-review.yml",
+                                    }
+            responses:
+                "200":
+                    description: Saved; same body as GET
+                    content:
+                        application/json:
+                            schema: { $ref: "#/components/schemas/GitHubAppState" }
+                "400":
+                    {
+                        description: "Invalid field, privateKey or webhookSecret missing on first save, key cannot be imported, or GITHUB_APP_KEK not set",
+                    }
+                "403": { description: Not an admin }
+    /api/github/app/verify:
+        post:
+            operationId: verifyGitHubApp
+            description: >-
+                No request body. Signs an app JWT with the stored key and calls GitHub GET /app and
+                GET /app/installations. Success sets status verified; 422 and 403 set it invalid.
+            security: [{ access: [] }, { session: [] }]
+            responses:
+                "200":
+                    description: Credentials work
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                required: [ok, app, installations]
+                                properties:
+                                    ok: { type: boolean, const: true }
+                                    app:
+                                        type: object
+                                        required: [id, slug, name, owner]
+                                        properties:
+                                            id: { type: integer }
+                                            slug: { type: string }
+                                            name: { type: string }
+                                            owner: { type: [string, "null"] }
+                                    installations: { type: integer, description: Number of installations }
+                "400": { description: App not configured, private key missing, or GITHUB_APP_KEK not set }
+                "403": { description: Not an admin, or GitHub denied the request (missing app permission) }
+                "422": { description: GitHub rejected the credentials, or the private key belongs to another app }
+                "502": { description: GitHub is unavailable }
+    /api/github/installations:
+        get:
+            operationId: listGitHubInstallations
+            description: Lists installations from GitHub with the repositories each reaches, and refreshes their state in D1.
+            security: [{ access: [] }, { session: [] }]
+            responses:
+                "200":
+                    description: Installations
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                required: [installations]
+                                properties:
+                                    installations:
+                                        type: array
+                                        items:
+                                            type: object
+                                            required:
+                                                [
+                                                    installationId,
+                                                    account,
+                                                    accountType,
+                                                    repositorySelection,
+                                                    suspended,
+                                                    repos,
+                                                ]
+                                            properties:
+                                                installationId: { type: integer }
+                                                account: { type: string }
+                                                accountType: { type: string }
+                                                repositorySelection: { type: string, enum: [selected, all] }
+                                                suspended: { type: boolean }
+                                                repos:
+                                                    type: array
+                                                    description: Empty when suspended
+                                                    items:
+                                                        type: object
+                                                        required: [fullName, defaultBranch, private, registered, kind]
+                                                        properties:
+                                                            fullName: { type: string }
+                                                            defaultBranch: { type: string }
+                                                            private: { type: boolean }
+                                                            registered:
+                                                                {
+                                                                    type: boolean,
+                                                                    description: Present in the repos table,
+                                                                }
+                                                            kind:
+                                                                oneOf:
+                                                                    - { $ref: "#/components/schemas/RepoKind" }
+                                                                    - { type: "null" }
+                "400": { description: App not configured, or GITHUB_APP_KEK not set }
+                "403": { description: Not an admin, or GitHub denied the request }
+                "422": { description: GitHub rejected the app credentials }
+                "502": { description: GitHub is unavailable }
+    /api/github/queue:
+        get:
+            operationId: listGitHubQueue
+            description: Webhook-triggered reviews in run_queue, newest first.
+            security: [{ access: [] }, { session: [] }]
+            parameters:
+                - { name: repo, in: query, required: false, schema: { type: string } }
+                - {
+                      name: limit,
+                      in: query,
+                      required: false,
+                      schema: { type: integer, minimum: 1, maximum: 200, default: 50 },
+                  }
+            responses:
+                "200":
+                    description: Queue items
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                required: [items]
+                                properties:
+                                    items:
+                                        type: array
+                                        items:
+                                            type: object
+                                            properties:
+                                                id: { type: string }
+                                                repo: { type: string }
+                                                sha: { type: string }
+                                                kind: { $ref: "#/components/schemas/Kind" }
+                                                event: { type: string, enum: [push, pull_request] }
+                                                ref: { type: string }
+                                                prNumber: { type: [integer, "null"] }
+                                                installationId: { type: [integer, "null"] }
+                                                deliveryId: { type: [string, "null"] }
+                                                status: { type: string, enum: [pending, dispatched, failed] }
+                                                error: { type: [string, "null"] }
+                                                createdAt: { type: string, format: date-time }
+                                                updatedAt: { type: string, format: date-time }
+                "400": { description: limit is not an integer from 1 to 200 }
+                "403": { description: Not an admin }
+    /api/github/app/manifest:
+        get:
+            operationId: getGitHubAppManifest
+            description: >-
+                Starts one-click App registration. Stores a fresh one-time state (24 random bytes, base64url) in
+                github_app_states, valid for 10 minutes, and returns the GitHub App Manifest for this Worker. The
+                browser then submits a form (full page navigation, not fetch) to action + "?state=" + state with one
+                hidden field manifest = JSON.stringify(manifest). No parameters.
+            security: [{ access: [] }, { session: [] }]
+            responses:
+                "200":
+                    description: State and manifest
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                required: [action, state, expiresAt, manifest]
+                                properties:
+                                    action: { type: string, const: "https://github.com/settings/apps/new" }
+                                    state: { type: string, description: One-time, 10 minutes }
+                                    expiresAt: { type: string, format: date-time }
+                                    manifest:
+                                        type: object
+                                        required:
+                                            [
+                                                name,
+                                                url,
+                                                hook_attributes,
+                                                redirect_url,
+                                                public,
+                                                default_permissions,
+                                                default_events,
+                                            ]
+                                        properties:
+                                            name:
+                                                {
+                                                    type: string,
+                                                    description: "hx-context-review- plus 6 hex chars, new on every call",
+                                                }
+                                            url: { type: string, description: Origin of this request }
+                                            hook_attributes:
+                                                type: object
+                                                required: [url, active]
+                                                properties:
+                                                    url: { type: string, description: "<origin>/api/webhook/github" }
+                                                    active: { type: boolean, const: true }
+                                            redirect_url:
+                                                { type: string, description: "<origin>/api/github/app/callback" }
+                                            public: { type: boolean, const: false }
+                                            default_permissions:
+                                                type: object
+                                                description: Fixed set
+                                                properties:
+                                                    actions: { type: string, const: write }
+                                                    contents: { type: string, const: write }
+                                                    pull_requests: { type: string, const: write }
+                                                    issues: { type: string, const: write }
+                                                    metadata: { type: string, const: read }
+                                                    secrets: { type: string, const: write }
+                                                    workflows: { type: string, const: write }
+                                            default_events:
+                                                type: array
+                                                items:
+                                                    {
+                                                        type: string,
+                                                        enum:
+                                                            [
+                                                                push,
+                                                                pull_request,
+                                                                installation,
+                                                                installation_repositories,
+                                                            ],
+                                                    }
+                "403": { description: Not an admin }
+                "503": { description: GitHub dependencies not wired }
+    /api/github/app/callback:
+        get:
+            operationId: gitHubAppCallback
+            description: >-
+                GitHub redirects the browser here after the App is created; the frontend never calls it. Public (no
+                admin check): the one-time state from GET /api/github/app/manifest proves an admin started the flow.
+                Missing or bad state is a 400 JSON error and touches neither GitHub nor D1. Otherwise the answer is
+                always a 302, never JSON. GITHUB_APP_KEK is checked before the code is spent; the code is exchanged
+                with POST /app-manifests/{code}/conversions and the pem, webhook_secret and client_secret are sealed
+                into github_apps (status configured).
+            security: []
+            parameters:
+                - { name: code, in: query, required: true, schema: { type: string } }
+                - { name: state, in: query, required: true, schema: { type: string } }
+            responses:
+                "302":
+                    description: >-
+                        Success: Location <origin>/#/github?connected=1&slug=<slug>. Failure after the state check:
+                        Location <origin>/#/github?error=<reason>, reason one of kek_missing (GITHUB_APP_KEK not set,
+                        code not spent), conversion_failed (GitHub refused the code), incomplete_credentials (no pem
+                        or webhook_secret in the conversion), save_failed (pem cannot be imported or the save failed).
+                    headers:
+                        location: { schema: { type: string } }
+                        cache-control: { schema: { type: string, const: no-store } }
+                "400":
+                    description: code or state missing; state unknown, older than 10 minutes, or already used
+                    content:
+                        application/json:
+                            schema: { $ref: "#/components/schemas/Error" }
+                "503": { description: GitHub dependencies not wired }
+    /api/github/repos:
+        get:
+            operationId: listGitHubRepos
+            description: >-
+                One page (32 repositories, GitHub's per_page=32&page=<page>) of the installation's repositories joined
+                with the repos table, each with two probes: whether .github/workflows/<github_apps.workflow_file, default hx-context-review.yml> exists
+                and whether the actions secret HX_CTX_TOKEN exists (name only). A probe that fails (404, permission,
+                outage) reads as false. On page 1 only, also merges that page's names into github_installations.repos
+                (merge never drops a name; webhooks keep the rest current).
+            security: [{ access: [] }, { session: [] }]
+            parameters:
+                - {
+                      name: installationId,
+                      in: query,
+                      required: true,
+                      schema: { type: integer, minimum: 1 },
+                      description: Positive integer,
+                  }
+                - {
+                      name: page,
+                      in: query,
+                      required: false,
+                      schema: { type: integer, minimum: 1, maximum: 1000, default: 1 },
+                      description: 1-based page of 32 repositories; not an integer in 1..1000 is a 400,
+                  }
+            responses:
+                "200":
+                    description: Repositories
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                required: [installationId, page, totalCount, repos]
+                                properties:
+                                    installationId: { type: integer, description: Echoed }
+                                    page: { type: integer, description: Echoed; 1 when omitted }
+                                    totalCount:
+                                        {
+                                            type: integer,
+                                            description: "GitHub's total_count: every repository the installation reaches, across all pages",
+                                        }
+                                    repos:
+                                        type: array
+                                        items:
+                                            type: object
+                                            required:
+                                                [
+                                                    fullName,
+                                                    defaultBranch,
+                                                    private,
+                                                    registered,
+                                                    kind,
+                                                    enabled,
+                                                    workflowInstalled,
+                                                    secretInstalled,
+                                                ]
+                                            properties:
+                                                fullName: { type: string, description: owner/name }
+                                                defaultBranch: { type: string }
+                                                private: { type: boolean }
+                                                registered: { type: boolean, description: Present in the repos table }
+                                                kind:
+                                                    oneOf:
+                                                        - { $ref: "#/components/schemas/RepoKind" }
+                                                        - { type: "null" }
+                                                    description: null when not registered
+                                                enabled: { type: boolean, description: false when not registered }
+                                                workflowInstalled: { type: boolean }
+                                                secretInstalled: { type: boolean }
+                "400":
+                    {
+                        description: installationId not a positive integer,
+                        page not an integer in 1..1000,
+                        App not configured,
+                        or GITHUB_APP_KEK not set,
+                    }
+                "403": { description: Not an admin, or GitHub denied the request }
+                "422": { description: GitHub rejected the app credentials }
+                "502": { description: GitHub is unavailable }
+                "503": { description: GitHub dependencies not wired }
+    /api/github/enable:
+        post:
+            operationId: enableGitHubRepo
+            description: >-
+                Three steps in order, each run and reported on its own even when an earlier one failed. workflow:
+                write .github/workflows/hx-context-review.yml on the default branch (commit message "chore: enable
+                hx-context-review"). secret: seal a new runner token with the repository public key and write the
+                actions secret HX_CTX_TOKEN. register: create the repo (token hash, kind, enabled) or update kind and
+                enabled; an existing repo's token hash is rotated only when the secret step succeeded. A failed
+                installation token fails workflow and secret, register still runs. The body is validated before
+                anything happens.
+            security: [{ access: [] }, { session: [] }]
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            required: [fullName, kind, installationId]
+                            properties:
+                                fullName: { type: string, pattern: "^[\\w.-]+/[\\w.-]+$", description: owner/name }
+                                kind: { $ref: "#/components/schemas/RepoKind" }
+                                installationId:
+                                    { type: [integer, string], description: "Positive integer, number or digit string" }
+            responses:
+                "200":
+                    description: Steps ran; a failed step is still 200, read ok and steps
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                required: [ok, steps]
+                                properties:
+                                    ok: { type: boolean, description: All three steps succeeded }
+                                    steps:
+                                        type: array
+                                        description: Always three, in this order
+                                        minItems: 3
+                                        maxItems: 3
+                                        items:
+                                            type: object
+                                            required: [name, ok, message]
+                                            properties:
+                                                name: { type: string, enum: [workflow, secret, register] }
+                                                ok: { type: boolean }
+                                                message:
+                                                    {
+                                                        type: string,
+                                                        description: "Human readable; on failure the GitHub error, at most 300 chars",
+                                                    }
+                                    manualSecret:
+                                        type: object
+                                        description: >-
+                                            Only when the repo was newly registered and the secret step failed. Shown once;
+                                            the admin sets it under the repository Settings, Secrets.
+                                        required: [name, value]
+                                        properties:
+                                            name: { type: string, const: HX_CTX_TOKEN }
+                                            value: { type: string, description: Runner token, prefix hxctx_ }
+                "400":
+                    {
+                        description: "fullName not owner/name, kind not context, code or both, installationId not a positive integer, or body not JSON",
+                    }
+                "403": { description: Not an admin }
+                "503": { description: GitHub dependencies not wired }
+    /api/github/disable:
+        post:
+            operationId: disableGitHubRepo
+            description: Sets repos.enabled to false. The workflow file and the HX_CTX_TOKEN secret stay in place.
+            security: [{ access: [] }, { session: [] }]
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            required: [fullName]
+                            properties:
+                                fullName: { type: string, pattern: "^[\\w.-]+/[\\w.-]+$", description: owner/name }
+            responses:
+                "200":
+                    description: Disabled
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                required: [ok]
+                                properties:
+                                    ok: { type: boolean, const: true }
+                "400": { description: fullName not owner/name, or body not JSON }
+                "403": { description: Not an admin }
+                "404": { description: Repository is not registered }
+                "503": { description: GitHub dependencies not wired }
+    /api/webhook/github:
+        post:
+            operationId: githubWebhook
+            description: >-
+                Called by GitHub, not the console. No admin auth: X-Hub-Signature-256 (HMAC-SHA256 with the stored
+                webhook secret) is the auth, and nothing is written before it verifies. Handled events: ping,
+                push (default branch only, branch deletions ignored), pull_request (opened, synchronize, reopened,
+                ready_for_review; drafts and forks skipped), installation, installation_repositories. A trigger
+                queues one run_queue row per kind (two for kind both) and fires workflow_dispatch with inputs
+                head_sha and kind; the same repo + sha + kind within 10 minutes is a duplicate unless the earlier
+                row failed.
+            security: [{ webhookSignature: [] }]
+            parameters:
+                - { name: X-Hub-Signature-256, in: header, required: true, schema: { type: string } }
+                - { name: X-GitHub-Event, in: header, required: true, schema: { type: string } }
+                - { name: X-GitHub-Delivery, in: header, required: false, schema: { type: string } }
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema: { type: object, description: GitHub webhook payload }
+            responses:
+                "200":
+                    description: >-
+                        ping -> {pong: true}; installation -> {installation, action};
+                        installation_repositories -> {installation, added, removed}
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    pong: { type: boolean }
+                                    installation: { type: integer }
+                                    action: { type: string }
+                                    added: { type: array, items: { type: string } }
+                                    removed: { type: array, items: { type: string } }
+                "202":
+                    description: Ignored ({ignored, repo?}) or triggered ({repo, sha, event, queued})
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    ignored: { type: string }
+                                    repo: { type: string }
+                                    sha: { type: string }
+                                    event: { type: string, enum: [push, pull_request] }
+                                    queued:
+                                        type: array
+                                        items:
+                                            type: object
+                                            required: [kind, status]
+                                            properties:
+                                                id: { type: string, description: Absent for duplicate }
+                                                kind: { $ref: "#/components/schemas/Kind" }
+                                                status: { type: string, enum: [dispatched, failed, duplicate] }
+                                                error: { type: string }
+                "400": { description: Body is not JSON, or the payload lacks required fields }
+                "401":
+                    { description: Invalid X-Hub-Signature-256, or no webhook secret / GITHUB_APP_KEK to verify with }
+                "503": { description: GitHub dependencies not wired }

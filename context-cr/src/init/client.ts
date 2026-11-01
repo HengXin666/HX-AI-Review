@@ -6,7 +6,10 @@ export type Suppression = { fingerprint: string; reason: string };
 /** Operator addendum from the overview. It is appended to the built-in system prompt, never a replacement. */
 export type PromptAddendum = { version: number; body: string };
 
-/** Shape returned by the CF Worker GET /init. The api key never reaches a file, only the env. */
+/**
+ * Shape returned by the CF Worker GET /init. The api key is masked and written to a 0600 temp file under
+ * RUNNER_TEMP that the review step reads and deletes; it never enters $GITHUB_ENV, D1 or the logs.
+ */
 export type InitConfig = {
     repo: string;
     /** What this run reviews: "context" checks context files, "code" reviews the diff itself. */
@@ -219,7 +222,7 @@ export async function fetchInit(
     return parseInit(await response.json(), kind ?? CONTEXT_KIND);
 }
 
-/** Split the secret out so it is masked and exported only through the environment. */
+/** Split the secret out so it is masked and stored only in the 0600 key file, never in the job env. */
 export function splitSecret(response: InitResponse): { config: InitConfig; apiKey?: string } {
     const { apiKey, ...config } = response;
     return { config, apiKey };

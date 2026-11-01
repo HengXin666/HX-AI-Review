@@ -18,6 +18,14 @@ on:
                 type: string
                 required: false
                 default: context
+            head_sha:
+                description: >-
+                    Commit to check out and review. The caller workflow passes inputs.head_sha from workflow_dispatch
+                    (the GitHub App webhook sends the pushed or PR head sha). Empty falls back to the PR head, then
+                    github.sha.
+                type: string
+                required: false
+                default: ""
         secrets:
             HX_CTX_TOKEN:
                 required: true
@@ -52,11 +60,16 @@ jobs:
             # scope run before it and publish needs its reserve after it.
             - name: 0 record job start time
               run: echo "HX_CTX_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+            # head_sha is caller input (whoever can dispatch the caller workflow, i.e. write access to the repo),
+            # so it is untrusted. Checking it out does not run it: the steps below run only the tool checked out
+            # from HengXin666/HX-AI-Review at tool-ref, never scripts or workflows from the reviewed tree, which the
+            # model reads through read-only tools. It is passed via with.ref, never interpolated into a shell, and a
+            # sha that does not exist in the repository just fails the checkout. The security boundary is unchanged.
             - name: 1 checkout (fetch-depth 0, full history and context)
               uses: actions/checkout@v4
               with:
                   fetch-depth: 0
-                  ref: ${{ github.event.pull_request.head.sha || github.sha }}
+                  ref: ${{ inputs.head_sha || github.event.pull_request.head.sha || github.sha }}
                   # No token in .git/config: the model's tools run in this tree. publish passes GITHUB_TOKEN per push.
                   persist-credentials: false
             - name: Checkout hx-context-review tool
@@ -88,7 +101,11 @@ jobs:
               id: l0
               continue-on-error: true
               run: node "$TOOL/context-cr/src/cli.ts" l0
-            - name: 3b rules engine (deterministic, exemption aware)
+            # Report only. The rule registry encodes this tool repository's own conventions, so in a caller's
+            # workflow it writes rules.{md,json} into the artifact and never gates: Error comes from L0 alone.
+            # Only findings on files changed in the range count as blocking at all; the gate that acts on them
+            # is this repository's quality workflow, not the reusable review.
+            - name: 3b rules engine (report only, never fails the job)
               id: rules
               continue-on-error: true
               run: node "$TOOL/context-cr/src/cli.ts" rules
@@ -101,12 +118,18 @@ jobs:
               if: steps.scope.outputs.empty != 'true' && steps.init.outputs.l0_only != 'true'
               # The token is needed to POST /spend before the first model session: only a claim marked as
               # spending is settled when a newer run takes it over. Fork PRs never reach this step (job if).
+              # The AI stage never fails the job. Start-up problems (no key, no claim, runtime) are written to
+              # ai.json as an unfinished result and publish reports the run incomplete; anything still thrown
+              # is absorbed here, and publish sees no ai.json for this nonce and reports incomplete too.
+              continue-on-error: true
               env:
                   HX_CTX_TOKEN: ${{ secrets.HX_CTX_TOKEN }}
               run: node "$TOOL/context-cr/src/cli.ts" review
             # Not on cancel. After a scope or review failure it still publishes L0, marked incomplete so last_sha stays.
+            # Publishing never decides the verdict: the L0 gate below runs whatever happens here.
             - name: 6 ingest + write-back (POST /runs, patch branch, comment)
               if: ${{ !cancelled() && steps.init.outcome == 'success' }}
+              continue-on-error: true
               env:
                   HX_CTX_TOKEN: ${{ secrets.HX_CTX_TOKEN }}
                   GITHUB_TOKEN: ${{ github.token }}
@@ -123,9 +146,4 @@ jobs:
               if: steps.l0.outcome == 'failure'
               run: |
                   echo "L0 found blocking Error findings; see the report artifact."
-                  exit 1
-            - name: Fail on rules Error after exemptions
-              if: steps.rules.outcome == 'failure'
-              run: |
-                  echo "Rules engine found blocking Error findings; see scripts/.hx_code_quality/reports/rules.md."
                   exit 1

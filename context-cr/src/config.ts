@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CONFIG_FILE, DOCS_ROOT, UTF8 } from "./constants.ts";
+import { showFile } from "./git.ts";
 
 /** Optional per-repo settings read from the checked-out caller repository. */
 export type RepoConfig = {
@@ -61,12 +62,9 @@ function evidenceLimit(value: unknown, fallback: number): number {
     return Math.min(20, Math.max(0, value));
 }
 
-export function loadConfig(root: string): RepoConfig {
-    const file = join(root, CONFIG_FILE);
-    if (!existsSync(file)) {
-        return DEFAULT_CONFIG;
-    }
-    const raw = JSON.parse(readFileSync(file, UTF8)) as Record<string, unknown>;
+/** Parse the config file text; absent keys and junk values keep their defaults. */
+export function parseConfig(text: string): RepoConfig {
+    const raw = JSON.parse(text) as Record<string, unknown>;
     const concurrent = raw.concurrentSkills;
     return {
         skillRoots: stringList(raw.skillRoots, DEFAULT_CONFIG.skillRoots).map(trimSlash),
@@ -82,6 +80,36 @@ export function loadConfig(root: string): RepoConfig {
         evidencePrs: evidenceLimit(raw.evidencePrs, DEFAULT_CONFIG.evidencePrs),
         evidenceIssues: evidenceLimit(raw.evidenceIssues, DEFAULT_CONFIG.evidenceIssues),
     };
+}
+
+/** Config from the worktree. Local commands use it; CI steps use loadTrustedConfig. */
+export function loadConfig(root: string): RepoConfig {
+    const file = join(root, CONFIG_FILE);
+    if (!existsSync(file)) {
+        return DEFAULT_CONFIG;
+    }
+    return parseConfig(readFileSync(file, UTF8));
+}
+
+/**
+ * Config from the trusted base commit. The reviewed change must not be able to widen `exclude` or move
+ * `baseline` and so switch off the checks that judge it: what the base says applies to this run, and an
+ * edit to the file takes effect only once it is merged. A missing or unparsable file at the base falls
+ * back to the defaults. With no base (an empty-tree first run) the worktree is all there is.
+ */
+export function loadTrustedConfig(root: string, base: string): RepoConfig {
+    if (!base) {
+        return loadConfig(root);
+    }
+    const text = showFile(root, base, CONFIG_FILE);
+    if (text === undefined) {
+        return DEFAULT_CONFIG;
+    }
+    try {
+        return parseConfig(text);
+    } catch {
+        return DEFAULT_CONFIG;
+    }
 }
 
 export function isExcluded(config: RepoConfig, path: string): boolean {
