@@ -122,7 +122,6 @@ sequenceDiagram
 | HX_CTX_TOKEN | 业务仓库 secret; D1 只存 SHA-256 | /init, /spend, /runs, /feedback |
 | api_key | Worker secret, D1 只存 secret 名 | /init 响应, RUNNER_TEMP 下 0600 文件 (review 读后即删), review 进程内存, 被 mask |
 | GITHUB_TOKEN | Actions 自动注入, 只在没有 App token 时使用 | 推补丁分支, 评论 |
-| GitHub App 私钥与 webhook secret | D1 `github_app`（总览写入）; 管理接口不回传 | 只用于签 App JWT 和校验安装 webhook |
 | installation token | Worker 现签, 约 1 小时, 只覆盖发出请求的那个仓库 | runner 的 review 与 publish 进程 |
 | HX_CTX_TOKEN | 只传给 init 与 publish 步骤 | /init, /runs |
 | 管理权限 | Cloudflare Access | /api/* 校验 Access JWT (RS256, aud, exp), 未配置即 403 |

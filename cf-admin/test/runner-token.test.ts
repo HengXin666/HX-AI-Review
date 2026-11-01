@@ -1,7 +1,6 @@
 // GET /github/token: the runner trades its own HX_CTX_TOKEN for an installation token of the product App, so a
-// review comment appears as <slug>[bot] rather than github-actions[bot]. This capability existed on main before
-// the merge (served from routes/github.ts over a plaintext github_app table); these tests pin it to the merged
-// implementation, which reads the sealed github_apps table and looks the repository up from the token.
+// review comment appears as <slug>[bot] rather than github-actions[bot]. The implementation reads the sealed
+// github_apps table and looks the repository up from the token.
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -81,12 +80,10 @@ async function world(options: Options = {}) {
     if (options.installed !== false) {
         sqlite
             .prepare(
-                // Both column groups exist during the merge: account_login comes from 0006, repos and status
-                // from 0008. A row must satisfy whatever 0006 declared NOT NULL.
                 `INSERT INTO github_installations
-                     (installation_id, account_login, account, account_type, repository_selection, repos, status,
-                      created_at, updated_at)
-                 VALUES (77, 'acme', 'acme', 'Organization', 'selected', '["acme/r"]', ?, ?, ?)`,
+                     (installation_id, account, account_type, repository_selection, repos, status, created_at,
+                      updated_at)
+                 VALUES (77, 'acme', 'Organization', 'selected', '["acme/r"]', ?, ?, ?)`,
             )
             .run(options.suspended ? "suspended" : "active", now.toISOString(), now.toISOString());
     }

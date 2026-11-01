@@ -53,8 +53,6 @@ export type Deps = {
     // http.ts never depends back on a submodule; code that needs the concrete type (realtime/routes.ts,
     // github/routes.ts) narrows it with an assertion at the call site in router.ts.
     gh?: unknown;
-    /** GitHub HTTP. Production uses fetch; tests replace it so no request leaves the process. */
-    githubFetch?(url: string, init: RequestInit): Promise<Response>;
 };
 
 export type Deployment = {

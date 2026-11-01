@@ -272,13 +272,10 @@ export class GitHubStore {
     async upsertInstallation(input: InstallationInput, now: string): Promise<void> {
         await this.db
             .prepare(
-                // account_login is NOT NULL from 0006_github_app.sql and is the same value as `account`; both
-                // column groups exist on this table for the length of the merge.
-                `INSERT INTO github_installations (installation_id, account_login, account, account_type,
+                `INSERT INTO github_installations (installation_id, account, account_type,
                     repository_selection, repos, status, created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT (installation_id) DO UPDATE SET account = excluded.account,
-                    account_login = excluded.account,
                     account_type = excluded.account_type, repository_selection = excluded.repository_selection,
                     repos = CASE WHEN ? THEN excluded.repos ELSE github_installations.repos END,
                     status = excluded.status, updated_at = excluded.updated_at,
@@ -287,7 +284,6 @@ export class GitHubStore {
             )
             .bind(
                 input.installationId,
-                input.account,
                 input.account,
                 input.accountType,
                 input.repositorySelection,
@@ -355,13 +351,12 @@ export class GitHubStore {
     async cacheToken(installationId: number, token: string, expiresAt: string, kek: string, now: string) {
         await this.db
             .prepare(
-                // 0006_github_app.sql declared account_login NOT NULL on this same table, so the insert branch has
-                // to supply it even when only the token cache is being written. The row always exists by the time a
-                // token is cached (installationFor found it), so the conflict path is what actually runs.
+                // account_type is NOT NULL without a default (0006_github_app.sql), so the insert branch supplies
+                // it. The row always exists by the time a token is cached (installationFor found it), so the
+                // conflict path is what actually runs.
                 `INSERT INTO github_installations
-                     (installation_id, account_login, account_type, token_enc, token_expires_at, created_at,
-                      updated_at)
-                 VALUES (?, '', '', ?, ?, ?, ?)
+                     (installation_id, account_type, token_enc, token_expires_at, created_at, updated_at)
+                 VALUES (?, '', ?, ?, ?, ?)
                  ON CONFLICT (installation_id) DO UPDATE SET token_enc = excluded.token_enc,
                     token_expires_at = excluded.token_expires_at, updated_at = excluded.updated_at`,
             )

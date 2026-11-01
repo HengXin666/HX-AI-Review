@@ -1,5 +1,5 @@
 // One-click GitHub connection: manifest registration, callback, repository sync, enable / disable.
-// node:sqlite runs every migration (0001-0008); GitHub is a recorded fake fetch; the repos table goes through the
+// node:sqlite runs every migration; GitHub is a recorded fake fetch; the repos table goes through the
 // real D1Store, so enable / disable are checked against the SQL the Worker runs.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";

@@ -9,7 +9,6 @@ export function setup(
     admin: string | null = "me@test",
     credentials?: { user: string; password: string },
     assets?: Fetcher,
-    githubFetch?: Deps["githubFetch"],
 ) {
     const store = new FakeStore();
     const blobs = new FakeBlobs();
@@ -25,7 +24,6 @@ export function setup(
         deployment: { sha: "abc123", accessConfigured: true },
         now: () => new Date("2026-10-11T00:00:00Z"),
         id: () => "run" + ++counter,
-        githubFetch,
     };
     const call = (method: string, path: string, body?: unknown, token?: string, headers?: Record<string, string>) =>
         serve(
@@ -42,8 +40,8 @@ export function setup(
     return { store, blobs, call };
 }
 
-export async function registered(admin = "me@test", githubFetch?: Deps["githubFetch"]) {
-    const ctx = setup(admin, undefined, undefined, githubFetch);
+export async function registered(admin = "me@test") {
+    const ctx = setup(admin);
     await ctx.call("PUT", "/api/providers/default", {
         apiUrl: "https://llm.test/v1",
         keySecret: "KEY_DEFAULT",
