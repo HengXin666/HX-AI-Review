@@ -2,7 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { ENV, UTF8 } from "../constants.ts";
 import { isAncestor, mergeBase } from "../git.ts";
 
-export type EventInfo = { name: string; prNumber?: number; base: string; reason: string };
+/** The review range start and the event facts publish needs; defaultBranch is absent outside GitHub. */
+export type EventInfo = { name: string; prNumber?: number; base: string; reason: string; defaultBranch?: string };
 
 type GithubEvent = {
     before?: string;
@@ -19,22 +20,22 @@ export function resolveBase(root: string, head: string, lastSha?: string): Event
     const path = process.env[ENV.githubEventPath];
     const event: GithubEvent = path && existsSync(path) ? JSON.parse(readFileSync(path, UTF8)) : {};
     const prNumber = event.pull_request?.number;
+    const defaultBranch = event.repository?.default_branch;
     if (event.pull_request) {
         const base = mergeBase(root, event.pull_request.base.sha, head);
         if (base) {
-            return { name, prNumber, base, reason: "pull request merge-base" };
+            return { name, prNumber, defaultBranch, base, reason: "pull request merge-base" };
         }
     }
     if (isAncestor(root, lastSha, head) && lastSha !== head) {
-        return { name, prNumber, base: lastSha, reason: "last reviewed sha" };
+        return { name, prNumber, defaultBranch, base: lastSha, reason: "last reviewed sha" };
     }
     if (isAncestor(root, event.before, head)) {
-        return { name, prNumber, base: event.before, reason: "push before" };
+        return { name, prNumber, defaultBranch, base: event.before, reason: "push before" };
     }
-    const branch = event.repository?.default_branch;
-    const fallback = branch ? mergeBase(root, "origin/" + branch, head) : undefined;
+    const fallback = defaultBranch ? mergeBase(root, "origin/" + defaultBranch, head) : undefined;
     if (fallback && fallback !== head) {
-        return { name, prNumber, base: fallback, reason: "default branch merge-base" };
+        return { name, prNumber, defaultBranch, base: fallback, reason: "default branch merge-base" };
     }
-    return { name, prNumber, base: "", reason: "empty tree" };
+    return { name, prNumber, defaultBranch, base: "", reason: "empty tree" };
 }

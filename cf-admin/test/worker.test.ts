@@ -161,6 +161,8 @@ test("runs ingest stores rows, R2 blobs, advances last_sha; rejected feedback be
             sha: "abc",
             baseSha: "000",
             event: "push",
+            ref: "refs/heads/main",
+            defaultBranch: "main",
             status: "warned",
             usage: { input: 100, output: 10, cost: 0.2 },
             counts: { error: 0, warning: 1 },

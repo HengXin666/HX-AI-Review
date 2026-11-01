@@ -1,5 +1,7 @@
 // Literals owned by the rules engine; the L0 pipeline keeps its own in src/constants.ts.
 export const EXEMPTION_FILE = ".hx-rules-exemptions.json";
+/** Accepted pre-existing rule findings, read only from the base revision: [{ ruleId, path, fingerprint }]. */
+export const RULES_BASELINE_FILE = ".hx-rules-baseline.json";
 export const RULES_REPORT_NAME = "rules";
 export const RULES_PENDING_NAME = "rules-pending-review";
 export const DIRECTORY_FILE_LIMIT = 6;

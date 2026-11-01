@@ -8,7 +8,8 @@ import { navEntries, Shell } from "./shell.tsx";
 import type { SectionId } from "./shell.tsx";
 import { Deployment } from "./sections/Deployment.tsx";
 import { Findings } from "./sections/Findings.tsx";
-import { GithubApp } from "./sections/GithubApp.tsx";
+import { GitHubApp } from "./sections/GitHubApp.tsx";
+import { Live } from "./sections/Live.tsx";
 import { Login } from "./sections/Login.tsx";
 import { Overview as OverviewScreen } from "./sections/Overview.tsx";
 import { Prompts } from "./sections/Prompts.tsx";
@@ -28,6 +29,7 @@ const SECTIONS: SectionId[] = [
     "rules",
     "prompts",
     "deploy",
+    "live",
 ];
 
 /** The screen named in the URL hash. `#/runs/<id>` opens that run; the worker already writes this link. */
@@ -208,14 +210,16 @@ export function App() {
                 return <Repos repos={data.repos} onChange={updateRepo} onCreate={createRepo} onRotate={rotate} />;
             case "providers":
                 return <Providers providers={data.providers} onSave={saveProvider} />;
-            case "github":
-                return <GithubApp />;
             case "rules":
                 return <Rules stats={rules} filter={filter} />;
             case "prompts":
                 return <Prompts prompts={data.prompts ?? []} notes={data.notes ?? []} onDone={reload} onError={fail} />;
             case "deploy":
                 return <Deployment info={data.deployment} />;
+            case "live":
+                return <Live repos={data.repos.map((repo) => repo.name)} />;
+            case "github":
+                return <GitHubApp />;
         }
     };
 

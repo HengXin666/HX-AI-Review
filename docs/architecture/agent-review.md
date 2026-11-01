@@ -101,7 +101,7 @@ code CR 不单独给 diff 留额度: hunk 本身就是 diff, 不再把整份 dif
 - 模型: `/init` 下发的 finder 档 (通常是便宜的小模型), 因为它要读很多内容, 产出只是候选. 两种 kind 用同一个档位.
 - 输入 (context): 审查区间, 变更路径列表, 本批每个上下文文件的带行号全文与入选原因, 抑制表 (以前被驳回的指纹与驳回理由), 证据包, diff (`DIFF_MAX_BYTES` 60000 字节内, 超出截断并提示用工具读).
 - 输入 (code): 审查区间, 变更路径列表, 本批每个 hunk 的 `@@` 头与正文 (新侧行号, 删除行带 `L` 号), 意图卡, 抑制表, 由重复驳回原因归纳出的仓库规则, 证据包. 没有整份 diff, 也没有上下文文件正文.
-- 证据包来自 `context-cr/src/review/evidence.ts`: 变更文件的 import / require 边, `git grep` 找到的引用方, 以及 GitHub 搜索到的最近若干相关 PR 与 issue (仓库配置 `evidencePrs` / `evidenceIssues`, 默认各 5, 范围 0 到 20). 证据是不可信数据, 用围栏包住; 搜索或 git 失败时证据为空, 审查继续. 提示词放不下时先收缩证据, code 下再收缩意图卡, 再收缩 diff (code 下是 hunk), 再收缩上下文正文.
+- 证据包来自 `context-cr/src/review/evidence.ts`: 变更文件的 import / require 边, `git grep` 找到的引用方, 以及 GitHub 搜索到的最近若干相关 PR 与 issue (仓库配置 `evidencePrs` / `evidenceIssues`, 默认各 5, 范围 0 到 20). 证据是不可信数据, 用围栏包住; 搜索或 git 失败时证据为空, 审查继续. 在 CI 中 review 步骤没有 GITHUB_TOKEN (只注入 HX_CTX_TOKEN, 模型工具不应拿到写 token), 因此相关 PR 与 issue 恒为空, `evidencePrs` / `evidenceIssues` 在无 token 时按 0 处理并在日志里写明; 只有本地运行且环境里有 GITHUB_TOKEN 时才有这两项. 提示词放不下时先收缩证据, code 下再收缩意图卡, 再收缩 diff (code 下是 hunk), 再收缩上下文正文.
 - 系统提示: 内置的 `FINDER_SYSTEM` (context) 与 `CODE_FINDER_SYSTEM` (code) 不变. `/init` 的 `prompts.finder` 若有非空 body, 以 `Operator addendum vN` 追加在末尾, 并写明不能改变等级 (Error 仍只来自 L0). 空正文或缺失字段不加, 对两套提示词一视同仁. verifier 同理使用 `prompts.verifier`.
 - 工具: read, grep, find, ls, 加上 `report_finding`. 这四个只读工具不是 pi 的内置工具 (内置工具能解析任意路径), 而是本仓库基于 git 实现的: 只能看到被审提交里被跟踪的文件, 拒绝绝对路径, `..` 与 `.git`, 符号链接读出的是链接目标字符串而不是目标内容, 每次输出最多 30000 字符, 单次 git 调用有 `GIT_TOOL_TIMEOUT_MS` (30 秒) 超时, 并走异步子进程: 同步 git 会阻塞事件循环, 让会话计时器无法按时中断慢操作. 工具收到会话的 abort signal, 会话超时或轮数超限时正在跑的 git 子进程会一起被取消, 不必等满 30 秒超时. git 以 1 退出只表示 "没有匹配", 是空结果而不是工具错误; 只有 128 且未被 kill/取消才表示该提交里没有这个路径, 超时与取消都按工具错误回报, 不会伪装成"文件不存在". 没有写文件或执行命令的能力; `report_finding` 是它唯一的输出通道.
 - `report_finding` 的参数按 kind 不同: code 下没有 `patch` 字段, 描述里直接说明 "a code review never pushes a patch branch". 模型能看见的 schema 里就没有这个字段, 所以一份注定被丢弃的补丁不会被写出来, 也不会白占轮次.
@@ -121,7 +121,7 @@ context (`gate`):
 |---|---|
 | 路径是本批的上下文文件 | 驳回 "not a context file of this batch" |
 | 行号不超过文件行数 | 驳回 "line ... is past the end of the file" |
-| 指纹 (路径 + 完整标题) 不在抑制表 | 驳回 "suppressed by earlier feedback" |
+| 指纹 (规则 + 路径 + 被指控的原文行) 不在抑制表 | 驳回 "suppressed by earlier feedback" |
 | 指纹不与本次已排队候选重复 | 驳回 "duplicate of another candidate" |
 
 code (`gateCode`):
@@ -132,7 +132,7 @@ code (`gateCode`):
 | 行号是本批某个 hunk 的新增行, 或 (side 缺省 right 时) 删除所暴露的上下文行 | 否则驳回 "line ... is not a line this diff added to ..." |
 | side 为 left 时, 行号是本批某个 hunk 的删除行 (旧侧) | 驳回 "line ... is not a line this diff removed from ..." |
 | grade, category, confidence 要么缺省, 要么是允许的取值 | 驳回 "grade must be ..." / "category must be ..." / "confidence must be ..." |
-| 指纹 (路径 + 完整标题) 不在抑制表 | 驳回 "suppressed by earlier feedback" |
+| 指纹 (规则 + 路径 + 被指控的原文行) 不在抑制表 | 驳回 "suppressed by earlier feedback" |
 | 指纹不与本次已排队候选重复 | 驳回 "duplicate of another candidate" |
 | 标题, 说明, 证据没有把判断推给读者 (确认, 回答, 检查上下文是否正确) | 驳回 "asks a person to confirm..." |
 | 证据里每个不少于 8 个字符的反引号引用都出现在本 hunk 或被审提交的文件里 | 驳回 "quoted evidence is not in this diff hunk..." 或 "evidence has no backtick quote..." |
@@ -180,7 +180,7 @@ code CR 没有补丁闸门, 也没有补丁分支: `stepPublish` 在 `config.kin
 | 每批 hunk 字节 (code) | 与 diff 预算同值: max(4000, min(60000, 上下文窗口剩余额的一半)) | `DIFF_MAX_BYTES`, `MIN_DIFF_BYTES` | 切成更多 finder 会话 |
 | diff 字节 (context) | finder min(60000, 上下文窗口剩余额的一半), verifier 30000, 两者都再按渲染后的提示词余量收缩 | `DIFF_MAX_BYTES`, `MIN_DIFF_BYTES` | 截断, 并说明被截掉的部分工具读不到 (read 只读被审提交) |
 | 单个 hunk 显示字节 (code) | 从上下文正文额度起, 按渲染后的提示词余量收缩 | `CONTEXT_BATCH_BYTES`, `MIN_BATCH_BYTES` | 截断该 hunk, 提示用 read 工具读其余部分 |
-| 每次运行候选总数 | 默认 12 | `/init` 的 `limits.maxCandidates` | 剩余批次记为 not reviewed (报告中列出), 不算失败 |
+| 每次运行候选总数 | 默认 12 | `/init` 的 `limits.maxCandidates` | 剩余批次记为 not reviewed (报告中列出); `ReviewResult.truncated` 为 true, publish 按未审完上报 (`complete: false`), last_sha 不推进 |
 | 每会话轮数 | 40 | `SESSION_MAX_TURNS` | 仅当第 40 轮后仍需继续时才中止; 正常结束的最终回答不算超限, 运行记为 incomplete |
 | 每会话时长 | 15 分钟, 且不超过运行剩余时间 | `SESSION_TIMEOUT_MS` | 中止会话, 运行记为 incomplete |
 | 每会话时长为什么是 15 分钟 | 要放得下一次会话的真实工作量, 不只是防挂死 | 同上 | code finder 用工具读 hunk 再推理: 实测在慢 provider 上单个 hunk 跑到 480 秒即超时, 一次已花掉 177k 输入 token 的审查被整份丢弃. 总花费仍由下面的运行截止时间约束, `Review.session` 把每个会话裁剪到剩余时间内, 所以调大这一项不会让运行越过 `RUN_DEADLINE_MS` |
@@ -203,7 +203,7 @@ code CR 没有补丁闸门, 也没有补丁分支: `stepPublish` 在 `config.kin
 
 ## 输出与反馈闭环
 
-- 每条确认且没被预算裁掉的发现是一个 Warning: context 用规则 `CX-AI`, code 用 `CODE-AI`. 消息为 "标题: 说明", 证据附 verifier 理由和 repro, 指纹为 规则 + 路径 + 完整标题 (同一条过期陈述或同一个缺陷跨运行保持同一指纹; 标题不截断, 以免指纹变化让抑制失效). code 发现另带 grade, category, confidence, side. 这些字段不改变 severity, 也不进入指纹, 所以改一改 grade 不会让旧的驳回失效.
+- 每条确认且没被预算裁掉的发现是一个 Warning: context 用规则 `CX-AI`, code 用 `CODE-AI`. 消息为 "标题: 说明", 证据附 verifier 理由和 repro. 指纹为 `sha256(ruleId, path, anchor, content)`: anchor 是被指控的原文行 (空白折叠), content 是该行原文 (context 取上下文文件里的行, code 取 hunk 中那一行, side 为 left 时取删除行). 不用模型写的标题, 因此换个标题不会让已驳回的问题复活, 同标题不同行也不再被合并. code 发现另带 grade, category, confidence, side; 这些字段不改变 severity, 也不进入指纹, 所以改一改 grade 不会让旧的驳回失效. 口径与 [report-contract.md](../reference/report-contract.md) 一致.
 - 两种 kind 的指纹命名空间不同, 所以对上下文发现的驳回不会顺带压掉同一行的代码缺陷, 反之亦然.
 - 报告名与报告目录的共享常量在 `context-cr/src/constants.ts`: CI 审查写 `context-review`, 本地 diff 写 `local-review`, 两者使用同一 `ReviewReport` 契约 (含 `kind` 字段); 这些命名不影响 AI 发现语义.
 - 报告 (MD/JSON, 含 `rejections`) 与全部会话记录 (finder 与 verifier 的完整消息, 包括失败会话, JSONL) 存入 R2, 可在总览页追溯每条结论是怎么得出的.

@@ -19,13 +19,18 @@ export type RepoRow = {
     finderModel: string;
     verifierModel: string;
     budgetUsd: number;
+    /** Most one run may be granted from the month; 0 means not set (init falls back to a share of budgetUsd). */
+    perRunCapUsd: number;
     spentUsd: number;
     budgetMonth: string;
     lastSha: string | null;
 };
 
 export type RepoPatch = Partial<
-    Pick<RepoRow, "enabled" | "mode" | "kind" | "provider" | "finderModel" | "verifierModel" | "budgetUsd">
+    Pick<
+        RepoRow,
+        "enabled" | "mode" | "kind" | "provider" | "finderModel" | "verifierModel" | "budgetUsd" | "perRunCapUsd"
+    >
 >;
 
 export type ProviderRow = {
@@ -109,6 +114,9 @@ export type RuleAggregate = {
 
 export type RuleFilter = { repoId?: number; severity?: RuleSeverity; kind?: Kind };
 
+/** One live run reservation against the month (budget_claims row). */
+export type BudgetClaim = { claim: string; group: string; usd: number; started: boolean; expiresAt: string };
+
 export type Suppression = { fingerprint: string; reason: string };
 export type FeedbackInput = { repoId: number; fingerprint: string; verdict: Verdict; reason: string; source: string };
 
@@ -182,20 +190,21 @@ export interface Store {
     insertRun(run: RunRow, findings: FindingRow[]): Promise<void>;
     listProviders(): Promise<ProviderRow[]>;
     /**
-     * Atomically claim the repo's run budget under `claim` for `allowanceUsd`, until `expiresAt`. False
-     * means a live claim from a different concurrency group holds it. A claim from the same group may be
-     * taken over, because GitHub already cancelled the older run in that group and it will never report.
+     * Atomically claim up to `perRunCapUsd` of the month for one run under `claim`, until `expiresAt`.
+     * Claims are rows of their own (budget_claims), so runs in different concurrency groups hold separate
+     * claims at once; the grant is min(cap, budget - spent - other unsettled claims of the month).
+     * claimed false means nothing is left to grant.
      *
-     * Taking over settles the old claim's allowance into the month's spend first, so repeated cancellations
-     * on one branch cannot each start from the full remaining budget. remainingUsd is the allowance still
-     * available after any such settlement, i.e. what the caller may grant this claim, not the amount the
-     * month has already spent.
+     * A live claim from the same non-empty group, and any expired claim, is taken over first, because
+     * GitHub already cancelled that run and it will never report. Taking over settles the old claim: its
+     * allowance (at most one per-run cap, never the month) is charged when it had started spending, and
+     * nothing when it was cancelled before its first model session. remainingUsd is this claim's grant.
      */
     reserveBudget(
         repoId: number,
         claim: string,
         group: string,
-        allowanceUsd: number,
+        perRunCapUsd: number,
         month: string,
         now: string,
         expiresAt: string,
@@ -205,11 +214,16 @@ export interface Store {
      * False when the claim is no longer current, i.e. a newer run has taken it over.
      */
     startSpend(repoId: number, claim: string): Promise<boolean>;
-    /** Release the claim only when `claim` is the one held; another run's claim is left untouched. */
+    /** Release the claim only when `claim` is a live claim of this repo; other runs' claims are untouched. */
     releaseBudget(repoId: number, claim: string): Promise<void>;
-    /** Add to the month's spend; releases the run's own claim, never another run's. Every run is charged. */
+    /**
+     * Add to the month's spend and free the run's own claim, never another run's. Every run is charged; a
+     * claim a takeover already settled has its charged allowance replaced by this real cost.
+     */
     charge(repoId: number, costUsd: number, month: string, claim: string): Promise<void>;
-    /** Move the push cursor; only complete push runs call this, so cancelled ranges are re-reviewed. */
+    /** Unsettled claims of the repo in `month`: what is reserved but not yet spent. */
+    openClaims(repoId: number, month: string): Promise<BudgetClaim[]>;
+    /** Move the push cursor; only complete context push runs on the default branch call this. */
     setLastSha(repoId: number, sha: string): Promise<void>;
     recentRuns(limit: number): Promise<(RunRow & { repo: string })[]>;
     openFindings(limit: number): Promise<(FindingRow & { repo: string })[]>;

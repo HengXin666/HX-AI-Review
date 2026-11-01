@@ -19,6 +19,16 @@ export type Env = {
     DEPLOY_RUN_URL?: string;
     /** Static assets binding for the overview SPA; absent in tests and when deployed without assets. */
     ASSETS?: Fetcher;
+    /** Durable Object namespace for the live channel (one RealtimeHub room per repo); absent means /api/live answers 503. */
+    // The room class is RealtimeHub in worker/realtime/hub.ts; only the base type is used here so http.ts does not
+    // import a submodule and close an import cycle. The type argument is left open (not the bare default) so
+    // index.ts can still hand the binding to hubFromNamespace, which expects DurableObjectNamespace<RealtimeHub>.
+    REALTIME?: DurableObjectNamespace<any>;
+    /**
+     * Other secrets arrive through the index signature, read with Deps.secret(name):
+     * provider keys named by providers.key_secret, and GITHUB_APP_KEK, the key-encryption key that seals the
+     * GitHub App private key, client secret, webhook secret and cached installation tokens.
+     */
     [secret: string]: unknown;
 };
 
@@ -36,6 +46,13 @@ export type Deps = {
     deployment: Deployment;
     now(): Date;
     id(): string;
+    /** Live channel hub, built from Env.REALTIME; undefined means the live routes answer 503. */
+    live?: { emit(event: never): Promise<unknown>; connect(repo: string, request: Request): Promise<Response> };
+    /** GitHub App dependencies, built by githubDeps(env, deps); undefined means /api/github/* and the webhook answer 503. */
+    // The real types are HubPort (realtime/emit.ts) and GitHubDeps (github/deps.ts). Both are widened on purpose so
+    // http.ts never depends back on a submodule; code that needs the concrete type (realtime/routes.ts,
+    // github/routes.ts) narrows it with an assertion at the call site in router.ts.
+    gh?: unknown;
     /** GitHub HTTP. Production uses fetch; tests replace it so no request leaves the process. */
     githubFetch?(url: string, init: RequestInit): Promise<Response>;
 };

@@ -78,5 +78,7 @@ test("html in a finding message is escaped, so a report cannot inject markup int
 });
 
 test("the marker stays first, so the publisher still finds and updates its own comment", () => {
-    assert.ok(renderComment(report([]), {}).startsWith("<!-- hx-context-review -->"));
+    // The marker carries the kind, so a context CR and a code CR keep separate comments on one PR.
+    assert.ok(renderComment(report([]), {}).startsWith("<!-- hx-context-review:code -->"));
+    assert.ok(renderComment(report([], "context"), {}).startsWith("<!-- hx-context-review:context -->"));
 });

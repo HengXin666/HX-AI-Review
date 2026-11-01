@@ -1,0 +1,55 @@
+# Copy this file to .github/workflows/hx-context-review.yml in the repository you want reviewed.
+# Nothing else is needed except two repository settings:
+#   secret   HX_CTX_TOKEN      - the runner token issued by the review console for this repository
+#   variable HX_CTX_ENDPOINT   - the Worker base URL printed on the console deploy page
+# The console's one-click enable fetches this same file, fills the placeholder below and writes it with the secret.
+#
+# Placeholder (cf-admin/worker/github/workflow-template.ts renderWorkflow):
+#   __KINDS_JSON__  kinds run on push / pull_request: ["context"], ["code"] or ["context","code"].
+#                   The console's one-click enable replaces this placeholder; a manual copy must replace
+#                   fromJSON('__KINDS_JSON__') with fromJSON('["context"]') yourself, or the push / pull_request
+#                   job fails to parse. (webhook dispatch is unaffected: it sends the kind it wants.)
+name: hx-context-review
+
+on:
+    # Every push to a branch is a candidate; the job keeps only the default branch so the last_sha cursor
+    # (one per repository) never jumps to a commit the default branch does not contain.
+    push:
+    pull_request:
+        types: [opened, synchronize, reopened, ready_for_review]
+    # The console dispatches this after a webhook, once per kind, on the default branch. head_sha is the pushed or
+    # PR head commit it was notified about, and is passed down so the reusable workflow checks out that commit.
+    workflow_dispatch:
+        inputs:
+            head_sha:
+                description: Commit to review (sent by the hx-context-review GitHub App). Empty reviews the branch HEAD.
+                type: string
+                required: false
+                default: ""
+            kind:
+                description: Which review to run
+                type: choice
+                options: [context, code]
+                default: context
+
+# Do not add a concurrency block here: the reusable workflow sets its own group per kind and repository, and a
+# second group in the caller would cancel runs the reusable workflow means to serialize instead.
+permissions:
+    contents: write
+    pull-requests: write
+
+jobs:
+    review:
+        if: >-
+            github.event_name != 'push' || github.ref_name == github.event.repository.default_branch
+        # One run per kind: the dispatched kind alone on workflow_dispatch, every registered kind otherwise.
+        strategy:
+            fail-fast: false
+            matrix:
+                kind: ${{ github.event_name == 'workflow_dispatch' && fromJSON(format('["{0}"]', inputs.kind)) || fromJSON('__KINDS_JSON__') }}
+        uses: HengXin666/HX-AI-Review/.github/workflows/review.yml@v1
+        with:
+            kind: ${{ matrix.kind }}
+            head_sha: ${{ inputs.head_sha || '' }}
+        secrets:
+            HX_CTX_TOKEN: ${{ secrets.HX_CTX_TOKEN }}

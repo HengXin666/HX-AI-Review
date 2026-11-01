@@ -1,7 +1,23 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { loadConfig } from "./config.ts";
-import { AI_FILE, ENV, INGEST_FINDING_LIMIT, INIT_FILE, L0_FILE, SCOPE_FILE, SESSION_FILE, UTF8 } from "./constants.ts";
-import { EMPTY_USAGE } from "./contract/finding.ts";
+import { join } from "node:path";
+import { loadConfig, loadTrustedConfig } from "./config.ts";
+import type { RepoConfig } from "./config.ts";
+import {
+    AI_FILE,
+    CONFIG_FILE,
+    ENV,
+    INGEST_FINDING_LIMIT,
+    INIT_FILE,
+    L0_FILE,
+    REPORT_DIR,
+    RULE,
+    SCOPE_FILE,
+    SESSION_FILE,
+    UTF8,
+    WARNING,
+} from "./constants.ts";
+import { EMPTY_USAGE, makeFinding } from "./contract/finding.ts";
 import type { Finding, Patch, Usage } from "./contract/finding.ts";
 import { CONTEXT_KIND, parseKind } from "./contract/kind.ts";
 import type { CrKind } from "./contract/kind.ts";
@@ -12,6 +28,8 @@ import { changedFiles, diffText, headSha, patchFiles, showFile, tryGit } from ".
 import { fetchInit, splitSecret } from "./init/client.ts";
 import type { InitConfig } from "./init/client.ts";
 import { runL0 } from "./l0/index.ts";
+import { createLive } from "./live.ts";
+import type { LiveReport } from "./live.ts";
 import type { Approved } from "./l0/index.ts";
 import { worktreeSnapshot } from "./l0/snapshot.ts";
 import {
@@ -29,7 +47,12 @@ import { loadIntent, renderIntent } from "./review/intent.ts";
 import { runReview } from "./review/index.ts";
 import { buildEvidencePack } from "./review/evidence.ts";
 import type { Rejection } from "./review/index.ts";
+import type { AgentRunner } from "./review/agent.ts";
 import { createPiRunner } from "./review/pi.ts";
+import { RULES_REPORT_NAME } from "./rules/constants.ts";
+import { runRulesStep } from "./rules/run.ts";
+import type { RulesReport } from "./rules/report.ts";
+import type { RulesRun } from "./rules/run.ts";
 import { resolveBase } from "./scope/base.ts";
 import type { EventInfo } from "./scope/base.ts";
 import { computeCodeScope } from "./scope/code.ts";
@@ -47,13 +70,41 @@ import { dropKey, load, required, resetState, save, setOutput, stateFile, storeK
  * Errors come first because they are what can block a merge, and within a severity the order is the one
  * sortFindings produced, so the truncation is deterministic rather than arbitrary.
  */
-function capFindings(findings: Finding[]): Finding[] {
+export function capFindings(findings: Finding[]): Finding[] {
     if (findings.length <= INGEST_FINDING_LIMIT) {
         return findings;
     }
     const errors = findings.filter((item) => item.severity === "error");
     const warnings = findings.filter((item) => item.severity !== "error");
     return [...errors, ...warnings].slice(0, INGEST_FINDING_LIMIT);
+}
+
+/**
+ * The rules step's findings for this head, merged into the published report so the overview's rule
+ * dimension sees ARCH/STYLE/DOC/CTX/CI hits. Rules are report-only in CI ("Error only from L0"), so every
+ * rules finding enters as a warning: it is counted and ingested, but it can never change the job's
+ * conclusion or the run status from passed/warned to failed. A code CR has no rules stage; a missing,
+ * unreadable or stale rules.json (another head) counts as no findings.
+ */
+export function rulesFindings(root: string, kind: CrKind, head: string): Finding[] {
+    if (kind === "code") {
+        return [];
+    }
+    const path = join(root, REPORT_DIR, RULES_REPORT_NAME + ".json");
+    if (!existsSync(path)) {
+        return [];
+    }
+    let rules: RulesReport;
+    try {
+        rules = JSON.parse(readFileSync(path, UTF8)) as RulesReport;
+    } catch (error) {
+        process.stderr.write(`rules report unreadable, not merged: ${errorText(error)}\n`);
+        return [];
+    }
+    if (!Array.isArray(rules.findings) || (rules.head && head && rules.head !== head)) {
+        return [];
+    }
+    return rules.findings.map((item) => (item.severity === WARNING ? item : { ...item, severity: WARNING }));
 }
 
 type InitState = { nonce: string; config: InitConfig; startedAt: number; head: string; event: EventInfo };
@@ -65,6 +116,8 @@ type AiState = {
     usage: Usage;
     rejected: number;
     complete: boolean;
+    /** True when the candidate cap cut the review short: part of the scope was never reviewed. */
+    truncated: boolean;
     errors: string[];
     notReviewed: string[];
     rejections: Rejection[];
@@ -92,7 +145,40 @@ function requestedKind(): CrKind | undefined {
     return raw === undefined || raw === "" ? undefined : parseKind(raw);
 }
 
+/** Live reporter for a step that has run state: repo and kind from /init, the nonce as runId fallback. */
+function liveFor(state: InitState): LiveReport {
+    return createLive({ repo: state.config.repo, kind: state.config.kind, nonce: state.nonce });
+}
+
+function since(started: number): number {
+    return Date.now() - started;
+}
+
 export async function stepInit(root: string): Promise<InitState> {
+    const started = Date.now();
+    try {
+        const state = await initRun(root);
+        const live = liveFor(state);
+        live.stage("init", "done", since(started));
+        await live.flush();
+        return state;
+    } catch (error) {
+        // No config yet: speak for the workflow's repository and requested kind, if they are usable at all.
+        let kind: CrKind = CONTEXT_KIND;
+        try {
+            kind = requestedKind() ?? CONTEXT_KIND;
+        } catch {
+            // The kind input itself was the failure; the event still goes out under the default kind.
+        }
+        const live = createLive({ repo: process.env[ENV.githubRepository] ?? "", kind, nonce: randomUUID() });
+        live.log("init", "error", errorText(error));
+        live.stage("init", "failed", since(started));
+        await live.flush();
+        throw error;
+    }
+}
+
+async function initRun(root: string): Promise<InitState> {
     const repo = required(ENV.githubRepository);
     const response = await fetchInit(
         required(ENV.endpoint),
@@ -114,7 +200,7 @@ export async function stepInit(root: string): Promise<InitState> {
     return state;
 }
 
-function initState(root: string): InitState {
+export function initState(root: string): InitState {
     const existing = load<InitState>(root, INIT_FILE);
     if (existing) {
         return existing;
@@ -129,8 +215,38 @@ function initState(root: string): InitState {
     return { nonce: "local", config, startedAt: Date.now(), head, event: resolveBase(root, head) };
 }
 
-function baseline(root: string, base: string): Approved[] {
-    const path = loadConfig(root).baseline;
+/**
+ * Config for a CI step. A run that went through /init reads it from the trusted base, so the reviewed change
+ * cannot exclude itself from the checks; a local run (no /init) keeps the worktree copy it is editing.
+ */
+function stepConfig(root: string, state: InitState): RepoConfig {
+    return state.nonce === "local" ? loadConfig(root) : loadTrustedConfig(root, state.event.base);
+}
+
+/** One Warning when the reviewed range edits the config file: the edit is not applied until it is merged. */
+function configChanged(root: string, state: InitState): Finding[] {
+    if (state.nonce === "local" || !state.event.base) {
+        return [];
+    }
+    const changed = changedFiles(root, state.event.base, state.head).some((item) => item.path === CONFIG_FILE);
+    if (!changed) {
+        return [];
+    }
+    return [
+        makeFinding(
+            RULE.config,
+            WARNING,
+            CONFIG_FILE,
+            1,
+            "Repository config changed in this range; this run used the copy at the trusted base",
+            "config differs from base " + state.event.base.slice(0, 12),
+            "config-changed",
+        ),
+    ];
+}
+
+function baseline(root: string, base: string, config: RepoConfig): Approved[] {
+    const path = config.baseline;
     const text = path && base ? showFile(root, base, path) : undefined;
     return text ? (JSON.parse(text) as Approved[]) : [];
 }
@@ -143,11 +259,32 @@ function baseline(root: string, base: string): Approved[] {
  */
 export function stepL0(root: string): Finding[] {
     const state = initState(root);
-    if (state.config.kind === "code") {
-        save(root, L0_FILE, { findings: [] } satisfies L0State);
-        return [];
+    const live = liveFor(state);
+    const started = Date.now();
+    live.stage("l0", "running");
+    try {
+        const findings = l0Run(root, state);
+        const errors = findings.filter((item) => item.severity === "error");
+        if (errors.length) {
+            live.log("l0", "error", `${errors.length} Error finding(s), ${errors.filter(isBlocking).length} blocking`);
+        }
+        live.stage("l0", "done", since(started), state.config.kind === "code" ? "skipped for code CR" : undefined);
+        return findings;
+    } catch (error) {
+        live.log("l0", "error", errorText(error));
+        live.stage("l0", "failed", since(started));
+        throw error;
     }
-    const findings = runL0(worktreeSnapshot(root), loadConfig(root), baseline(root, state.event.base));
+}
+
+function l0Run(root: string, state: InitState): Finding[] {
+    const notice = configChanged(root, state);
+    if (state.config.kind === "code") {
+        save(root, L0_FILE, { findings: notice } satisfies L0State);
+        return notice;
+    }
+    const config = stepConfig(root, state);
+    const findings = [...runL0(worktreeSnapshot(root), config, baseline(root, state.event.base, config)), ...notice];
     save(root, L0_FILE, { findings } satisfies L0State);
     return findings;
 }
@@ -165,9 +302,29 @@ function diffOf(root: string, base: string, head: string, path: string): string 
 
 export function stepScope(root: string): RunScope {
     const state = initState(root);
+    const live = liveFor(state);
+    const started = Date.now();
+    live.stage("scope", "running");
+    try {
+        const scope = scopeRun(root, state);
+        live.log(
+            "scope",
+            "info",
+            scope.kind === "code" ? `${scope.hunks.length} 个 hunk` : `${scope.contexts.length} 个上下文文件`,
+        );
+        live.stage("scope", "done", since(started));
+        return scope;
+    } catch (error) {
+        live.log("scope", "error", errorText(error));
+        live.stage("scope", "failed", since(started));
+        throw error;
+    }
+}
+
+function scopeRun(root: string, state: InitState): RunScope {
     const { base } = state.event;
     const changes = changedFiles(root, base, state.head);
-    const config = loadConfig(root);
+    const config = stepConfig(root, state);
     const scope =
         state.config.kind === "code"
             ? computeCodeScope((path) => diffOf(root, base, state.head, path), config, changes, base, state.head)
@@ -186,19 +343,90 @@ function reviewExpected(state: InitState, scope: RunScope | undefined): boolean 
     return !state.config.l0Only && (scope === undefined || !scopeEmpty(scope));
 }
 
+function errorText(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The review could not start. The AI stage never fails the job, so instead of throwing it records an
+ * unfinished result bound to this run's nonce: publish then reports the run incomplete with the reason,
+ * and last_sha stays where it was so the range is reviewed again.
+ */
+function unfinished(root: string, state: InitState, reason: string): AiState {
+    const ai: AiState = {
+        nonce: state.nonce,
+        findings: [],
+        patches: [],
+        usage: EMPTY_USAGE,
+        rejected: 0,
+        complete: false,
+        truncated: false,
+        errors: [reason],
+        notReviewed: [],
+        rejections: [],
+    };
+    process.stderr.write(`review: ${reason}\n`);
+    save(root, AI_FILE, ai);
+    return ai;
+}
+
 export async function stepReview(root: string): Promise<AiState | undefined> {
     const state = initState(root);
+    const live = liveFor(state);
+    const started = Date.now();
+    live.stage("review", "running");
+    try {
+        const ai = await reviewRun(root, state, live);
+        if (!ai) {
+            live.stage("review", "done", since(started), "skipped: nothing to review or L0 only");
+        } else {
+            for (const error of ai.errors) {
+                live.log("review", "error", error);
+            }
+            live.stage("review", ai.complete ? "done" : "failed", since(started), aiStage(ai));
+        }
+        return ai;
+    } catch (error) {
+        live.log("review", "error", errorText(error));
+        live.stage("review", "failed", since(started));
+        throw error;
+    } finally {
+        await live.flush();
+    }
+}
+
+/**
+ * Wraps the model runner so every finished session reports progress. Finder sessions run one per batch,
+ * then one verifier per candidate that passed the gate; the batch total is not known outside runReview.
+ */
+function liveRunner(run: AgentRunner, live: LiveReport): { run: AgentRunner; verified: () => number } {
+    let batch = 0;
+    let verifierDone = 0;
+    const wrapped: AgentRunner = async (request) => {
+        try {
+            return await run(request);
+        } finally {
+            if (request.role === "finder") {
+                live.progress("review", { batch: ++batch });
+            } else {
+                live.progress("review", { verifierDone: ++verifierDone });
+            }
+        }
+    };
+    return { run: wrapped, verified: () => verifierDone };
+}
+
+async function reviewRun(root: string, state: InitState, live: LiveReport): Promise<AiState | undefined> {
     const scope = load<RunScope>(root, SCOPE_FILE) ?? stepScope(root);
     const apiKey = takeKey(root);
     if (!reviewExpected(state, scope)) {
         return undefined;
     }
     if (!apiKey) {
-        throw new Error("no api key from init; run the init step first");
+        return unfinished(root, state, "no api key from init; run the init step first");
     }
     // Progress comments and the later line reviews must be the product app when one is installed.
     await adoptGithubActor();
-    const run = await createPiRunner(root, state.config, apiKey);
     // The diff is a context-CR input: a code CR is scoped to its hunks and reads the rest with its tools.
     const diff = scope.kind === "code" ? "" : diffText(root, scope.base, scope.head);
     const endpoint = process.env[ENV.endpoint];
@@ -208,25 +436,40 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
     // the Worker settles a taken-over claim as 0 and hands the same remainder out again, so a missing
     // claim or a missing endpoint/token is a configuration error rather than an unmarked spending run.
     if (state.config.limits.maxRunUsd !== null && !(claim && endpoint && token)) {
-        throw new Error(
+        return unfinished(
+            root,
+            state,
             "a budgeted run needs limits.maxRunUsd, budgetClaim, HX_CTX_ENDPOINT and HX_CTX_TOKEN " +
                 "to mark the claim as spending before the first model session",
         );
     }
+    let run: Awaited<ReturnType<typeof createPiRunner>>;
+    try {
+        run = await createPiRunner(root, state.config, apiKey);
+    } catch (error) {
+        return unfinished(root, state, `model runtime failed to start: ${errorText(error)}`);
+    }
     // A failed evidence lookup must not fail the review: the finder still has the diff and the context files.
-    const repoConfig = loadConfig(root);
+    const repoConfig = stepConfig(root, state);
     let evidence = "";
+    // Intentional degradation: in CI the review step only gets HX_CTX_TOKEN, never GITHUB_TOKEN (the model
+    // tools must not see a write token), so related PRs and issues are always empty there. Without a token
+    // the limits are pinned to 0 so logs and the pack agree; only a local run with GITHUB_TOKEN fills them.
+    const github = githubTarget();
+    if (!github) {
+        process.stderr.write("evidence pack: no GITHUB_TOKEN, related PRs and issues off (prs=0, issues=0)\n");
+    }
     try {
         evidence = await buildEvidencePack({
             root,
             changed: scope.changed,
             readFile: (path) => readTracked(root, path),
-            github: githubTarget(),
-            prs: repoConfig.evidencePrs,
-            issues: repoConfig.evidenceIssues,
+            github,
+            prs: github ? repoConfig.evidencePrs : 0,
+            issues: github ? repoConfig.evidenceIssues : 0,
         });
     } catch (error) {
-        process.stderr.write(`evidence pack skipped: ${error instanceof Error ? error.message : String(error)}\n`);
+        process.stderr.write(`evidence pack skipped: ${errorText(error)}\n`);
     }
     let intent = "";
     if (scope.kind === "code") {
@@ -238,8 +481,9 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
             process.stderr.write(`intent card skipped: ${error instanceof Error ? error.message : String(error)}\n`);
         }
     }
+    const tracked = liveRunner(run, live);
     const result = await runReview(state.config, scope, {
-        run,
+        run: tracked.run,
         diff,
         evidence,
         intent,
@@ -262,7 +506,12 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
                 : undefined,
     });
     writeFileSync(stateFile(root, SESSION_FILE), sessionsToJsonl(result.transcripts), UTF8);
-    const { findings, patches, usage, rejected, complete, errors, notReviewed, rejections, trace } = result;
+    const { findings, patches, usage, rejected, complete, truncated, errors, notReviewed, rejections, trace } = result;
+    // Every candidate the finders reported ends confirmed or rejected (by the gate or a verifier).
+    live.progress("review", { candidates: findings.length + rejected, verifierDone: tracked.verified() });
+    for (const item of findings) {
+        live.finding(item.ruleId, item.path, item.line, item.severity, item.message);
+    }
     const ai: AiState = {
         nonce: state.nonce,
         findings,
@@ -270,6 +519,7 @@ export async function stepReview(root: string): Promise<AiState | undefined> {
         usage,
         rejected,
         complete,
+        truncated,
         errors,
         notReviewed,
         rejections,
@@ -292,6 +542,9 @@ function aiStage(ai: AiState): string {
     if (ai.notReviewed.length) {
         // Each entry states its own cause (unreadable, symlink, candidate limit); do not mislabel them all.
         parts.push(`not reviewed: ${ai.notReviewed.join(", ")}`);
+    }
+    if (ai.truncated) {
+        parts.push("truncated: candidate limit reached, range will be reviewed again");
     }
     if (!ai.complete) {
         parts.push("incomplete: " + ai.errors.join("; "));
@@ -335,7 +588,7 @@ function safePatchBranch(root: string, head: string, report: ReviewReport, targe
         return pushPatchBranch(root, head, report.patches, target);
     } catch (error) {
         // The patch branch is optional; ingest and comments must still happen.
-        process.stderr.write(`patch branch skipped: ${error instanceof Error ? error.message : String(error)}\n`);
+        process.stderr.write(`patch branch skipped: ${errorText(error)}\n`);
         return undefined;
     }
 }
@@ -378,6 +631,37 @@ export async function stepPublish(root: string): Promise<number> {
     dropKey(root);
     await adoptGithubActor();
     const state = initState(root);
+    const live = liveFor(state);
+    const started = Date.now();
+    live.stage("publish", "running");
+    const outcome: PublishOutcome = {};
+    try {
+        const blocking = await publishRun(root, state, outcome);
+        live.stage("publish", "done", since(started));
+        return blocking;
+    } catch (error) {
+        live.log("publish", "error", errorText(error));
+        live.stage("publish", "failed", since(started));
+        throw error;
+    } finally {
+        // The run's last event, with the report's real counts; a publish that died first reports incomplete.
+        const report = outcome.report;
+        live.done({
+            complete: outcome.complete === true,
+            status: outcome.status ?? "incomplete",
+            durationMs: report?.durationMs ?? Date.now() - state.startedAt,
+            findings: report?.findings.length ?? 0,
+            errors: report?.counts.error ?? 0,
+            warnings: report?.counts.warning ?? 0,
+        });
+        await live.flush();
+    }
+}
+
+/** What publish got as far as computing, so the final live event can carry it even after a failure. */
+type PublishOutcome = { report?: ReviewReport; complete?: boolean; status?: ReturnType<typeof statusOf> };
+
+async function publishRun(root: string, state: InitState, outcome: PublishOutcome): Promise<number> {
     const l0 = load<L0State>(root, L0_FILE) ?? { findings: stepL0(root) };
     const scope = load<RunScope>(root, SCOPE_FILE);
     const stored = load<AiState>(root, AI_FILE);
@@ -385,14 +669,18 @@ export async function stepPublish(root: string): Promise<number> {
     const ai = stored?.nonce === state.nonce ? stored : undefined;
     // Budget or provider problems mean the range was never reviewed: report incomplete so last_sha stays put.
     const skippedReview = state.config.l0Only && UNREVIEWED_CAUSES.has(state.config.l0Cause ?? "");
-    const complete = scope !== undefined && !skippedReview && (!reviewExpected(state, scope) || ai?.complete === true);
+    // A truncated review left part of the scope unread, so it counts as unfinished for last_sha too.
+    const reviewed = ai?.complete === true && ai.truncated !== true;
+    const complete = scope !== undefined && !skippedReview && (!reviewExpected(state, scope) || reviewed);
     const code = state.config.kind === "code";
+    // rules findings ride along report-only (warnings): visible in counts and /runs, never blocking.
+    const rules = rulesFindings(root, state.config.kind, state.head);
     const report = buildReport({
         repo: state.config.repo,
         kind: state.config.kind,
         base: state.event.base,
         head: state.head,
-        findings: [...l0.findings, ...(ai?.findings ?? [])],
+        findings: [...l0.findings, ...(ai?.findings ?? []), ...rules],
         patches: ai?.patches ?? [],
         rejections: ai?.rejections ?? [],
         trace: ai?.trace,
@@ -411,6 +699,8 @@ export async function stepPublish(root: string): Promise<number> {
         },
     });
     writeReport(root, report);
+    const status = statusOf(report.counts, scope === undefined || scopeEmpty(scope), complete);
+    Object.assign(outcome, { report, complete, status });
     const target = githubTarget();
     // A code CR reviews the change instead of writing one: it never pushes a patch branch, even if a
     // candidate somehow carried a patch.
@@ -428,7 +718,9 @@ export async function stepPublish(root: string): Promise<number> {
             baseSha: state.event.base,
             event: state.event.name,
             prNumber: state.event.prNumber,
-            status: statusOf(report.counts, scope === undefined || scopeEmpty(scope), complete),
+            ref: process.env[ENV.githubRef],
+            defaultBranch: state.event.defaultBranch,
+            status,
             complete,
             l0Only: state.config.l0Only,
             durationMs: report.durationMs,
@@ -452,12 +744,39 @@ export async function stepPublish(root: string): Promise<number> {
         if (code && state.event.prNumber !== undefined && ai?.trace) {
             await postCodeReviews(target, state.event.prNumber, state.head, ai.trace);
         }
-        await writeBack(
-            target,
-            state.head,
-            renderComment(report, { patchUrl, overviewUrl }, resolvedNote),
-            state.event.prNumber,
-        );
+        // The run is already ingested; a failed comment must not turn the job red, like the patch branch.
+        try {
+            await writeBack(
+                target,
+                state.head,
+                renderComment(report, { patchUrl, overviewUrl }, resolvedNote),
+                state.event.prNumber,
+                state.config.kind,
+            );
+        } catch (error) {
+            process.stderr.write(`comment skipped: ${errorText(error)}\n`);
+        }
     }
     return report.findings.filter(isBlocking).length;
+}
+
+/**
+ * The rules subcommand with live stage events. The registry itself is unchanged: runRulesStep still decides
+ * the findings and the exit code; this only reports that the stage ran and how it ended.
+ */
+export function stepRules(root: string, baseRef?: string): RulesRun {
+    const live = liveFor(initState(root));
+    const started = Date.now();
+    live.stage("rules", "running");
+    try {
+        const run = runRulesStep(root, baseRef);
+        const { counts } = run.report;
+        const summary = `${counts.error} error(s), ${counts.warning} warning(s), ${counts.blocking} blocking`;
+        live.stage("rules", "done", since(started), summary);
+        return run;
+    } catch (error) {
+        live.log("rules", "error", errorText(error));
+        live.stage("rules", "failed", since(started));
+        throw error;
+    }
 }

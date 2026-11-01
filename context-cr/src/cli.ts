@@ -15,13 +15,13 @@ import { stepInit, stepL0, stepPublish, stepReview, stepScope } from "./steps.ts
 
 const USAGE = `usage: hx-context-review <command> [--root <dir>] [--base <ref>] [--kind context|code] [--format findings]
 commands:
-  init      GET /init, mask api_key, export it to the job env
+  init      GET /init, mask api_key into a 0600 temp file in RUNNER_TEMP (review reads then deletes it)
   l0        deterministic L0 checks; exit 1 on new Error findings
   local     diff-only local checks against the worktree; exit 1 on blocking findings
   scope     context: diff -> ancestor AGENTS chain + reverse references; code: added and removed lines
   review    pi finder -> verifier on the scope (skipped when empty or L0-only)
   publish   write MD/JSON, POST /runs, push patch branch, commit/PR comment
-  rules     run the deterministic rule registry; exit 1 on blocking findings
+  rules     deterministic rule registry; exit 1 on blocking findings in changed files (historical never block)
   run       init, l0, rules, scope, review and publish in one process
   test      run one test category/tier from the local suite
   eval      replay the code reviewer on the versioned golden set and print metrics
@@ -71,7 +71,13 @@ function parseArgs(argv: string[]): Args {
     return args;
 }
 
+const HELP = new Set(["--help", "-h", "help"]);
+
 async function main(argv: string[]): Promise<number> {
+    if (HELP.has(argv[0] ?? "")) {
+        process.stdout.write(USAGE + "\n");
+        return 0;
+    }
     if (argv[0] === "test") {
         return runSuite(argv.slice(1));
     }
@@ -134,10 +140,12 @@ async function main(argv: string[]): Promise<number> {
                 process.stdout.write("rules: skipped (code CR has no deterministic stage)\n");
                 return 0;
             }
-            const rulesRun = runRulesStep(args.root);
+            // Exit 1 stays for local and quality runs; the reusable review workflow treats it as report-only.
+            const rulesRun = runRulesStep(args.root, args.base);
             const counts = rulesRun.report.counts;
             process.stdout.write(
-                `rules: ${counts.error} error(s), ${counts.warning} warning(s), ${counts.blocking} blocking\n`,
+                `rules: ${counts.error} error(s), ${counts.warning} warning(s), ${counts.blocking} blocking, ` +
+                    `${counts.historical} historical\n`,
             );
             return counts.blocking > 0 ? 1 : 0;
         }

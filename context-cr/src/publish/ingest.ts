@@ -12,6 +12,13 @@ export type RunPayload = {
     baseSha: string;
     event: string;
     prNumber?: number;
+    /**
+     * The git ref the run was triggered for (GITHUB_REF, e.g. refs/heads/main) and the repository's default
+     * branch name. The Worker advances last_sha only when ref is refs/heads/<defaultBranch>: the cursor means
+     * "context reviewed up to here on the default branch", and a push to any other branch must not move it.
+     */
+    ref?: string;
+    defaultBranch?: string;
     status: RunStatus;
     /** False when the AI stage was expected but did not finish; the Worker then keeps last_sha. */
     complete: boolean;

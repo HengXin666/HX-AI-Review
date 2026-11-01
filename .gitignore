@@ -9,3 +9,9 @@ cf-admin/pages/wrangler.toml
 
 # wrangler r2 object get writes the object path here when run from cf-admin
 cf-admin/runs/
+
+# tunnel backups written by hark_map when it overwrites a file
+.hark-bak/
+
+# scratch review reports written by agents, not part of the product
+.review/

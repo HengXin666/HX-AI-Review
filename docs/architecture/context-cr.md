@@ -35,7 +35,7 @@ L0 规则 (HC-*, CX-*) 判的是 "上下文文件是否与代码一致", 属于 
 
 标记用 `Review` 上的 `spendMarked` / `spendRefused` 状态而不是会话序号: finder 批次失败时循环只 `continue`, 所以按 "第 0 个会话" 判断会让第二个批次和之后的 verifier 会话绕过标记直接花预算. 一旦标记失败, 之后每个会话都被拒绝, 整次运行记为 incomplete. 标记本身是有界的网络调用: 上限为 `min(SPEND_MARK_TIMEOUT_MS, 剩余审查时限)`, 超时即 abort 并按 fail closed 处理, 不会让一个连上却不返回的 `/spend` 把运行拖到 job 超时、连 publish 都跑不到; 标记返回后重新读取时限再算本次会话的时长上限, 否则等待标记的时间会让会话越过在等待前算好的时限.
 
-因此 `review.yml` 的 review 步骤也要拿到 `HX_CTX_TOKEN` (之前只有 init 与 publish 步骤有): 少了它 `steps.ts` 不会注册 `onSpend`, 有预算的运行就从不发 `POST /spend`, 接管时按 0 结算, 连续取消的运行可以反复拿到整份月余额. fork 的 PR 依然进不到这一步 (job 级条件). 同理, `steps.ts` 在 `maxRunUsd` 非 null 却缺少 `budgetClaim`, `HX_CTX_ENDPOINT` 或 `HX_CTX_TOKEN` 时按配置错误失败关闭, 而不是开始一次没有标记的模型会话: endpoint 与 token 是环境配置, 由 `steps.ts` 校验; `context-cr/src/init/client.ts` 只拒绝非 L0 且 `maxRunUsd` 非 null 却缺少 `budgetClaim` 的 /init 响应, 它看不到环境变量.
+因此 `review.yml` 的 review 步骤也要拿到 `HX_CTX_TOKEN` (之前只有 init 与 publish 步骤有): 少了它 `steps.ts` 不会注册 `onSpend`, 有预算的运行就从不发 `POST /spend`, 接管时按 0 结算, 连续取消的运行可以反复拿到整份月余额. fork 的 PR 依然进不到这一步 (job 级条件). 同理, `steps.ts` 在 `maxRunUsd` 非 null 却缺少 `budgetClaim`, `HX_CTX_ENDPOINT` 或 `HX_CTX_TOKEN` 时按配置错误失败关闭, 而不是开始一次没有标记的模型会话. 失败关闭不等于抛错: 缺 key, 缺 claim 或模型运行时启动失败时, `stepReview` 写一份带本次 nonce, `complete: false` 与原因的 `ai.json` 后正常返回, publish 据此上报 incomplete, last_sha 不动; review 步骤本身也 `continue-on-error`, AI 阶段永远不让 job 变红. 候选上限截断时 `ReviewResult.truncated` 为 true, publish 同样按未审完处理: endpoint 与 token 是环境配置, 由 `steps.ts` 校验; `context-cr/src/init/client.ts` 只拒绝非 L0 且 `maxRunUsd` 非 null 却缺少 `budgetClaim` 的 /init 响应, 它看不到环境变量.
 
 本地模式 (`cli.ts local`) 只读工作区 diff, 基准优先用请求的 ref 与 HEAD 的 merge-base, 没有 common ancestor 时直接报错而不是退回分支最新提交; 仓库还没有首次提交时用空树, 并把未跟踪文件一起纳入. 循环检查要求循环包含变更文件且至少一条导入边在基准里不存在, 所以只改无关文件不会触发旧循环. 测试模式 (`cli.ts test`) 要求显式 `--base`, 未知类别或层级退出 2, 结果按共享 `ReviewReport` 契约写成 md 与 json 一对. 这两个子命令审的都是上下文文件, 报告里的 kind 固定写 `context`.
 
@@ -60,7 +60,7 @@ runner 侧的三条规则:
 
 `review.yml` 的第 4 步在文件里仍叫 `4 context_scope`, 但它按 kind 分派: context 走 `computeScope`, code 走 `computeCodeScope`, 输出 `empty` 的含义也随之变成 "没有上下文文件" 或 "没有可报的新增行或删除行". 步骤名是历史包袱, 改它会让已有运行日志与文档对不上, 所以先留名不改行为.
 
-L0 (第 3 步) 只在 context 运行里真正执行, 见上表. 规则引擎 (第 3b 步, ARCH/STYLE/DOC/CTX/CI) 是仓库级确定性检查, 不看 kind, 两种运行都会跑, 所以一次 code job 仍可能因为 `ARCH-001` 之类的仓库规则变红; 那是代码结构问题, 与 "上下文是否过时" 不是一回事. 上报时 L0 发现 (code 下为空) 与该运行的 AI 发现一并入库, 记在该运行的 kind 下; `last_sha` 只由 context 运行推进, 因为它是 "上下文已审到哪" 的游标.
+L0 (第 3 步) 只在 context 运行里真正执行, 见上表. 规则引擎 (第 3b 步) 在 review.yml 里只出报告, 不让任何 job 变红, 见下文 "规则引擎". 上报时 L0 发现 (code 下为空) 与该运行的 AI 发现一并入库, 记在该运行的 kind 下; `last_sha` 只由 context 运行推进, 因为它是 "上下文已审到哪" 的游标. `POST /runs` 还带上 `ref` (`GITHUB_REF`) 与 `defaultBranch` (事件里的 `repository.default_branch`), Worker 据此只让默认分支上的 push 推进游标.
 
 ## 审核区间
 
@@ -76,7 +76,7 @@ L0 (第 3 步) 只在 context 运行里真正执行, 见上表. 规则引擎 (�
 
 来自 fork 的 PR 对 pull_request 与 pull_request_target 都在 job 条件里跳过, 不在带 HX_CTX_TOKEN 与写权限的流程里检出不受信任的代码.
 
-`kind` 输入同时进入三处: `GET /init` 的 `kind` 参数, `HX_CTX_KIND` 环境变量, 以及 concurrency group 的组名. 组名是 `hx-context-review-<kind>-<repo>-<ref>`, 同一个值也作为 `HX_CTX_GROUP` 发给 /init, 所以同一仓库的 context job 与 code job 互不取消, 各自串行与防抖; 而预算预留按组接管, 不同组之间是真正的并发, 仍然互斥, 两种 CR 争的是同一份月预算. 想两种 CR 都跑就在调用方写两个 job, 各传一个 kind, 见 [接入教程](../tutorials/onboard-repo.md).
+`kind` 输入同时进入三处: `GET /init` 的 `kind` 参数, `HX_CTX_KIND` 环境变量, 以及 concurrency group 的组名. 组名是 `hx-context-review-<kind>-<repo>-<ref>`, 同一个值也作为 `HX_CTX_GROUP` 发给 /init, 所以同一仓库的 context job 与 code job 互不取消, 各自串行与防抖; 预算预留是多槽位的: 同组接管被取消的旧预留, 不同组各占一行预留并发运行 (每行最多一个单次上限), 两种 CR 争的是同一份月预算. 想两种 CR 都跑就在调用方写两个 job, 各传一个 kind, 见 [接入教程](../tutorials/onboard-repo.md).
 
 ## L0 规则
 
@@ -95,7 +95,11 @@ skill 注入上界 = 所有 skill 的 front matter (常驻 L1) + 最大的 `conc
 
 ## 规则引擎 (rules)
 
-`cli.ts rules` 是 review.yml 的第 3b 步, 调用 `context-cr/src/rules/run.ts`, 在 L0 之外再跑一组确定性规则. 结果写到 `scripts/.hx_code_quality/reports/rules.{md,json}` 和只列 Warning 的 `scripts/.hx_code_quality/reports/rules-pending-review.md`; workflow 的 rules 步骤 continue-on-error 以便报告先落盘并随同一份 artifact 上传, 随后单独一步在仍有未豁免 Error 时让 job 失败, 所以规则既产出报告, 也真正参与门禁.
+`cli.ts rules` 是 review.yml 的第 3b 步, 调用 `context-cr/src/rules/run.ts`, 在 L0 之外再跑一组确定性规则. 结果写到 `scripts/.hx_code_quality/reports/rules.{md,json}` 和只列 Warning 的 `scripts/.hx_code_quality/reports/rules-pending-review.md`. 在可复用的 review 工作流里它只出报告: 步骤 continue-on-error, 没有 "rules 失败即 job 失败" 的后续步骤, 所以 CI 里的 Error 只来自 L0. 这些规则是本仓库自己的编码规范, 套到业务仓库上会误报阻断.
+
+判定也只针对本次变更: 区间内改动过的文件上的命中保持 `origin: new`, 未改动文件上的命中与可信 base 上 `.hx-rules-baseline.json` (`[{ ruleId, path, fingerprint }]`) 已接受的命中都标 `historical`, 永不计入 blocking; 路径为 `.` 的整仓发现 (如规则崩溃的 tool-error) 保持 new. `cli.ts rules` 仍在存在 new Error 时退出 1, 给本地与 quality 工作流用.
+
+区间基点不再写死 `origin/main`: 显式 `--base` 优先, 否则读 init 写入状态的 `event.base` (与 L0, scope 同一区间), 没有 init 状态时调用 `resolveBase` 按同样的优先级解析. 基点为空树 (首次运行) 时所有文件算作改动, 豁免无法过期, 并产出一条 tool-error Warning 说明. CI 运行的仓库配置同样取自可信 base.
 
 | ID | 等级 | 判据 |
 |---|---|---|
@@ -110,7 +114,7 @@ skill 注入上界 = 所有 skill 的 front matter (常驻 L1) + 最大的 `conc
 | CTX-002 | Error | SKILL.md 有 front matter 与匹配的 name, description, 正文有标题 |
 | CI-001 | Error | 工作流保留下 on: 与 jobs:, 调用的脚本, 包与工作流都存在 |
 
-豁免只认 base: 根目录豁免文件里只有与 base 版本逐字段一致的条目才能让发现保持 exempt; 工作区新增或修改的条目按 expired 处理, 对应 Error 照常阻断, 改动豁免文件本身还会产出 EXEMPT-001 Warning 交人工确认. base 解析失败时改用空树计算变更, 所有豁免按 expired 处理, 并产出阻断级 tool-error, 不允许在无法判断变更时放行.
+豁免只认 base: 根目录豁免文件里只有与 base 版本逐字段一致的条目才能让发现保持 exempt; 工作区新增或修改的条目按 expired 处理, 对应 Error 照常阻断, 改动豁免文件本身还会产出 EXEMPT-001 Warning 交人工确认. 显式 `--base` 解析失败时直接报错退出, 不猜基点.
 
 ## 规则注册表只在 context 运行
 

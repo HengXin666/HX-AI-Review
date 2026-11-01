@@ -14,6 +14,16 @@ const ASSETS_DIR = join(GENERATED_DIR, "assets");
 const COMPATIBILITY_DATE = "2026-10-01";
 const RULE_BACKFILL = join(PACKAGE_DIR, "migrations", "0004_rule_results.sql");
 const TARGETS = ["all", "migrations", "worker"] as const;
+/** Durable Object binding for the live channel; must match worker/realtime (REALTIME_BINDING, RealtimeHub). */
+export const REALTIME_BINDING = "REALTIME";
+export const REALTIME_CLASS = "RealtimeHub";
+/**
+ * Durable Object migrations, append-only like D1 migrations: a published tag is never edited or removed,
+ * a new class or rename gets a new tag. v1 creates the SQLite-backed RealtimeHub.
+ */
+export const DO_MIGRATIONS: readonly { tag: string; newSqliteClasses: readonly string[] }[] = [
+    { tag: "v1", newSqliteClasses: [REALTIME_CLASS] },
+];
 
 type Target = (typeof TARGETS)[number];
 
@@ -177,6 +187,25 @@ function toml(value: string): string {
     return JSON.stringify(value);
 }
 
+/** The [[durable_objects.bindings]] and [[migrations]] blocks of the generated config. */
+export function durableObjectLines(): string[] {
+    const lines = [
+        "[[durable_objects.bindings]]",
+        `name = ${toml(REALTIME_BINDING)}`,
+        `class_name = ${toml(REALTIME_CLASS)}`,
+        "",
+    ];
+    for (const migration of DO_MIGRATIONS) {
+        lines.push(
+            "[[migrations]]",
+            `tag = ${toml(migration.tag)}`,
+            `new_sqlite_classes = [${migration.newSqliteClasses.map(toml).join(", ")}]`,
+            "",
+        );
+    }
+    return lines;
+}
+
 /** Generated config with real ids and deploy metadata; the committed wrangler.toml stays a template. */
 export function writeWorkerConfig(s: Settings, databaseId: string): string {
     mkdirSync(GENERATED_DIR, { recursive: true });
@@ -216,6 +245,7 @@ export function writeWorkerConfig(s: Settings, databaseId: string): string {
         `binding = "BLOBS"`,
         `bucket_name = ${toml(s.bucket)}`,
         "",
+        ...durableObjectLines(),
     ];
     writeFileSync(file, lines.join("\n"));
     return file;

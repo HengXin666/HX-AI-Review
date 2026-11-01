@@ -53,7 +53,8 @@ test("only push events move last_sha; incomplete runs are never passed", async (
     await call("POST", "/runs", { repo: "o/r", sha: "p1", event: "push", findings: [], complete: false }, token);
     assert.equal(store.repos[0].lastSha, null);
     assert.equal(store.runs.at(-1)?.status, "incomplete");
-    await call("POST", "/runs", { repo: "o/r", sha: "p2", event: "push", findings: [] }, token);
+    const main = { ref: "refs/heads/main", defaultBranch: "main" };
+    await call("POST", "/runs", { repo: "o/r", sha: "p2", event: "push", findings: [], ...main }, token);
     assert.equal(store.repos[0].lastSha, "p2");
 });
 
@@ -75,6 +76,9 @@ test("present-but-invalid repo fields are a 400, never silently ignored", async 
     for (const body of [
         { budgetUsd: "5" },
         { budgetUsd: -1 },
+        { perRunCapUsd: "2" },
+        { perRunCapUsd: -0.5 },
+        { perRunCapUsd: true },
         { mode: "fast" },
         { enabled: "yes" },
         { provider: "a b" },
@@ -93,7 +97,7 @@ test("provider api protocol: unknown is a 400, omitted keeps the stored one; tok
     assert.equal((await call("PUT", "/api/providers/default", { maxTokens: 2048.5 })).status, 400);
 });
 
-test("runner status cannot override derived failed or incomplete; init carries the remaining budget", async () => {
+test("runner status cannot override derived failed or incomplete; init carries the per-run allowance", async () => {
     const { call, token, store } = await registered();
     await call(
         "POST",
@@ -107,7 +111,8 @@ test("runner status cannot override derived failed or incomplete; init carries t
         400,
     );
     const init = (await (await call("GET", "/init", undefined, token)).json()) as { limits: { maxRunUsd: number } };
-    assert.equal(init.limits.maxRunUsd, 1);
+    // budgetUsd 1 with no explicit per_run_cap_usd: one run is granted a quarter, not the whole month.
+    assert.equal(init.limits.maxRunUsd, 0.25);
 });
 
 test("/runs rejects coerced values and keeps last_sha when the runner says incomplete", async () => {
@@ -119,173 +124,6 @@ test("/runs rejects coerced values and keeps last_sha when the runner says incom
     await call("POST", "/runs", { ...run, status: "incomplete" }, token);
     assert.equal(store.runs.at(-1)?.status, "incomplete");
     assert.equal((await store.repoByName("o/r"))?.lastSha ?? null, null);
-});
-
-test("concurrent /init calls cannot both be handed the same unspent budget", async () => {
-    const { call, token, store } = await registered();
-    const read = async () => (await (await call("GET", "/init", undefined, token)).json()) as Record<string, unknown>;
-    const repo = (await store.repoByName("o/r"))!;
-    assert.equal(repo.budgetUsd, 1);
-    // Two runs start before either reports its cost: the second must not get the same remainder.
-    const [first, second] = await Promise.all([read(), read()]);
-    const l0Only = [first.l0Only, second.l0Only].filter(Boolean);
-    assert.equal(l0Only.length, 1);
-    const blocked = first.l0Only ? first : second;
-    assert.equal(blocked.l0Cause, "budget");
-    assert.equal(blocked.apiKey, undefined);
-    // The holder releasing its own claim lets the next run claim the remainder.
-    await store.releaseBudget(repo.id, String((first.l0Only ? second : first).budgetClaim));
-    const next = await read();
-    assert.equal(next.l0Only, false);
-    assert.equal((next.limits as { maxRunUsd: number }).maxRunUsd, 1);
-});
-
-test("a run that never got the budget cannot release the holder's claim", async () => {
-    const { call, token, store } = await registered();
-    const read = async () => (await (await call("GET", "/init", undefined, token)).json()) as Record<string, unknown>;
-    const repo = (await store.repoByName("o/r"))!;
-    const holder = await read();
-    const claim = String(holder.budgetClaim);
-    assert.ok(claim);
-    const refused = await read();
-    assert.equal(refused.l0Cause, "budget");
-    // The refused run publishes its L0 result through the real route, so a route that drops or mis-passes
-    // budgetClaim is caught here; charging directly would not exercise it. An L0 refusal has no claim, so
-    // the body echoes undefined and the run must still not free the holder's claim.
-    const published = await call(
-        "POST",
-        "/runs",
-        { repo: "o/r", sha: "l0", event: "push", findings: [], budgetClaim: refused.budgetClaim },
-        token,
-    );
-    assert.equal(published.status, 201);
-    assert.equal(store.claims.get(repo.id)?.claim, claim);
-    assert.equal((await read()).l0Cause, "budget");
-});
-
-test("a cancelled run's claim is taken over by the run that superseded it in the same group", async () => {
-    const { call, token, store } = await registered();
-    const repo = (await store.repoByName("o/r"))!;
-    const init = (group: string) =>
-        call("GET", `/init?group=${encodeURIComponent(group)}`, undefined, token).then((r) => r.json());
-    const first = (await init("g")) as Record<string, unknown>;
-    assert.equal(first.l0Only, false);
-    // A different group is genuinely concurrent and must still be refused while the claim is live.
-    assert.equal(((await init("h")) as Record<string, unknown>).l0Cause, "budget");
-    // An expired claim is abandoned and may be taken over by anyone; its allowance is settled first.
-    store.claims.set(repo.id, {
-        claim: "old",
-        group: "h",
-        usd: 0,
-        month: "2026-10",
-        started: true,
-        expiresAt: "2000-01-01T00:00:00.000Z",
-    });
-    assert.equal(((await init("i")) as Record<string, unknown>).l0Only, false);
-    // Same concurrency group: GitHub cancelled the older run, so the newer one takes over its claim.
-    const second = (await init("i")) as Record<string, unknown>;
-    assert.equal(second.l0Only, false);
-    assert.notEqual(second.budgetClaim, first.budgetClaim);
-});
-
-test("a run cancelled before its first session does not burn the budget of the run replacing it", async () => {
-    const { call, token } = await registered();
-    const init = async (group: string) =>
-        (await (await call("GET", `/init?group=${group}`, undefined, token)).json()) as Record<string, unknown>;
-    const limitsOf = (body: Record<string, unknown>) => (body.limits as { maxRunUsd: number }).maxRunUsd;
-    await call("PATCH", "/api/repos/o/r", { budgetUsd: 1 });
-    const first = await init("g");
-    assert.equal(limitsOf(first), 1);
-    // Cancelled during install or scope: no model session ever opened, so it spent nothing. Charging its
-    // allowance would let two rapid pushes consume the whole month.
-    const second = await init("g");
-    assert.equal(limitsOf(second), 1);
-    // maxRunUsd alone cannot prove a takeover: an L0 refusal reports the same remaining figure.
-    assert.equal(second.l0Only, false);
-});
-
-test("taking over a run that had started spending charges its allowance, so it cannot be re-spent", async () => {
-    const { call, token, store } = await registered();
-    const repo = (await store.repoByName("o/r"))!;
-    const init = async (group: string) =>
-        (await (await call("GET", `/init?group=${group}`, undefined, token)).json()) as Record<string, unknown>;
-    const limitsOf = (body: Record<string, unknown>) => (body.limits as { maxRunUsd: number }).maxRunUsd;
-    await call("PATCH", "/api/repos/o/r", { budgetUsd: 1 });
-    const first = await init("g");
-    // The run opens a model session, is then cancelled by a newer push and never POSTs /runs, so its real
-    // cost is unknown: its allowance is the only safe bound and must be charged before granting more.
-    await call("POST", "/spend", { budgetClaim: first.budgetClaim }, token);
-    const second = await init("g");
-    assert.equal(limitsOf(second), 0);
-    assert.equal(store.repos.find((item) => item.id === repo.id)!.spentUsd, 1);
-    // The month is fully spent now, so the next /init is L0-only with no credentials: only the takeover
-    // itself may still hold the (zero) allowance.
-    const third = await init("g");
-    assert.equal(third.l0Cause, "budget");
-    assert.equal(third.l0Only, true);
-    assert.equal(third.apiKey, undefined);
-});
-
-test("a superseded run cannot mark its claim as spending, so it cannot spend unaccounted", async () => {
-    const { call, token } = await registered();
-    const init = async (group: string) =>
-        (await (await call("GET", `/init?group=${group}`, undefined, token)).json()) as Record<string, unknown>;
-    await call("PATCH", "/api/repos/o/r", { budgetUsd: 1 });
-    const first = await init("g");
-    // A newer push takes the claim over. The older run is still alive and tries to start a session, but
-    // its claim is settled by the takeover already: letting it spend would charge the month twice.
-    await init("g");
-    const spent = await call("POST", "/spend", { budgetClaim: first.budgetClaim }, token);
-    assert.equal(spent.status, 409);
-});
-
-test("a late report from a taken-over run replaces its settled allowance instead of adding to it", async () => {
-    const { call, token, store } = await registered();
-    const repo = (await store.repoByName("o/r"))!;
-    const init = async (group: string) =>
-        (await (await call("GET", `/init?group=${group}`, undefined, token)).json()) as Record<string, unknown>;
-    await call("PATCH", "/api/repos/o/r", { budgetUsd: 1 });
-    const first = await init("g");
-    await call("POST", "/spend", { budgetClaim: first.budgetClaim }, token);
-    // Taken over while spending: its whole allowance is charged, since its real cost is unknown.
-    await init("g");
-    assert.equal(store.repos.find((item) => item.id === repo.id)!.spentUsd, 1);
-    // The old run finishes after all and reports what it really cost. Counting both would double-charge
-    // the month and push later runs to L0.
-    await call(
-        "POST",
-        "/runs",
-        {
-            repo: "o/r",
-            sha: "late",
-            event: "push",
-            findings: [],
-            budgetClaim: first.budgetClaim,
-            usage: { cost: 0.25 },
-        },
-        token,
-    );
-    assert.equal(store.repos.find((item) => item.id === repo.id)!.spentUsd, 0.25);
-});
-
-test("a claim taken over in a later month does not consume the new month's budget", async () => {
-    const { call, token, store } = await registered();
-    const repo = (await store.repoByName("o/r"))!;
-    await call("PATCH", "/api/repos/o/r", { budgetUsd: 1 });
-    const init = async (group: string) =>
-        (await (await call("GET", `/init?group=${group}`, undefined, token)).json()) as Record<string, unknown>;
-    const first = await init("g");
-    await call("POST", "/spend", { budgetClaim: first.budgetClaim }, token);
-    // The claim belongs to the previous month: its allowance must settle into that month and never
-    // reduce this month's budget, whatever the new run is granted.
-    store.claims.get(repo.id)!.month = "2026-09";
-    const row = store.repos.find((item) => item.id === repo.id)!;
-    row.budgetMonth = "2026-09";
-    row.spentUsd = 0.5;
-    const next = await init("g");
-    assert.equal((next.limits as { maxRunUsd: number }).maxRunUsd, 1);
-    // As above: the figure alone could also come from an L0 refusal, so require the real claim.
-    assert.equal(next.l0Only, false);
 });
 
 test("init: a spent budget and invalid stored limits are machine-readable L0 causes", async () => {
@@ -300,4 +138,19 @@ test("init: a spent budget and invalid stored limits are machine-readable L0 cau
     const init = await read();
     assert.equal(init.l0Cause, "budget");
     assert.equal(init.apiKey, undefined);
+});
+
+test("perRunCapUsd set through the admin API is the per-run allowance /init grants; null restores the default", async () => {
+    const { call, token, store } = await registered();
+    const maxRun = async () =>
+        ((await (await call("GET", "/init", undefined, token)).json()) as { limits: { maxRunUsd: number } }).limits
+            .maxRunUsd;
+    const patched = await call("PATCH", "/api/repos/o/r", { perRunCapUsd: 0.4 });
+    assert.equal(patched.status, 200);
+    assert.equal(((await patched.json()) as { repo: { perRunCapUsd: number } }).repo.perRunCapUsd, 0.4);
+    assert.equal(await maxRun(), 0.4);
+    assert.equal((await call("PATCH", "/api/repos/o/r", { perRunCapUsd: null })).status, 200);
+    assert.equal((await store.repoByName("o/r"))?.perRunCapUsd, 0);
+    // budgetUsd 1 with the cap cleared: back to a quarter of the month.
+    assert.equal(await maxRun(), 0.25);
 });

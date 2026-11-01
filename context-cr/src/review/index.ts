@@ -81,6 +81,11 @@ export type ReviewResult = {
     errors: string[];
     /** Context files not reviewed for a reason a re-run would hit again (candidate cap, unreadable): not a failure. */
     notReviewed: string[];
+    /**
+     * True when the candidate cap stopped the finder before every batch ran. The session did not fail, but
+     * part of the scope was never read, so publish treats the run as unfinished and last_sha stays put.
+     */
+    truncated: boolean;
     /** Code CR only: the diff groups and the evidence check for every candidate. */
     trace?: CodeTrace;
 };
@@ -89,22 +94,72 @@ export type ReviewResult = {
  * One candidate as a Finding. Code CR uses its own rule namespace so the overview and the report can tell a
  * defect in the diff from a stale context file, and so feedback on one never suppresses the other.
  */
-function toFinding(candidate: Candidate, reason: string, ruleId: string = RULE.ai): Finding {
+function toFinding(candidate: Candidate, reason: string, content: string, ruleId: string = RULE.ai): Finding {
     const message = candidate.title + ": " + candidate.message;
     const repro = candidate.repro && candidate.repro !== candidate.message ? "\nRepro: " + candidate.repro : "";
     const evidence = (reason ? candidate.evidence + "\nVerifier: " + reason : candidate.evidence) + repro;
     const finding = makeFinding(ruleId, WARNING, candidate.path, candidate.line, message, evidence);
-    // Anchor on path + title so the same defect keeps its fingerprint across runs and feedback.
-    // Grade is not part of the fingerprint: a re-grade must not escape an earlier dismissal.
+    // Anchor on the accused source line, not the model's title: a reworded title must not resurrect a
+    // defect an operator already dismissed. The extra fields below are the code CR's evidence record; grade
+    // is deliberately absent because a re-grade must not escape an earlier dismissal either.
     return {
         ...finding,
-        fingerprint: fingerprint(ruleId, candidate.path, candidate.title, ""),
+        fingerprint: aiFingerprint(ruleId, candidate.path, content),
         ...(candidate.grade ? { grade: candidate.grade } : {}),
         ...(candidate.category ? { category: candidate.category } : {}),
         ...(candidate.confidence !== undefined ? { confidence: candidate.confidence } : {}),
         ...(candidate.repro ? { repro: candidate.repro } : {}),
         ...(candidate.side ? { side: candidate.side } : {}),
     };
+}
+
+/**
+ * sha256(ruleId, path, anchor, content) as in the report contract. The anchor is the accused source line
+ * with whitespace collapsed and the content is that line verbatim: both come from the reviewed file, never
+ * from model-written text, so the same defect keeps its fingerprint when the model rewords its title and
+ * feedback suppressions keep matching. The line number is not part of it, so an edit above does not move it.
+ */
+function aiFingerprint(ruleId: string, path: string, content: string): string {
+    return fingerprint(ruleId, path, content.trim().replace(/\s+/g, " "), content);
+}
+
+/**
+ * The accused line as the diff shows it, without the line-number gutter and the +/- marker. Both the gate and
+ * the published finding fingerprint on this, so a suppression keyed by one always matches the other; deriving
+ * them from different sources (the candidate's own quote vs. the file) is how a suppressed defect came back.
+ *
+ * Added and context lines carry their new-side number in the gutter; a removed line has no new-side number, so
+ * it is found by counting deletions instead, matching how CodeHunk.removed is built.
+ */
+function accusedLine(hunk: CodeHunk | undefined, line: number, side?: "left" | "right"): string {
+    if (!hunk) {
+        return "";
+    }
+    let oldLine = 0;
+    for (const row of hunk.body.split("\n")) {
+        const bar = row.indexOf("| ");
+        if (bar < 0) {
+            continue;
+        }
+        const gutter = row.slice(0, bar).trim();
+        const raw = row.slice(bar + 2);
+        if (raw.startsWith("-")) {
+            oldLine += 1;
+            if (side === "left" && !gutter && oldLine === line) {
+                return raw.slice(1);
+            }
+            continue;
+        }
+        if (side !== "left" && gutter !== "" && Number(gutter) === line) {
+            return raw.slice(1);
+        }
+    }
+    return "";
+}
+
+/** The accused line of a context file, or empty when the line is past the end. */
+function docLine(doc: ContextDoc | undefined, line: number): string {
+    return doc?.lines[line - 1] ?? "";
 }
 
 type Queued = { candidate: Candidate; doc: ContextDoc; fingerprint: string };
@@ -182,6 +237,7 @@ class Review {
         complete: true,
         errors: [],
         notReviewed: [],
+        truncated: false,
     };
     private sessions = 0;
     /** Set once the Worker accepted the spend marker; the marker is sent at most once per run. */
@@ -286,7 +342,7 @@ type GateResult = { item: Queued } | { reason: string };
 
 function gate(review: Review, candidate: Candidate, batch: ContextDoc[], seen: Set<string>, suppressed: Set<string>) {
     const doc = batch.find((item) => item.path === candidate.path);
-    const id = toFinding(candidate, "").fingerprint;
+    const id = toFinding(candidate, "", docLine(doc, candidate.line)).fingerprint;
     const reason = !doc
         ? "not a context file of this batch"
         : candidate.line > doc.lines.length
@@ -337,7 +393,7 @@ async function verify(
         review.reject(candidate, verdict ? "verifier: " + verdict.reason : "verifier gave no verdict");
         return;
     }
-    const finding = toFinding(candidate, verdict.reason);
+    const finding = toFinding(candidate, verdict.reason, docLine(doc, candidate.line));
     review.result.findings.push(finding);
     if (!candidate.patch || verdict.patch !== "correct") {
         return;
@@ -429,7 +485,9 @@ async function verifyCode(
         note(candidate, "rejected", reason);
         return;
     }
-    review.result.findings.push(toFinding(candidate, verdict.reason, RULE.codeAi));
+    review.result.findings.push(
+        toFinding(candidate, verdict.reason, accusedLine(hunk, candidate.line, candidate.side ?? "right"), RULE.codeAi),
+    );
     note(candidate, "confirmed", verdict.reason, ground.quote, {
         grade: candidate.grade,
         category: candidate.category,
@@ -494,7 +552,10 @@ async function runCodeReview(config: InitConfig, scope: CodeScope, deps: ReviewD
         const label = batch.map((group) => `${group.id} ${group.path}`).join(", ");
         const left = config.limits.maxCandidates - queue.length;
         if (left <= 0) {
-            // Re-running would hit the same cap, so this is reported, not treated as an incomplete run.
+            // The sessions did not fail, but these hunks were never read. Main argued a re-run would hit the
+            // same cap and so this is only a report; that leaves last_sha advancing over scope nothing read,
+            // which is worse than reviewing the range twice. Marked truncated so publish keeps last_sha.
+            review.result.truncated = true;
             review.result.notReviewed.push(...hunks.map((hunk) => hunk.path + " (candidate limit)"));
             continue;
         }
@@ -624,8 +685,14 @@ function gateCode(
     suppressed: Set<string>,
     prove: (candidate: Candidate, hunk: CodeHunk) => string | undefined,
 ): { item: QueuedCode } | { reason: string } {
-    const id = toFinding(candidate, "", RULE.codeAi).fingerprint;
     const located = locateLine(candidate, batch);
+    // The fingerprint anchors on the source line the candidate accuses, so it survives a reworded title.
+    const id = toFinding(
+        candidate,
+        "",
+        accusedLine(located?.hunk, candidate.line, candidate.side ?? "right"),
+        RULE.codeAi,
+    ).fingerprint;
     const anyPath = batch.some((item) => item.path === candidate.path);
     const reason = !anyPath
         ? "not a file of this batch"
@@ -692,7 +759,9 @@ async function runContextReview(config: InitConfig, scope: ContextScope, deps: R
         // Only candidates that pass the gate use the cap, so re-reported suppressed items cannot exhaust it.
         const left = config.limits.maxCandidates - queue.length;
         if (left <= 0) {
-            // Re-running would hit the same cap, so this is reported, not treated as an incomplete run.
+            // The sessions did not fail, but these files were never read: mark the run truncated so publish
+            // keeps last_sha and the range is reviewed again.
+            review.result.truncated = true;
             review.result.notReviewed.push(...batch.map((doc) => doc.path + " (candidate limit)"));
             continue;
         }

@@ -1,4 +1,12 @@
-import { COMMENT_MARKER, ENV, PATCH_BRANCH_PREFIX } from "../constants.ts";
+import {
+    COMMENT_PAGE_LIMIT,
+    COMMENT_PAGE_SIZE,
+    ENV,
+    LEGACY_COMMENT_MARKER,
+    PATCH_BRANCH_PREFIX,
+    commentMarker,
+} from "../constants.ts";
+import type { CrKind } from "../contract/kind.ts";
 import type { Patch } from "../contract/finding.ts";
 import { git } from "../git.ts";
 
@@ -101,17 +109,51 @@ export function compareUrl(target: GithubTarget, branch: string): string {
     return `${server}/${target.repo}/compare/${range}?expand=1`;
 }
 
-/** PR: update our marked comment in place; push: one commit comment per reviewed head. */
-export async function writeBack(target: GithubTarget, sha: string, body: string, prNumber?: number): Promise<void> {
+type IssueComment = { id: number; body?: string };
+
+/**
+ * Our comment for this kind: the one carrying this kind's marker, else one left by a version before the
+ * kind suffix (bare marker), which this run takes over so an upgrade never strands an old comment on the
+ * PR. A comment carrying the other kind's marker is never touched.
+ */
+export function findOwnComment(comments: IssueComment[], kind: CrKind): IssueComment | undefined {
+    const marker = commentMarker(kind);
+    return (
+        comments.find((item) => item.body?.startsWith(marker)) ??
+        comments.find((item) => item.body?.startsWith(LEGACY_COMMENT_MARKER))
+    );
+}
+
+/** Every comment on the PR, page by page, stopping at COMMENT_PAGE_LIMIT pages. */
+async function listComments(target: GithubTarget, prNumber: number): Promise<IssueComment[]> {
+    const all: IssueComment[] = [];
+    for (let page = 1; page <= COMMENT_PAGE_LIMIT; page++) {
+        const batch = (await call(
+            target,
+            "GET",
+            `/issues/${prNumber}/comments?per_page=${COMMENT_PAGE_SIZE}&page=${page}`,
+        )) as IssueComment[];
+        all.push(...batch);
+        if (batch.length < COMMENT_PAGE_SIZE) {
+            break;
+        }
+    }
+    return all;
+}
+
+/** PR: update our marked comment for this kind in place; push: one commit comment per reviewed head. */
+export async function writeBack(
+    target: GithubTarget,
+    sha: string,
+    body: string,
+    prNumber?: number,
+    kind: CrKind = "context",
+): Promise<void> {
     if (prNumber === undefined) {
         await call(target, "POST", `/commits/${sha}/comments`, { body });
         return;
     }
-    const comments = (await call(target, "GET", `/issues/${prNumber}/comments?per_page=100`)) as {
-        id: number;
-        body?: string;
-    }[];
-    const mine = comments.find((item) => item.body?.startsWith(COMMENT_MARKER));
+    const mine = findOwnComment(await listComments(target, prNumber), kind);
     if (mine) {
         await call(target, "PATCH", `/issues/comments/${mine.id}`, { body });
     } else {

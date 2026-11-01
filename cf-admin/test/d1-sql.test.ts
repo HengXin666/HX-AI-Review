@@ -8,6 +8,9 @@ import { test } from "node:test";
 import { D1Store } from "../worker/store/d1.ts";
 
 const MIGRATIONS = join(import.meta.dirname, "..", "migrations");
+const NOW = "2026-10-11T00:00:00.000Z";
+const PAST = "2026-10-11T01:00:00.000Z";
+const FAR = "2030-01-01T00:00:00.000Z";
 
 type Row = Record<string, unknown>;
 
@@ -24,23 +27,30 @@ function d1(db: DatabaseSync) {
             run: async () => ({ meta: { changes: Number(stmt.run().changes) } }),
         };
     };
+    let queue: Promise<unknown> = Promise.resolve();
     return {
         prepare: statement,
         // D1Store.insertRun relies on batch being atomic, so this must be a real transaction: a later
         // statement failing rolls the earlier writes back instead of leaving them in the database.
-        batch: async (items: { run: () => Promise<{ meta?: { changes?: number } }> }[]) => {
-            db.exec("BEGIN");
-            try {
-                const results = [];
-                for (const item of items) {
-                    results.push(await item.run());
+        // Like D1, batches are serialized: two concurrent reservations must not interleave inside one
+        // transaction, which is exactly the guarantee reserveBudget relies on.
+        batch: (items: { run: () => Promise<{ meta?: { changes?: number } }> }[]) => {
+            const next = queue.then(async () => {
+                db.exec("BEGIN");
+                try {
+                    const results = [];
+                    for (const item of items) {
+                        results.push(await item.run());
+                    }
+                    db.exec("COMMIT");
+                    return results;
+                } catch (error) {
+                    db.exec("ROLLBACK");
+                    throw error;
                 }
-                db.exec("COMMIT");
-                return results;
-            } catch (error) {
-                db.exec("ROLLBACK");
-                throw error;
-            }
+            });
+            queue = next.catch(() => undefined);
+            return next;
         },
     } as unknown as D1Database;
 }
@@ -78,9 +88,13 @@ async function seeded() {
     });
     const spent = async () =>
         Number((db.prepare("SELECT spent_usd FROM repos WHERE id = ?").get(repo!.id) as Row).spent_usd);
-    const claim = async () =>
-        (db.prepare("SELECT budget_claim FROM repos WHERE id = ?").get(repo!.id) as Row).budget_claim;
-    return { db, store, repo: repo!, spent, claim };
+    const claims = async () =>
+        db
+            .prepare(
+                "SELECT claim, group_key, usd, started, settled FROM budget_claims WHERE repo_id = ? ORDER BY claim",
+            )
+            .all(repo!.id) as Row[];
+    return { db, store, repo: repo!, spent, claims };
 }
 
 test("the migrations apply to a real database and the seeded repo is readable", async () => {
@@ -90,59 +104,126 @@ test("the migrations apply to a real database and the seeded repo is readable", 
 });
 
 test("charge binds every placeholder: a real /runs settlement records the cost and frees the claim", async () => {
-    const { store, repo, spent, claim } = await seeded();
-    const held = await store.reserveBudget(
-        repo.id,
-        "c1",
-        "g",
-        1,
-        "2026-10",
-        "2026-10-11T00:00:00.000Z",
-        "2030-01-01T00:00:00.000Z",
-    );
+    const { store, repo, spent, claims } = await seeded();
+    const held = await store.reserveBudget(repo.id, "c1", "g", 1, "2026-10", NOW, FAR);
     assert.deepEqual(held, { claimed: true, remainingUsd: 1 });
     // This is the call that failed when charge had one placeholder more than bind arguments: the run row
     // was already written, so a throw here loses the settlement for a run that really happened.
     await store.charge(repo.id, 0.25, "2026-10", "c1");
     assert.equal(await spent(), 0.25);
-    assert.equal(await claim(), "");
+    assert.deepEqual(await claims(), []);
 });
 
-test("a takeover settles a spending claim, and its late report replaces the allowance", async () => {
-    const { store, repo, spent } = await seeded();
-    const now = "2026-10-11T00:00:00.000Z";
-    const far = "2030-01-01T00:00:00.000Z";
-    await store.reserveBudget(repo.id, "A", "g", 1, "2026-10", now, far);
-    await store.startSpend(repo.id, "A");
-    // Run B supersedes A in the same group: A's allowance is charged, since A may never report.
-    assert.deepEqual(await store.reserveBudget(repo.id, "B", "g", 1, "2026-10", now, far), {
+test("two different groups claiming at the same time both hold a budget_claims row", async () => {
+    const { store, repo, claims } = await seeded();
+    const [a, b] = await Promise.all([
+        store.reserveBudget(repo.id, "ctx", "pr-7-context", 0.4, "2026-10", NOW, FAR),
+        store.reserveBudget(repo.id, "code", "pr-7-code", 0.4, "2026-10", NOW, FAR),
+    ]);
+    assert.deepEqual(a, { claimed: true, remainingUsd: 0.4 });
+    assert.deepEqual(b, { claimed: true, remainingUsd: 0.4 });
+    assert.deepEqual(
+        (await claims()).map((row) => [row.claim, row.group_key, row.settled]),
+        [
+            ["code", "pr-7-code", 0],
+            ["ctx", "pr-7-context", 0],
+        ],
+    );
+    // remaining = 1 - 0 - (0.4 + 0.4): a third group gets only the 0.2 left, a fourth gets nothing.
+    const third = await store.reserveBudget(repo.id, "c3", "h", 0.4, "2026-10", NOW, FAR);
+    assert.equal(third.claimed, true);
+    assert.ok(third.claimed && Math.abs(third.remainingUsd - 0.2) < 1e-9);
+    assert.deepEqual(await store.reserveBudget(repo.id, "c4", "i", 0.4, "2026-10", NOW, FAR), { claimed: false });
+    assert.equal((await store.openClaims(repo.id, "2026-10")).length, 3);
+    // Releasing one frees exactly its share.
+    await store.releaseBudget(repo.id, "ctx");
+    assert.deepEqual(await store.reserveBudget(repo.id, "c5", "i", 0.4, "2026-10", NOW, FAR), {
         claimed: true,
-        remainingUsd: 0,
+        remainingUsd: 0.4,
     });
-    assert.equal(await spent(), 1);
-    // A reports late with its real cost: it must replace the settled allowance, not be added to it.
-    await store.charge(repo.id, 0.3, "2026-10", "A");
-    assert.ok(Math.abs((await spent()) - 0.3) < 1e-9, `spent ${await spent()}`);
-    // B then reports its own cost on top.
+});
+
+test("a takeover settles only the per-run cap, and a late report replaces it", async () => {
+    const { store, repo, spent, claims } = await seeded();
+    await store.reserveBudget(repo.id, "A", "g", 0.25, "2026-10", NOW, FAR);
+    assert.equal(await store.startSpend(repo.id, "A"), true);
+    // Run B supersedes A in the same group: A's capped allowance is charged, not the month.
+    assert.deepEqual(await store.reserveBudget(repo.id, "B", "g", 0.25, "2026-10", NOW, FAR), {
+        claimed: true,
+        remainingUsd: 0.25,
+    });
+    assert.equal(await spent(), 0.25);
+    assert.deepEqual(
+        (await claims()).map((row) => [row.claim, row.settled]),
+        [
+            ["A", 1],
+            ["B", 0],
+        ],
+    );
+    // A can no longer start spending: it was superseded.
+    assert.equal(await store.startSpend(repo.id, "A"), false);
+    // A reports late with its real cost: it replaces the settled allowance, not added to it.
+    await store.charge(repo.id, 0.1, "2026-10", "A");
+    assert.ok(Math.abs((await spent()) - 0.1) < 1e-9, `spent ${await spent()}`);
     await store.charge(repo.id, 0.2, "2026-10", "B");
-    assert.ok(Math.abs((await spent()) - 0.5) < 1e-9, `spent ${await spent()}`);
+    assert.ok(Math.abs((await spent()) - 0.3) < 1e-9, `spent ${await spent()}`);
+    assert.deepEqual(await claims(), []);
+});
+
+test("a takeover of a run that never started spending charges nothing; expired claims are swept", async () => {
+    const { store, repo, spent, claims } = await seeded();
+    await store.reserveBudget(repo.id, "A", "g", 0.5, "2026-10", NOW, FAR);
+    await store.reserveBudget(repo.id, "B", "g", 0.5, "2026-10", NOW, FAR);
+    assert.equal(await spent(), 0);
+    // An expired claim from another group (job killed) is settled by any later /init.
+    await store.reserveBudget(repo.id, "X", "h", 0.5, "2026-10", NOW, PAST);
+    await store.startSpend(repo.id, "X");
+    const late = "2026-10-11T03:00:00.000Z";
+    // X started, so its 0.5 is charged; B's open 0.5 holds the rest, so nothing is left for C.
+    assert.deepEqual(await store.reserveBudget(repo.id, "C", "i", 0.5, "2026-10", late, FAR), { claimed: false });
+    assert.equal(await spent(), 0.5);
+    assert.deepEqual(
+        (await claims()).map((row) => [row.claim, row.settled]),
+        [
+            ["B", 0],
+            ["X", 1],
+        ],
+    );
 });
 
 test("a claim taken over in a later month does not consume the new month's budget", async () => {
     const { store, repo, spent } = await seeded();
-    await store.reserveBudget(repo.id, "A", "g", 1, "2026-09", "2026-09-11T00:00:00.000Z", "2030-01-01T00:00:00.000Z");
+    await store.reserveBudget(repo.id, "A", "g", 0.5, "2026-09", "2026-09-11T00:00:00.000Z", FAR);
     await store.startSpend(repo.id, "A");
-    const held = await store.reserveBudget(
-        repo.id,
-        "B",
-        "g",
-        1,
-        "2026-10",
-        "2026-10-11T00:00:00.000Z",
-        "2030-01-01T00:00:00.000Z",
-    );
-    assert.deepEqual(held, { claimed: true, remainingUsd: 1 });
+    const held = await store.reserveBudget(repo.id, "B", "g", 0.5, "2026-10", NOW, FAR);
+    assert.deepEqual(held, { claimed: true, remainingUsd: 0.5 });
     assert.equal(await spent(), 0);
+});
+
+test("migration 0006 carries a live 0002 slot claim and pending settlements into budget_claims", () => {
+    const db = new DatabaseSync(":memory:");
+    const files = readdirSync(MIGRATIONS).sort();
+    for (const file of files.filter((name) => name < "0006")) {
+        db.exec(readFileSync(join(MIGRATIONS, file), "utf8"));
+    }
+    db.prepare(
+        `INSERT INTO repos (name, token_hash, budget_usd, budget_claim, claim_group, claim_usd, claim_month,
+        claim_started, claim_expires_at, settled_claims) VALUES ('o/r', 'h', 1, 'live', 'g', 0.5, '2026-10', 1, ?, ?)`,
+    ).run(FAR, JSON.stringify([{ c: "old", u: 0.3, m: "2026-10" }]));
+    for (const file of files.filter((name) => name >= "0006")) {
+        db.exec(readFileSync(join(MIGRATIONS, file), "utf8"));
+    }
+    const rows = db.prepare("SELECT claim, group_key, usd, started, settled FROM budget_claims ORDER BY claim").all();
+    assert.deepEqual(
+        rows.map((row) => ({ ...row })),
+        [
+            { claim: "live", group_key: "g", usd: 0.5, started: 1, settled: 0 },
+            { claim: "old", group_key: "", usd: 0.3, started: 1, settled: 1 },
+        ],
+    );
+    const repo = db.prepare("SELECT budget_claim, per_run_cap_usd FROM repos").get() as Row;
+    assert.equal(repo.budget_claim, "");
+    assert.equal(repo.per_run_cap_usd, 0);
 });
 
 test("a later pull request run resolves missing L0 findings but not unchecked CX-AI rows", async () => {

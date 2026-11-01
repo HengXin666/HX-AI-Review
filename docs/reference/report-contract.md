@@ -12,8 +12,8 @@ hx-context-review 与 hx-agent-code 使用同一份报告契约: 同样的 Findi
 | line | integer >= 1 | 行号 |
 | message | string | 问题说明 |
 | evidence | string | 证据; AI 发现附带 verifier 的理由 |
-| fingerprint | string | `sha256(ruleId, path, anchor, content)` 前 24 位; 不只用行号 |
-| origin | `new` 或 `historical` | 命中可信 baseline 的为 historical, 不阻断 |
+| fingerprint | string | `sha256(ruleId, path, anchor, content)` 前 24 位; 不只用行号. AI 发现的 anchor 是被指控的原文行 (空白折叠), content 是该行原文, 不用模型写的标题 |
+| origin | `new` 或 `historical` | 命中可信 baseline 的为 historical, 不阻断; rules 引擎对本区间未改动文件的命中也标 historical |
 
 代码: [context-cr/src/contract/finding.ts](../../context-cr/src/contract/finding.ts).
 
@@ -22,6 +22,8 @@ hx-context-review 与 hx-agent-code 使用同一份报告契约: 同样的 Findi
 - Error 只来自 L0 确定性检查. 只有 `origin: new` 的 Error 让 job 失败.
 - AI 阶段 (finder -> verifier) 只产出 Warning (`CX-AI` 或 `CODE-AI`) 与补丁, 永远不让 job 失败.
 - 规则自身崩溃产出 `tool-error` Error, 不能当作空诊断通过.
+- rules 引擎 (ARCH/STYLE/DOC/CTX/CI) 不是 CI 门禁: 在可复用的 review 工作流里只产出报告, 不让 job 失败. 它只对本区间改动的文件保留 `origin: new`, 其余命中与可信 base 上 `.hx-rules-baseline.json` 列出的命中都是 historical; `cli.ts rules` 在本地与 quality 工作流里仍按 new Error 退出 1.
+- 本区间改了 `.hx-context-review.json` 时, 本次运行使用可信 base 上的那份配置, 并产出一条 `HX-CONFIG` Warning.
 - 一次运行只跑一种 kind (`context` 或 `code`), 见 [双模式决策](../decisions/2026-10-25-dual-cr-kind.md).
   kind 决定用哪套 scope 与提示词, 不改变 Error/Warning 的等级语义.
 
@@ -67,6 +69,7 @@ code 发现在 Warning 之外可以带这些可选字段. 缺了它们的老报�
 | ID | 等级 | 阶段 |
 |---|---|---|
 | tool-error | Error | 任一 |
+| HX-CONFIG | Warning | L0 (两种 kind 都产出) |
 
 判据详见 [docs/architecture/context-cr.md](../architecture/context-cr.md) 的 L0 规则一节. HC 开头的规则与 hx-agent-code 规则目录同名同义.
 
@@ -92,7 +95,7 @@ code 发现在 Warning 之外可以带这些可选字段. 缺了它们的老报�
 }
 ```
 
-`rejections` 是被确定性闸门或 verifier 驳回的 AI 候选及理由, 用于调提示词, 不计入 counts. `stages.ai` 写明确认数, 驳回数, 因候选上限或无法读取而未审的文件, 以及 incomplete 的原因. Markdown 版本在开头列出每个 stage 与驳回数, code CR 另有 `## Diff groups` 与 `## Evidence checks`.
+`rejections` 是被确定性闸门或 verifier 驳回的 AI 候选及理由, 用于调提示词, 不计入 counts. `stages.ai` 写明确认数, 驳回数, 因候选上限或无法读取而未审的文件, 以及 incomplete 的原因; 候选上限截断时写 `truncated`, 本次按未审完上报 (`complete: false`), last_sha 不推进. Markdown 版本在开头列出每个 stage 与驳回数, code CR 另有 `## Diff groups` 与 `## Evidence checks`.
 
 code CR 的报告多一个 `trace` (`context-cr/src/contract/trace.ts`), context CR 没有这个字段:
 

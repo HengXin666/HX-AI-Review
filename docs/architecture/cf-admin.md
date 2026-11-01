@@ -25,12 +25,15 @@ Worker 服务两种 CR: 一次运行带一个 `kind` (`context` 或 `code`), 仓
 | `PUT /api/providers/{name}` | Access | api_url, api 类型, key 所在 secret 名, 上下文窗口, 每百万 token 输入/输出价格 |
 | `GET /api/findings/{id}/patch` | Access | 从 R2 取补丁 |
 | `POST /api/findings/{id}/feedback` | Access | 总览页的采纳或驳回 |
-| `GET /api/github/app` | Access 或会话 | App 是否已登记, bot 登录名, 安装列表. 不返回私钥和 webhook secret |
-| `PUT /api/github/app` | Access 或会话 | 粘贴已有 App: App ID, slug, PEM, webhook secret. 写入 D1, 响应里不再出现 |
-| `POST /api/github/manifest` | Access 或会话 | 开始 GitHub 清单注册. 浏览器把返回的 manifest POST 到 `action` |
-| `GET /api/github/setup` | 一次性 state | GitHub 创建 App 后的回调. 用 code 换私钥并保存, 然后回到 `/#/github` |
-| `POST /github/webhook` | `X-Hub-Signature-256` | 安装, 暂停, 卸载. 签名对不上是 401 |
-| `GET /github/token` | Bearer HX_CTX_TOKEN | 给这个仓库签一张 installation token. 没安装 App 是 404, runner 改用 Actions 身份 |
+| `GET /api/live` | Access 或会话 cookie (同源) | WebSocket 订阅某仓库的实时事件; 见 [overview.md](overview.md#实时通道) |
+| `POST /api/live/emit` | Bearer HX_CTX_TOKEN (须属于事件仓库) 或 Access/会话 | 发布一条实时事件, 返回 202 `{id, at}` |
+| `GET /api/github/app`, `POST /api/github/app` | Access 或会话 | 读取或保存 GitHub App 配置; 秘密用 `GITHUB_APP_KEK` 加密, 从不返回 |
+| `POST /api/github/app/verify` | Access 或会话 | 用存储的私钥真调 GitHub 验证凭据 |
+| `GET /api/github/app/manifest`, `GET /api/github/app/callback` | Access 或会话; callback 靠一次性 state | 清单注册: 发起注册, 以及 GitHub 创建 App 后的回调 (用 code 换私钥并保存) |
+| `GET /api/github/installations`, `GET /api/github/queue` | Access 或会话 | 安装及其仓库 (含是否已登记); webhook 触发队列 |
+| `GET /api/github/repos`, `POST /api/github/enable`, `POST /api/github/disable` | Access 或会话 | 安装可见的仓库 (分页) 与一键启用 / 停用 |
+| `POST /api/webhook/github` | X-Hub-Signature-256 | push 与 PR 触发审查, 并维护安装状态; 见 [github-app.md](github-app.md) |
+| `GET /github/token` | Bearer HX_CTX_TOKEN | 给这个仓库签一张仅限本仓的 installation token; 没安装 App 是 404, runner 改用 Actions 身份 |
 
 ## kind 的校验
 
@@ -51,19 +54,19 @@ Worker 服务两种 CR: 一次运行带一个 `kind` (`context` 或 `code`), 仓
 3. 月预算大于 0 且本月花费已达到预算 (跨月自动归零).
 4. provider 或 finder/verifier 模型未配置.
 5. provider 指向的 Worker secret 不存在.
-6. 月预算大于 0, 但已有一次并发运行持有本次预算的预留 (见下).
+6. 月预算大于 0, 但其他运行的未结算预留已占满本月剩余额度 (见下).
 
-预算大于 0 的仓库在通过以上检查后, `/init` 会先原子预留本次运行的预算 (D1 条件 UPDATE, `repos.budget_claim` / `claim_group` / `claim_expires_at`), 再下发 key, 并把预留 id 作为 `budgetClaim` 返回. 没有这一步, 两个并发 PR/ref 会各自拿到同一份未花费余额, 在几分钟后上报成本时一起超支.
+预算大于 0 的仓库在通过以上检查后, `/init` 会先原子预留本次运行的预算, 再下发 key, 并把预留 id 作为 `budgetClaim` 返回. 预留是多槽位的: 每次运行在 `budget_claims` 表里占一行 (`claim`, `repo_id`, `group_key`, `usd`, `started`, `expires_at`, `month`, `settled`), 额度 = `MAX(0, MIN(单次上限, budget_usd - spent_usd - 本月未结算预留之和))`, 额度为 0 时不插入, 本次只下发 L0. 单次上限是 `repos.per_run_cap_usd`, 为 0 (未设) 时取月预算的 1/4. 没有预留这一步, 两个并发 PR/ref 会各自拿到同一份未花费余额, 在几分钟后上报成本时一起超支; 而按单次上限而不是整月剩余额预留, 一个组被接管时最多结算一个上限, 其余额度仍留给别的组.
 
-预留用 id 而不是布尔标记: runner 在 `POST /runs` 回传 `budgetClaim`, 计费时只释放自己的预留. 否则一次被拒绝预算、随后仍以 L0 结果上报的运行会把持有者的预留清掉, 让第三次运行拿到同一份余额. 计费永远记录花费, 只对预留做归属判断.
+预留用 id 而不是布尔标记: runner 在 `POST /runs` 回传 `budgetClaim`, 计费时只结算自己的预留. 否则一次被拒绝预算、随后仍以 L0 结果上报的运行会动到别人的预留. 计费永远记录花费, 只对预留做归属判断.
 
-`claim_group` 是调用方的并发组 (`/init` 的 `group` 参数, 来自 workflow 的 concurrency group). GitHub 取消同组中较旧的那次运行, 而取消的运行永远不会走到 `POST /runs`, 所以同组的旧预留可被接管, 否则它会挡住正是取代它的那次运行; 空 group 表示未知, 永不匹配. 不同组之间是真正的并发, 仍然互斥. 预留超过 1 小时视为已放弃, 可由任何一次运行接管.
+`group_key` 是调用方的并发组 (`/init` 的 `group` 参数, 来自 workflow 的 concurrency group). GitHub 取消同组中较旧的那次运行, 而取消的运行永远不会走到 `POST /runs`, 所以同组的旧预留可被接管, 否则它会挡住正是取代它的那次运行; 空 group 表示未知, 永不匹配. 不同组各持一行预留, 真正并发运行, 只共享本月剩余额度. 预留超过 1 小时 (`expires_at`) 视为已放弃, 可由任何一次运行接管.
 
-接管与结算在同一条 UPDATE 中完成 (`RETURNING claim_usd`), 所以预留一旦可见就带着自己的额度: 两个交错的 `/init` 不可能读到同一份余额而各自拿到额度. 接管旧预留时按其是否真正开始花费结算:
+整个预留是一个 D1 batch (事务): 结算被接管的已开始预留, 删除被接管的未开始预留, 清理更早月份的已结算行, 再用 `INSERT ... SELECT` 按上式插入新预留, 所以两个交错的 `/init` 不可能读到同一份余额而各自拿到额度. 接管旧预留时按其是否真正开始花费结算:
 
-- 已经开过模型会话的预留 (`claim_started = 1`, 由 runner 在第一次会话前 `POST /spend` 标记): 把它的额度 (`claim_usd`) 全额计入花费. 被取消的运行不会上报真实花费, 不这样记账的话同一分支连续快速 push 每次都能拿到完整剩余预算, 而之前的开销一笔都没入账; 代价是按额度上限计入 (保守), 持有者正常上报时以真实花费覆盖.
-- 在第一次会话前就被取消的预留 (安装, L0, scope 阶段): 实际花费为 0, 按 0 结算. 否则两次快速 push 就会各记一次整月剩余额, 当月预算直接清零.
-- 预留记有自己所属的月份 (`claim_month`): 上月发放的额度结算进上月, 不会占用本月的预算.
+- 已经开过模型会话的预留 (`started = 1`, 由 runner 在第一次会话前 `POST /spend` 标记): 把它的额度 (`usd`, 最多一个单次上限) 计入花费并标 `settled = 1`. 被取消的运行不会上报真实花费, 不这样记账的话同一分支连续快速 push 每次都能拿到新额度, 而之前的开销一笔都没入账; 代价是按额度上限计入 (保守), 持有者迟到的 `/runs` 以真实花费替换.
+- 在第一次会话前就被取消的预留 (安装, L0, scope 阶段): 实际花费为 0, 直接删除, 不计费.
+- 预留记有自己所属的月份 (`month`): 上月发放的额度结算进上月, 不会占用本月的预算.
 
 ## 数据
 
@@ -104,7 +107,7 @@ R2 键: `runs/<owner>/<repo>/<runId>/report.md`, `report.json`, `sessions.jsonl`
 
 provider 名只允许字母, 数字, `.`, `_`, `-`; 新建 provider 必须显式给出输入/输出单价 (免费填 0), 更新时省略的字段 (包括 API 协议) 保留原值; 未知协议, 负数或非整数的 token 上限返回 400. 仓库的 enabled, mode, provider, 模型名, budgetUsd 同理: 省略不改, 出现但类型或取值不对返回 400, 不会被静默忽略. `POST /runs` 同样严格: complete, l0Only 必须是布尔, usage 各项与 durationMs 必须是非负数且为整数 (usage.cost 例外, 单价按百万 token 计, 允许小数), prNumber 与 finding 行号必须是正整数, 字符串字段必须是字符串, 否则 400. 显式 `null` 一律按非法值处理而不是省略: 只有字段缺失才表示不提供. patches 里缺字段或类型不对的条目同样 400, 只有字段合法且 `applies: false` 的补丁才被跳过. status 一律由服务端推导 (failed, incomplete, warned, passed), runner 只能在没有发现时标 skipped; runner 发 incomplete 时同样不推进 last_sha.
 
-`POST /spend` 只接受 `budgetClaim`, 把该预留标记为已开始花费, 供接管时判断是否结算. 重复标记本运行仍持有的预留是 no-op; 预留已被更新的运行接管时返回 409, 该运行必须停止而不是继续花费, 否则同一次运行会被结算一次, 又按真实花费记一次. 迟到的 `/runs` 上报真实花费时, `settled_claims` 里该预留的额度会被真实花费替换而不是叠加, 所以被接管后仍然跑完的运行不会让当月预算被重复扣减. `/init` 的 `limits.maxRunUsd` 是本次运行的可用额度 (无上限时为 null), runner 达到它就不再开新的模型会话; 有上限的仓库同时按上节的预留规则独占本次额度. 只下发 L0 时附带 `l0Cause`: disabled, mode (主动选择), budget, config (区间未审, runner 报 incomplete). 旧数据里 contextWindow 或 maxTokens 不是正整数的 provider 也按 config 降级, 不会把非法上限发给模型. 同名仓库 (大小写不敏感) 重复登记返回 409, 并发创建撞唯一约束同样映射为 409.
+`POST /spend` 只接受 `budgetClaim`, 把该预留标记为已开始花费, 供接管时判断是否结算. 重复标记本运行仍持有的预留是 no-op; 预留已被更新的运行接管时返回 409, 该运行必须停止而不是继续花费, 否则同一次运行会被结算一次, 又按真实花费记一次. 迟到的 `/runs` 上报真实花费时, `budget_claims` 里该预留已结算的额度会被真实花费替换而不是叠加 (spent += cost - 已结算额度, 再删除该行), 所以被接管后仍然跑完的运行不会让当月预算被重复扣减. `/init` 的 `limits.maxRunUsd` 是本次运行的可用额度 (无上限时为 null), runner 达到它就不再开新的模型会话; 有上限的仓库按上节的规则为本次运行单独占一行预留, 额度不超过单次上限. 只下发 L0 时附带 `l0Cause`: disabled, mode (主动选择), budget, config (区间未审, runner 报 incomplete). 旧数据里 contextWindow 或 maxTokens 不是正整数的 provider 也按 config 降级, 不会把非法上限发给模型. 同名仓库 (大小写不敏感) 重复登记返回 409, 并发创建撞唯一约束同样映射为 409.
 
 ## 规则维度与聚合
 
