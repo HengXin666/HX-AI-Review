@@ -4,3 +4,9 @@ dist/
 pnpm-lock.yaml
 scripts/.hx_code_quality/
 *.md
+
+# 仓库治理托管文件, 由 HX-Workflows 生成
+.github/commit-convention.yml
+.github/workflows/commit-lint.yml
+.github/scripts/commit_lint.py
+.github/hooks/
